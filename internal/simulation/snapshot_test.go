@@ -165,8 +165,8 @@ func addReceiver(t *testing.T, server *Server, id game.PlayerID, ackDelay int, l
 // aimAt queues the player's command for the coming tick: stand and look at
 // the target.
 func (r *testReceiver) aimAt(target game.SoldierID) {
-	eye := r.server.soldiers.Get(r.player.soldier).Position.Add(physics.V(0, r.server.tuning.EyeHeight, 0))
-	to := r.server.soldiers.Get(target).Position.Add(physics.V(0, r.server.tuning.CenterHeight(), 0)).Sub(eye)
+	eye := r.server.soldiers.Get(r.player.soldier).Position.Add(physics.V(0, r.server.rules.Movement.EyeHeight, 0))
+	to := r.server.soldiers.Get(target).Position.Add(physics.V(0, r.server.rules.Movement.CenterHeight(), 0)).Sub(eye)
 	yaw := math.Atan2(float64(to.X), float64(-to.Z))
 	pitch := math.Atan2(float64(to.Y), math.Hypot(float64(to.X), float64(to.Z)))
 	command := game.NewInputCommand(r.server.tick, 0, 0, float32(yaw), float32(pitch), 0)

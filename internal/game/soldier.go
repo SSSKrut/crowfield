@@ -58,6 +58,7 @@ type Soldier struct {
 	Yaw        float32
 	Pitch      float32
 	Grounded   bool
+	Arsenal    Arsenal
 }
 
 // SoldierID packs a slot into the low 12 bits and a generation into the high 4.

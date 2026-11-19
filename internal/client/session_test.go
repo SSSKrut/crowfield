@@ -58,8 +58,8 @@ func TestSoloSessionThroughTheEmbeddedServer(t *testing.T) {
 		"slow network": {Delay: 40 * time.Millisecond, Jitter: 10 * time.Millisecond, Loss: 0.02, Seed: 4},
 	} {
 		t.Run(name, func(t *testing.T) {
-			tuning := game.DefaultMovementTuning()
-			local, err := startLocalServer(tuning, config.Client{})
+			rules := game.DefaultRules()
+			local, err := startLocalServer(rules, config.Client{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -75,7 +75,7 @@ func TestSoloSessionThroughTheEmbeddedServer(t *testing.T) {
 			if conditions != (transport.NetworkConditions{}) {
 				conn = transport.Simulate(conn, conditions)
 			}
-			session, err := connect(conn, "tester", tuning, [16]byte{})
+			session, err := connect(conn, "tester", rules, [16]byte{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -164,8 +164,8 @@ func TestDeltasSurviveABadNetwork(t *testing.T) {
 // conditions are given.
 func soloSession(t *testing.T, settings config.Client, conditions transport.NetworkConditions) (*session, func()) {
 	t.Helper()
-	tuning := game.DefaultMovementTuning()
-	local, err := startLocalServer(tuning, settings)
+	rules := game.DefaultRules()
+	local, err := startLocalServer(rules, settings)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +176,7 @@ func soloSession(t *testing.T, settings config.Client, conditions transport.Netw
 	if conditions != (transport.NetworkConditions{}) {
 		conn = transport.Simulate(conn, conditions)
 	}
-	session, err := connect(conn, "tester", tuning, [16]byte{})
+	session, err := connect(conn, "tester", rules, [16]byte{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -342,19 +342,23 @@ func newTestSession(t *testing.T) *session {
 }
 
 func TestConnectRefusesADifferentTuning(t *testing.T) {
-	local, err := startLocalServer(game.DefaultMovementTuning(), config.Client{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer local.stop()
-	conn, err := local.dial()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close("test over")
-	other := game.DefaultMovementTuning()
-	other.SprintSpeed++
-	if _, err := connect(conn, "tester", other, [16]byte{}); err == nil || !strings.Contains(err.Error(), "tuning") {
-		t.Errorf("connect with another tuning: %v", err)
+	moved, armed := game.DefaultRules(), game.DefaultRules()
+	moved.Movement.SprintSpeed++
+	armed.Weapons.Rifle.Magazine++
+	for name, other := range map[string]game.Rules{"movement": moved, "weapons": armed} {
+		// A refused connection keeps its place for a while: a server each.
+		local, err := startLocalServer(game.DefaultRules(), config.Client{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer local.stop()
+		conn, err := local.dial()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := connect(conn, "tester", other, [16]byte{}); err == nil || !strings.Contains(err.Error(), "tuning") {
+			t.Errorf("connect with other %s: %v", name, err)
+		}
+		_ = conn.Close("test over")
 	}
 }

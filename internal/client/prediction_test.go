@@ -30,28 +30,53 @@ func route(step int, tick game.Tick) game.InputCommand {
 	return game.NewInputCommand(tick, 0, 0, 0, 0, 0)
 }
 
+// armedRoute is the route with the weapons at work: a burst of the assault
+// rifle on the ramp, the pistol out for single shots on the platform, and a
+// reload of it.
+func armedRoute(step int, tick game.Tick) game.InputCommand {
+	command := route(step, tick)
+	switch {
+	case step >= 10 && step < 50:
+		command.Buttons |= game.ButtonFire
+	case step >= 70:
+		command.Weapon = 2
+		if step%12 < 4 {
+			command.Buttons |= game.ButtonFire | game.ButtonAim
+		}
+		if step == 140 {
+			command.Buttons |= game.ButtonReload
+		}
+	}
+	return command
+}
+
 // The main netcode test (ARCHITECTURE.md, 12.2): through a slow, lossy network
-// the prediction matches every confirmed state, so no correction is needed.
+// the prediction of movement and weapons matches every confirmed state, so
+// no correction is needed.
 func TestPredictionNeedsNoCorrectionsThroughTheNetwork(t *testing.T) {
 	conditions := transport.NetworkConditions{Delay: 50 * time.Millisecond, Jitter: 10 * time.Millisecond, Loss: 0.05, Seed: 11}
 	session, predictor := soloWithPrediction(t, conditions)
 	ticker := time.NewTicker(game.TickDuration)
 	defer ticker.Stop()
-	step, reconciled := -1, 0
+	step, reconciled, shots := -1, 0, 0
 	highest := float32(0)
 	for range 5 * game.TickRate {
 		<-ticker.C
 		command := game.InputCommand{}
 		if step >= 0 {
-			command = route(step, 0)
+			command = armedRoute(step, 0)
 			step++
 		}
 		command, err := session.sendCommand(command)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := predictor.predict(command); err != nil {
+		fired, err := predictor.predict(command)
+		if err != nil {
 			t.Fatal(err)
+		}
+		if fired.Events.Has(game.EventFired) {
+			shots++
 		}
 		updated, err := session.poll()
 		if err != nil {
@@ -74,9 +99,17 @@ func TestPredictionNeedsNoCorrectionsThroughTheNetwork(t *testing.T) {
 		t.Fatalf("the route did not reach the platform: step %d, highest y=%.2f", step, highest)
 	}
 	if predictor.corrections > 0 {
-		t.Errorf("%d corrections, the last %.4f m off", predictor.corrections, predictor.lastError)
+		t.Errorf("%d corrections (%d of the weapons only), the last %.4f m off",
+			predictor.corrections, predictor.weaponCorrections, predictor.lastError)
 	}
-	t.Logf("%d snapshots reconciled, %d corrections, %d clock resyncs", reconciled, predictor.corrections, session.resyncs)
+	// 7 rounds of the burst and 4 pistol shots before the reload, which
+	// takes 4 spare rounds; how many pulls follow it depends on when the
+	// route started.
+	ammo := predictor.soldier.Arsenal.Ammo
+	if shots < 12 || ammo[0].Magazine != 23 || ammo[2].Reserve != 44 {
+		t.Errorf("%d shots predicted, ammo %+v after the route", shots, ammo)
+	}
+	t.Logf("%d snapshots reconciled, %d shots, %d corrections, %d clock resyncs", reconciled, shots, predictor.corrections, session.resyncs)
 }
 
 // A respawn moves the soldier across the map: the prediction jumps there at
@@ -98,7 +131,7 @@ func TestPredictionSnapsToARespawn(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := predictor.predict(command); err != nil {
+		if _, err := predictor.predict(command); err != nil {
 			t.Fatal(err)
 		}
 		updated, err := session.poll()
@@ -139,13 +172,13 @@ func TestPredictionSnapsToARespawn(t *testing.T) {
 // confirms every tick ten ticks late. The mismatch costs one correction, after
 // which the prediction equals the server's own result exactly.
 func TestReconcileReplaysFromTheServerState(t *testing.T) {
-	tuning := game.DefaultMovementTuning()
-	predictor, err := newPredictor(sceneWorld(t), tuning)
+	rules := game.DefaultRules()
+	predictor, err := newPredictor(sceneWorld(t), rules)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer predictor.close()
-	server, err := game.NewCharacterController(sceneWorld(t), tuning, physics.Vec3{})
+	server, err := game.NewCharacterController(sceneWorld(t), rules.Movement, physics.Vec3{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +191,7 @@ func TestReconcileReplaysFromTheServerState(t *testing.T) {
 	history := map[game.Tick]game.Soldier{}
 	for tick := game.Tick(0); tick < 150; tick++ {
 		command := route(int(tick), tick)
-		if err := predictor.predict(command); err != nil {
+		if _, err := predictor.predict(command); err != nil {
 			t.Fatal(err)
 		}
 		if tick == differs {
@@ -188,10 +221,48 @@ func TestReconcileReplaysFromTheServerState(t *testing.T) {
 	}
 }
 
+// A new session may reuse the tick numbers of the last one, whose commands
+// the server never saw: the prediction must not replay them.
+func TestJoinForgetsTheLastSession(t *testing.T) {
+	predictor, err := newPredictor(sceneWorld(t), game.DefaultRules())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer predictor.close()
+	spawn := game.PrototypeScene().Spawn
+	confirm := func(tick game.Tick) {
+		t.Helper()
+		err := predictor.reconcile(protocol.PlayerState{Processed: true, LastProcessedTick: tick, Soldier: 0x1000, Position: spawn})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The last session ran forward until tick 30.
+	if _, err := predictor.predict(game.NewInputCommand(0, 1, 0, 0, 0, 0)); err != nil {
+		t.Fatal(err)
+	}
+	confirm(0)
+	for tick := game.Tick(1); tick <= 30; tick++ {
+		if _, err := predictor.predict(game.NewInputCommand(tick, 1, 0, 0, 0, 0)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// In the new one the server has stood the soldier still until tick 20,
+	// and the client's first command is for tick 25.
+	predictor.join(7)
+	if _, err := predictor.predict(game.NewInputCommand(25, 0, 0, 0, 0, 0)); err != nil {
+		t.Fatal(err)
+	}
+	confirm(20)
+	if moved := math.Hypot(float64(predictor.soldier.Position.X-spawn.X), float64(predictor.soldier.Position.Z-spawn.Z)); moved > 1e-3 {
+		t.Errorf("the soldier moved %.3f m on commands of the last session", moved)
+	}
+}
+
 func soloWithPrediction(t *testing.T, conditions transport.NetworkConditions) (*session, *predictor) {
 	t.Helper()
-	tuning := game.DefaultMovementTuning()
-	local, err := startLocalServer(tuning, config.Client{})
+	rules := game.DefaultRules()
+	local, err := startLocalServer(rules, config.Client{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,15 +278,16 @@ func soloWithPrediction(t *testing.T, conditions transport.NetworkConditions) (*
 	if conditions != (transport.NetworkConditions{}) {
 		conn = transport.Simulate(conn, conditions)
 	}
-	session, err := connect(conn, "tester", tuning, [16]byte{})
+	session, err := connect(conn, "tester", rules, [16]byte{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(session.close)
-	predictor, err := newPredictor(sceneWorld(t), tuning)
+	predictor, err := newPredictor(sceneWorld(t), rules)
 	if err != nil {
 		t.Fatal(err)
 	}
+	predictor.join(session.welcome.MatchSeed)
 	t.Cleanup(func() { _ = predictor.close() })
 	return session, predictor
 }

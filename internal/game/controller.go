@@ -87,6 +87,27 @@ func (c *CharacterController) Step(soldier *Soldier, command InputCommand) error
 	return err
 }
 
+// RunCommand runs a human soldier's command for one tick: it moves the
+// soldier, then works its weapons from where the move left it. The server
+// and the client's prediction both run it, so they agree on both; match is
+// the match seed, which makes the spread of shots repeatable.
+func RunCommand(controller *CharacterController, weapons *WeaponSet, soldier *Soldier, command InputCommand, match uint64) (WeaponStep, error) {
+	if err := controller.Step(soldier, command); err != nil {
+		return WeaponStep{}, err
+	}
+	step := soldier.Arsenal.Step(weapons, command, controller.Motion(soldier), ShotSeed(match, soldier.ID, command.Tick))
+	if step.Events.Has(EventFired) {
+		step.Shot.Origin = soldier.Position.Add(physics.V(0, controller.tuning.EyeHeight, 0))
+	}
+	return step, nil
+}
+
+// Motion is how the soldier moves, for the spread of its weapon.
+func (c *CharacterController) Motion(soldier *Soldier) Motion {
+	speed := float32Sqrt(soldier.Velocity.X*soldier.Velocity.X+soldier.Velocity.Z*soldier.Velocity.Z) / c.tuning.SprintSpeed
+	return Motion{Speed: speed, Airborne: !soldier.Grounded}
+}
+
 // Teleport places the soldier at rest without a movement history, for example on spawn.
 func (c *CharacterController) Teleport(soldier *Soldier, feet physics.Vec3) error {
 	soldier.Position = feet

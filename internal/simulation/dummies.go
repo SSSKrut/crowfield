@@ -37,7 +37,7 @@ type dummies struct {
 func (s *Server) spawnDummies(count int) error {
 	s.dummies = dummies{
 		random: rand.New(rand.NewPCG(s.matchSeed, s.matchSeed^0xD0D0)),
-		speed:  s.tuning.WalkSpeed, area: s.scene.PlayArea,
+		speed:  s.rules.Movement.WalkSpeed, area: s.scene.PlayArea,
 	}
 	for i := range count {
 		team := game.TeamBlue
@@ -50,7 +50,7 @@ func (s *Server) spawnDummies(count int) error {
 		}
 		id, err := s.soldiers.Add(game.Soldier{
 			Team: team, Controller: game.BotController(game.BotID(i)), Alive: true, Grounded: true,
-			Position: position,
+			Position: position, Arsenal: game.NewArsenal(game.DefaultLoadout(), &s.rules.Weapons),
 		})
 		if err != nil {
 			return err

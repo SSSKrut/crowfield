@@ -28,7 +28,7 @@ type localServer struct {
 // settings name a host address. A host keeps its certificate in the config
 // directory, so that the players who joined it once trust it again; without
 // one it makes a fresh certificate every run. It prints the fingerprint.
-func startLocalServer(tuning game.MovementTuning, client config.Client) (*localServer, error) {
+func startLocalServer(rules game.Rules, client config.Client) (*localServer, error) {
 	host := client.Host
 	settings := config.DefaultServer()
 	settings.MaxPlayers = 1
@@ -48,7 +48,7 @@ func startLocalServer(tuning game.MovementTuning, client config.Client) (*localS
 		listeners = append(listeners, local.network)
 		log.Printf("hosting on %s, certificate fingerprint %s", local.network.Addr(), fingerprint)
 	}
-	server, err := simulation.NewServer(settings, tuning)
+	server, err := simulation.NewServer(settings, rules)
 	if err != nil {
 		if local.network != nil {
 			_ = local.network.Close()

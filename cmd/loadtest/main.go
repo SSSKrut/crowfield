@@ -65,7 +65,7 @@ func run(count int, duration, report time.Duration, address, fingerprint string,
 		defer server.stop()
 		address = server.address
 	}
-	tuning := game.DefaultMovementTuning()
+	rules := game.DefaultRules()
 	players := make([]*client.Headless, 0, count)
 	defer func() {
 		for _, p := range players {
@@ -89,7 +89,7 @@ func run(count int, duration, report time.Duration, address, fingerprint string,
 			conditions.Seed = uint64(i + 1)
 			conn = transport.Simulate(conn, conditions)
 		}
-		player, err := client.NewHeadless(conn, fmt.Sprintf("load-%02d", i), tuning, uint64(i+1))
+		player, err := client.NewHeadless(conn, fmt.Sprintf("load-%02d", i), rules, uint64(i+1))
 		if err != nil {
 			_ = conn.Close("join failed")
 			return fmt.Errorf("client %d: %w", i, err)
@@ -141,6 +141,7 @@ func run(count int, duration, report time.Duration, address, fingerprint string,
 
 type summary struct {
 	clients, ticks, snapshots, jumps, corrections, unresolved, late int
+	shots, weaponCorrections                                        int
 	bytes                                                           int64
 	seconds                                                         float64
 	lowestLead                                                      float64
@@ -149,10 +150,10 @@ type summary struct {
 
 func (s summary) String() string {
 	perClient := float64(s.bytes) / 1024 / max(s.seconds, 1e-3) / float64(max(1, s.clients))
-	return fmt.Sprintf("clients=%d ticks/s=%.1f snapshots/s=%.1f snapshots=%.1fKB/s/client jumps=%d corrections=%d (largest %.3fm) late=%d unresolved=%d lowest_lead=%.2f",
+	return fmt.Sprintf("clients=%d ticks/s=%.1f snapshots/s=%.1f snapshots=%.1fKB/s/client jumps=%d corrections=%d (largest %.3fm, weapons only %d) shots=%d late=%d unresolved=%d lowest_lead=%.2f",
 		s.clients, float64(s.ticks)/max(s.seconds, 1e-3)/float64(max(1, s.clients)),
 		float64(s.snapshots)/max(s.seconds, 1e-3)/float64(max(1, s.clients)), perClient,
-		s.jumps, s.corrections, s.largestCorrection, s.late, s.unresolved, s.lowestLead)
+		s.jumps, s.corrections, s.largestCorrection, s.weaponCorrections, s.shots, s.late, s.unresolved, s.lowestLead)
 }
 
 // summarize adds up the clients since the previous stats, or from the start
@@ -171,6 +172,8 @@ func summarize(players []*client.Headless, previous []client.HeadlessStats) summ
 		sum.corrections += current.Corrections - before.Corrections
 		sum.unresolved += current.Unresolved - before.Unresolved
 		sum.late += current.Late - before.Late
+		sum.shots += current.Shots - before.Shots
+		sum.weaponCorrections += current.WeaponCorrections - before.WeaponCorrections
 		sum.lowestLead = min(sum.lowestLead, current.Lead)
 		sum.largestCorrection = max(sum.largestCorrection, current.LargestCorrection)
 	}
@@ -211,7 +214,7 @@ func startServer(ctx context.Context, dummies int, report time.Duration) (*serve
 	if err != nil {
 		return nil, err
 	}
-	simulated, err := simulation.NewServer(settings, game.DefaultMovementTuning())
+	simulated, err := simulation.NewServer(settings, game.DefaultRules())
 	if err != nil {
 		_ = listener.Close()
 		return nil, err

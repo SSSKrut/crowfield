@@ -29,7 +29,23 @@ func sampleMessages() []Message {
 		&InputPacket{HasAck: true, AckSequence: math.MaxUint16, AckBits: 0xDEADBEEF, Commands: sampleCommands(MaxCommandsPerInput, math.MaxUint32-3)},
 		sampleSnapshot(3),
 		&Snapshot{Sequence: 1, ServerTick: 2, Player: PlayerState{InputLead: -3}},
+		&Snapshot{Sequence: 3, ServerTick: 4, Player: PlayerState{Soldier: soldierID(1, 1), Arsenal: readyArsenal()}},
 	}
+}
+
+// busyArsenal reloads its second weapon and has an empty slot.
+func busyArsenal() game.Arsenal {
+	return game.Arsenal{
+		Weapons: game.Loadout{game.WeaponPistol, game.WeaponAssaultRifle},
+		Ammo:    [game.MaxLoadout]game.Ammo{{Magazine: 255, Reserve: 1023}, {Magazine: 3, Reserve: 0}},
+		Current: 1, Action: game.WeaponReloading, ActionTicks: 255, Cooldown: 6, Trigger: true,
+		Bloom: 0.01, KickPitch: 0.2, KickYaw: -0.05,
+	}
+}
+
+func readyArsenal() game.Arsenal {
+	weapons := game.DefaultWeapons()
+	return game.NewArsenal(game.DefaultLoadout(), &weapons)
 }
 
 // sampleCommands wraps the tick counter on purpose and mixes extreme values.
@@ -54,7 +70,7 @@ func sampleSnapshot(soldiers int) *Snapshot {
 		Sequence: 777, ServerTick: 99999,
 		Player: PlayerState{
 			Processed: true, LastProcessedTick: 99990, InputLead: 2, Soldier: soldierID(3, 2),
-			Position: physics.V(1.25, 0.002, -7.75), Velocity: physics.V(0, -0.5, -8),
+			Position: physics.V(1.25, 0.002, -7.75), Velocity: physics.V(0, -0.5, -8), Arsenal: busyArsenal(),
 		},
 		Removed: []game.SoldierID{soldierID(9, 15), soldierID(4095, 1)},
 	}
@@ -266,6 +282,11 @@ func TestDecodeRejectsInvalidFields(t *testing.T) {
 			w.WriteBits(0, soldierCountBits)
 			w.WriteBits(0, removedCountBits)
 		},
+		"unknown weapon":    arsenalCase(func(a *game.Arsenal) { a.Weapons[2] = 15 }),
+		"slot out of range": arsenalCase(func(a *game.Arsenal) { a.Current = 3 }),
+		"unknown action":    arsenalCase(func(a *game.Arsenal) { a.Action = 3 }),
+		"busy without time": arsenalCase(func(a *game.Arsenal) { a.ActionTicks = 0 }),
+		"infinite kick":     arsenalCase(func(a *game.Arsenal) { a.KickYaw = float32(math.Inf(-1)) }),
 		"more soldiers than bytes": func(w *BitWriter) {
 			writeSnapshotHeader(w, MaxSnapshotSoldiers)
 		},
@@ -289,6 +310,20 @@ func TestDecodeRejectsInvalidFields(t *testing.T) {
 		if err := message.Decode(w.Bytes()); err == nil {
 			t.Errorf("%s: decoded", name)
 		}
+	}
+}
+
+// arsenalCase writes a snapshot whose player has a busy arsenal changed by
+// spoil, without the checks of encoding.
+func arsenalCase(spoil func(*game.Arsenal)) func(w *BitWriter) {
+	return func(w *BitWriter) {
+		player := PlayerState{Soldier: soldierID(1, 1), Arsenal: busyArsenal()}
+		spoil(&player.Arsenal)
+		w.WriteBits(1, 16)
+		w.WriteBits(1, 32)
+		player.write(w)
+		w.WriteBits(0, soldierCountBits)
+		w.WriteBits(0, removedCountBits)
 	}
 }
 
@@ -348,6 +383,14 @@ func TestEncodeRejectsInvalidMessages(t *testing.T) {
 	gap[2].Tick++
 	weapon := sampleCommands(1, 10)
 	weapon[0].Weapon = 16
+	armedNobody := sampleSnapshot(0)
+	armedNobody.Player.Soldier, armedNobody.Player.Processed = 0, false
+	ammoInEmptySlot := sampleSnapshot(0)
+	ammoInEmptySlot.Player.Arsenal.Ammo[2].Magazine = 1
+	reserve := sampleSnapshot(0)
+	reserve.Player.Arsenal.Ammo[0].Reserve = 1024
+	idleWithTime := sampleSnapshot(0)
+	idleWithTime.Player.Arsenal.Action = game.WeaponReady
 	for name, message := range map[string]Message{
 		"long name":           &Hello{Name: strings.Repeat("я", MaxNameBytes)},
 		"bad utf-8 password":  &Hello{Password: "\xff"},
@@ -362,6 +405,10 @@ func TestEncodeRejectsInvalidMessages(t *testing.T) {
 		"removed no gen":      removed,
 		"player no gen":       player,
 		"infinite velocity":   nan,
+		"arsenal of nobody":   armedNobody,
+		"ammo in empty slot":  ammoInEmptySlot,
+		"reserve too large":   reserve,
+		"idle with time left": idleWithTime,
 		"too many soldiers":   &Snapshot{Soldiers: make([]SoldierRecord, MaxSnapshotSoldiers+1)},
 		"unordered soldiers":  unordered,
 		"same slot twice":     twice,

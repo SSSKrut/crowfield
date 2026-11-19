@@ -20,22 +20,38 @@ import (
 )
 
 type app struct {
-	settings    config.Client
-	world       *physics.World
-	scene       *render.Scene
-	spawn       physics.Vec3
-	tuning      game.MovementTuning
-	session     *session
-	predictor   *predictor
-	asset       *animation.CharacterAsset
-	self        *animation.Character
-	soldiers    *soldiers
-	fallen      bodies
-	alpha       float32
-	camera      rl.Camera3D
-	yaw         float32
-	pitch       float32
-	captured    bool
+	settings  config.Client
+	world     *physics.World
+	scene     *render.Scene
+	spawn     physics.Vec3
+	rules     game.Rules
+	session   *session
+	predictor *predictor
+	asset     *animation.CharacterAsset
+	self      *animation.Character
+	soldiers  *soldiers
+	fallen    bodies
+	view      *viewModel
+	effects   *effects
+	sounds    *sounds
+	alpha     float32
+	camera    rl.Camera3D
+	yaw       float32
+	pitch     float32
+	// look is how far the mouse turned the view this frame.
+	look     [2]float32
+	captured bool
+	// weapon is the slot the player chose. Fire and reload pressed between
+	// two ticks are kept for the next one, so that a short click counts.
+	weapon        uint8
+	firePressed   bool
+	reloadPressed bool
+	// What the weapons did in the ticks of this frame: shots to show once
+	// the camera is placed, and events to sound.
+	shots  []game.Shot
+	events game.WeaponEvents
+	// buttons are those of the last command, for the look of the weapon.
+	buttons     game.Buttons
 	debug       bool
 	thirdPerson bool
 	ragdoll     bool
@@ -57,13 +73,9 @@ type app struct {
 // when hosting, or to the one given by -connect. The client world holds the
 // static map for prediction and cosmetic physics: ragdolls and props.
 func Run(settings config.Client) error {
-	tuning := game.DefaultMovementTuning()
-	if settings.Tuning != "" {
-		loaded, err := game.LoadMovementTuning(settings.Tuning)
-		if err != nil {
-			return err
-		}
-		tuning = loaded
+	rules, err := game.LoadRules(settings.Tuning, settings.Weapons)
+	if err != nil {
+		return err
 	}
 	conditions, err := transport.ParseNetworkConditions(settings.Netsim)
 	if err != nil {
@@ -71,7 +83,7 @@ func Run(settings config.Client) error {
 	}
 
 	rl.SetConfigFlags(rl.FlagWindowResizable | rl.FlagMsaa4xHint)
-	rl.InitWindow(int32(settings.Width), int32(settings.Height), "Ravenfield prototype — stage 1")
+	rl.InitWindow(int32(settings.Width), int32(settings.Height), "Ravenfield prototype — stage 2")
 	defer rl.CloseWindow()
 	rl.SetExitKey(0)
 	rl.SetTargetFPS(int32(settings.MaxFPS))
@@ -92,7 +104,7 @@ func Run(settings config.Client) error {
 	}
 	defer scene.Close()
 
-	predictor, err := newPredictor(world, tuning)
+	predictor, err := newPredictor(world, rules)
 	if err != nil {
 		return err
 	}
@@ -104,15 +116,23 @@ func Run(settings config.Client) error {
 		return err
 	}
 	defer asset.Close()
+	shader, err := render.LoadLitShader()
+	if err != nil {
+		return err
+	}
+	defer rl.UnloadShader(shader)
 	a := &app{
-		settings: settings, world: world, scene: scene, spawn: description.Spawn, tuning: tuning,
+		settings: settings, world: world, scene: scene, spawn: description.Spawn, rules: rules,
 		predictor: predictor, asset: asset, self: asset.NewCharacter(), soldiers: newSoldiers(asset),
-		captured: settings.FrameLimit == 0, debug: settings.Debug, thirdPerson: true,
+		captured: settings.FrameLimit == 0, debug: settings.Debug, view: newViewModel(shader),
+		effects: newEffects(), sounds: loadSounds(settings.Volume),
 	}
 	defer a.self.Close()
 	defer a.fallen.close()
+	defer a.view.close()
+	defer a.sounds.close()
 
-	conn, stop, err := open(settings, tuning)
+	conn, stop, err := open(settings, rules)
 	if err != nil {
 		return err
 	}
@@ -121,11 +141,12 @@ func Run(settings config.Client) error {
 		log.Printf("simulating network: %s", conditions)
 		conn = transport.Simulate(conn, conditions)
 	}
-	a.session, err = connect(conn, settings.Name, tuning, [16]byte{})
+	a.session, err = connect(conn, settings.Name, rules, [16]byte{})
 	if err != nil {
 		_ = conn.Close("handshake failed")
 		return err
 	}
+	a.predictor.join(a.session.welcome.MatchSeed)
 	// The session may be replaced by a reconnection.
 	defer func() { a.session.close() }()
 	defer a.stopReconnecting()
@@ -139,12 +160,12 @@ const characterModelPath = "assets/prototype/RobotExpressive.glb"
 
 // open returns a connection to the server the settings ask for and a function
 // that releases what open started.
-func open(settings config.Client, tuning game.MovementTuning) (transport.Conn, func(), error) {
+func open(settings config.Client, rules game.Rules) (transport.Conn, func(), error) {
 	if settings.Connect != "" {
 		conn, err := dial(context.Background(), settings)
 		return conn, func() {}, err
 	}
-	local, err := startLocalServer(tuning, settings)
+	local, err := startLocalServer(rules, settings)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -230,7 +251,7 @@ func (a *app) run() error {
 				return err
 			}
 		}
-		if rl.IsKeyPressed(rl.KeyR) {
+		if rl.IsKeyPressed(rl.KeyBackspace) {
 			if err := a.reset(); err != nil {
 				return err
 			}
@@ -270,8 +291,13 @@ func (a *app) run() error {
 				lost = err
 				break
 			}
-			if err := a.predictor.predict(command); err != nil {
+			step, err := a.predictor.predict(command)
+			if err != nil {
 				return err
+			}
+			a.events |= step.Events
+			if step.Events.Has(game.EventFired) {
+				a.shots = append(a.shots, step.Shot)
 			}
 			if err := a.world.Step(game.TickDelta); err != nil {
 				return err
@@ -328,10 +354,11 @@ func (a *app) run() error {
 			return err
 		}
 		a.updateCamera(feet)
+		a.updateWeapon(deltaTime, soldier)
+		a.effects.update(deltaTime)
 		a.soldiers.update(a.session, deltaTime, a.camera, float32(rl.GetScreenWidth())/float32(max(1, rl.GetScreenHeight())))
-		cosPitch := float32(math.Cos(float64(a.pitch)))
-		forward := physics.V(float32(math.Sin(float64(a.yaw)))*cosPitch, float32(math.Sin(float64(a.pitch))), -float32(math.Cos(float64(a.yaw)))*cosPitch)
-		a.soldiers.aim(feet.Add(physics.V(0, a.tuning.EyeHeight, 0)), forward, a.tuning.CenterHeight())
+		forward := game.ViewDirection(a.yaw, a.pitch)
+		a.soldiers.aim(feet.Add(physics.V(0, a.rules.Movement.EyeHeight, 0)), forward, a.rules.Movement.CenterHeight())
 		var aimed uint16
 		var aimedUpdates int
 		if known := a.soldiers.aimed; known != nil {
@@ -378,13 +405,40 @@ func horizontalSpeed(velocity physics.Vec3) float32 {
 }
 
 func (a *app) handleMouse() {
+	a.look = [2]float32{}
 	if !a.captured {
 		return
 	}
 	delta := rl.GetMouseDelta()
-	a.yaw += delta.X * a.settings.MouseSensitivity
-	a.pitch -= delta.Y * a.settings.MouseSensitivity
-	a.pitch = max(-1.45, min(1.45, a.pitch))
+	pitch := max(-1.45, min(1.45, a.pitch-delta.Y*a.settings.MouseSensitivity))
+	a.look = [2]float32{delta.X * a.settings.MouseSensitivity, pitch - a.pitch}
+	a.yaw += a.look[0]
+	a.pitch = pitch
+	for i, key := range []int32{rl.KeyOne, rl.KeyTwo, rl.KeyThree} {
+		if rl.IsKeyPressed(key) {
+			a.weapon = uint8(i)
+		}
+	}
+	if wheel := rl.GetMouseWheelMove(); wheel != 0 && a.predictor.started {
+		// The wheel turns through the slots that hold a weapon.
+		loadout := a.predictor.soldier.Arsenal.Weapons
+		step := game.MaxLoadout - 1
+		if wheel < 0 {
+			step = 1
+		}
+		for next, i := a.weapon, 0; i < game.MaxLoadout; i++ {
+			if next = uint8((int(next) + step) % game.MaxLoadout); loadout[next] != game.WeaponNone {
+				a.weapon = next
+				break
+			}
+		}
+	}
+	if rl.IsKeyPressed(rl.KeyR) {
+		a.reloadPressed = true
+	}
+	if rl.IsMouseButtonPressed(rl.MouseButtonLeft) {
+		a.firePressed = true
+	}
 }
 
 // command reads the input for one tick. While the cosmetic ragdoll lies on the
@@ -409,6 +463,9 @@ func (a *app) command() game.InputCommand {
 		if a.elapsed < 1.2 {
 			forward, buttons = 1, game.ButtonSprint
 		}
+	case a.settings.Shoot:
+		a.weapon, buttons = shootingDrill(a.elapsed)
+		a.pitch = -0.08
 	case a.captured:
 		if rl.IsKeyDown(rl.KeyW) {
 			forward++
@@ -428,18 +485,82 @@ func (a *app) command() game.InputCommand {
 		if rl.IsKeyDown(rl.KeyLeftShift) {
 			buttons |= game.ButtonSprint
 		}
+		if rl.IsMouseButtonDown(rl.MouseButtonLeft) || a.firePressed {
+			buttons |= game.ButtonFire
+		}
+		if rl.IsMouseButtonDown(rl.MouseButtonRight) {
+			buttons |= game.ButtonAim
+		}
+		if a.reloadPressed {
+			buttons |= game.ButtonReload
+		}
 	}
-	return game.NewInputCommand(0, forward, right, yaw, a.pitch, buttons)
+	a.firePressed, a.reloadPressed = false, false
+	a.buttons = buttons
+	command := game.NewInputCommand(0, forward, right, yaw, a.pitch, buttons)
+	command.Weapon = a.weapon
+	return command
 }
 
+// shootingDrill is the input of -shoot at a time: bursts of the assault
+// rifle from the hip and aimed, the rifle through its scope, then the pistol
+// emptied and reloaded.
+func shootingDrill(elapsed float32) (uint8, game.Buttons) {
+	switch {
+	case elapsed < 0.4:
+		return 0, 0
+	case elapsed < 1.4:
+		return 0, game.ButtonFire
+	case elapsed < 1.7:
+		return 0, game.ButtonAim
+	case elapsed < 2.7:
+		return 0, game.ButtonAim | game.ButtonFire
+	case elapsed < 3.8:
+		return 1, 0
+	case elapsed < 4.3:
+		return 1, game.ButtonAim
+	case elapsed < 4.4:
+		return 1, game.ButtonAim | game.ButtonFire
+	case elapsed < 5.4:
+		return 2, 0
+	case elapsed < 8:
+		if int(elapsed*6)%2 == 0 {
+			return 2, game.ButtonFire
+		}
+		return 2, 0
+	}
+	return 2, 0
+}
+
+// arsenal is the predicted state of the player's weapons, or nil before the
+// first snapshot of the soldier.
+func (a *app) arsenal() *game.Arsenal {
+	if soldier := a.ownSoldier(); soldier != nil {
+		return &soldier.Arsenal
+	}
+	return nil
+}
+
+// firstPerson reports whether the camera is the soldier's eye.
+func (a *app) firstPerson() bool {
+	return !a.thirdPerson && !a.ragdoll && !a.settings.Overview && a.ownSoldier() != nil
+}
+
+// updateCamera looks where the player aims, turned by the kick of the
+// weapon, which the aim of the next shot has too. Aiming down the sights
+// narrows the field of view by the weapon's zoom.
 func (a *app) updateCamera(feet physics.Vec3) {
-	cosPitch := float32(math.Cos(float64(a.pitch)))
-	forward := rl.NewVector3(
-		float32(math.Sin(float64(a.yaw)))*cosPitch,
-		float32(math.Sin(float64(a.pitch))),
-		-float32(math.Cos(float64(a.yaw)))*cosPitch,
-	)
-	eye := render.Vector(feet.Add(physics.V(0, a.tuning.EyeHeight, 0)))
+	yaw, pitch := a.yaw, a.pitch
+	fovy := a.settings.FieldOfView
+	if arsenal := a.arsenal(); arsenal != nil {
+		yaw += arsenal.KickYaw
+		pitch = max(-1.55, min(1.55, pitch+arsenal.KickPitch))
+		if tuning := a.rules.Weapons.Get(arsenal.Weapon()); tuning != nil && a.firstPerson() {
+			fovy *= 1 + (tuning.AimZoom-1)*a.view.aim
+		}
+	}
+	forward := render.Vector(game.ViewDirection(yaw, pitch))
+	eye := render.Vector(feet.Add(physics.V(0, a.rules.Movement.EyeHeight, 0)))
 	if a.settings.Overview {
 		// High above the south edge of the map: every soldier is in view.
 		a.camera = rl.NewCamera3D(rl.NewVector3(0, 16, 21), rl.NewVector3(0, 0, -1), rl.NewVector3(0, 1, 0), a.settings.FieldOfView, rl.CameraPerspective)
@@ -451,7 +572,58 @@ func (a *app) updateCamera(feet physics.Vec3) {
 		a.camera = rl.NewCamera3D(eye, target, rl.NewVector3(0, 1, 0), a.settings.FieldOfView, rl.CameraPerspective)
 		return
 	}
-	a.camera = rl.NewCamera3D(eye, rl.Vector3Add(eye, forward), rl.NewVector3(0, 1, 0), a.settings.FieldOfView, rl.CameraPerspective)
+	a.camera = rl.NewCamera3D(eye, rl.Vector3Add(eye, forward), rl.NewVector3(0, 1, 0), fovy, rl.CameraPerspective)
+}
+
+// updateWeapon moves the weapon in hand for the frame and shows what the
+// weapons did in its ticks: a shot's flash, tracer and hole where the
+// client's own world says it struck, and the sounds.
+func (a *app) updateWeapon(deltaTime float32, soldier *game.Soldier) {
+	arsenal := a.arsenal()
+	if arsenal == nil {
+		a.shots, a.events = a.shots[:0], 0
+		return
+	}
+	held := a.buttons.Has(game.ButtonAim)
+	aiming := held && arsenal.Action == game.WeaponReady
+	sprinting := a.buttons.Has(game.ButtonSprint) && !held && !a.buttons.Has(game.ButtonFire) &&
+		horizontalSpeed(soldier.Velocity) > a.rules.Movement.WalkSpeed
+	speed := horizontalSpeed(soldier.Velocity) / a.rules.Movement.SprintSpeed
+	a.view.update(deltaTime, aiming, sprinting, soldier.Grounded, speed, a.look)
+	progress := float32(0)
+	if tuning := a.rules.Weapons.Get(arsenal.Weapon()); tuning != nil {
+		total := tuning.EquipTicks()
+		if arsenal.Action == game.WeaponReloading {
+			total = tuning.ReloadTicks()
+		}
+		progress = 1 - (float32(arsenal.ActionTicks)-a.alpha)/float32(max(1, total))
+	}
+	placed := a.firstPerson() && a.view.place(a.camera, arsenal.Weapon(), arsenal.Action, max(0, min(1, progress)))
+	for _, shot := range a.shots {
+		reach := a.rules.Weapons.Get(shot.Weapon).Range
+		hit, err := a.world.RayCast(physics.Ray{Origin: shot.Origin, Direction: shot.Direction, Distance: reach},
+			physics.Mask(physics.LayerStatic, physics.LayerVehicle))
+		end := shot.Origin.Add(shot.Direction.Mul(reach))
+		if err == nil && hit.Hit {
+			end = hit.Position
+		}
+		muzzle := a.eye()
+		if placed {
+			muzzle = a.view.muzzleInWorld(a.camera)
+			a.view.fired(rand32(shot.Direction))
+		}
+		a.effects.shot(muzzle, end, err == nil && hit.Hit)
+		a.sounds.weapon(shot.Weapon, game.EventFired)
+	}
+	a.sounds.weapon(arsenal.Weapon(), a.events&^game.EventFired)
+	a.shots, a.events = a.shots[:0], 0
+}
+
+// rand32 turns a direction into a number in [0, 1) that varies from shot to
+// shot, for the look of a flash.
+func rand32(direction physics.Vec3) float32 {
+	value := math.Abs(float64(direction.X*7919 + direction.Y*104729 + direction.Z*1299709))
+	return float32(value - math.Floor(value))
 }
 
 func (a *app) draw(feet physics.Vec3, spawned bool) {
@@ -466,13 +638,14 @@ func (a *app) draw(feet physics.Vec3, spawned bool) {
 		}
 		a.self.Draw(feet, facing(a.yaw), a.soldiers.tint(team), animation.DetailFull)
 	}
-	a.soldiers.draw(a.tuning, a.debug)
+	a.soldiers.draw(a.rules.Movement, a.debug)
 	bodies := a.fallen.draw(&a.soldiers.frustum)
+	a.effects.draw()
 	if a.debug && spawned && !a.ragdoll {
 		// The server's view of the own soldier, to compare with the prediction.
 		if server := a.session.localSoldier(); server != nil {
-			center := server.Position.Add(physics.V(0, a.tuning.CenterHeight(), 0))
-			render.DrawCharacterCapsule(center, a.tuning.CapsuleHalfHeight, a.tuning.CapsuleRadius)
+			center := server.Position.Add(physics.V(0, a.rules.Movement.CenterHeight(), 0))
+			render.DrawCharacterCapsule(center, a.rules.Movement.CapsuleHalfHeight, a.rules.Movement.CapsuleRadius)
 		}
 	}
 	if a.debug {
@@ -483,10 +656,9 @@ func (a *app) draw(feet physics.Vec3, spawned bool) {
 		a.drawRay()
 	}
 	rl.EndMode3D()
-	rl.DrawLine(int32(rl.GetScreenWidth()/2-7), int32(rl.GetScreenHeight()/2), int32(rl.GetScreenWidth()/2+7), int32(rl.GetScreenHeight()/2), rl.White)
-	rl.DrawLine(int32(rl.GetScreenWidth()/2), int32(rl.GetScreenHeight()/2-7), int32(rl.GetScreenWidth()/2), int32(rl.GetScreenHeight()/2+7), rl.White)
-	rl.DrawText("WASD move | Space jump | Shift sprint | K ragdoll | R respawn | L knock down nearest", 18, 18, 18, rl.White)
-	rl.DrawText("F1 physics | F2 network | F3 camera | Esc cursor", 18, 44, 18, rl.White)
+	a.drawWeapon()
+	rl.DrawText("WASD move | Space jump | Shift sprint | LMB fire | RMB aim | R reload | 1-3, wheel weapon", 18, 18, 18, rl.White)
+	rl.DrawText("K ragdoll | Backspace respawn | L knock down nearest | F1 physics | F2 network | F3 camera | Esc cursor", 18, 44, 18, rl.White)
 	rl.DrawText(fmt.Sprintf("FPS %d | XYZ %.2f %.2f %.2f | %s | drawn %d (full %d, capsules %d) | bodies %d (ragdolls %d)",
 		rl.GetFPS(), feet.X, feet.Y, feet.Z, a.self.AnimationName(), a.soldiers.drawn, a.soldiers.full, a.soldiers.capsules,
 		bodies, a.fallen.ragdolls()), 18, 70, 18, rl.White)
@@ -506,6 +678,38 @@ func (a *app) draw(feet physics.Vec3, spawned bool) {
 		rl.DrawText("Press Esc to capture the mouse", 18, 132, 22, rl.Yellow)
 	}
 	rl.EndDrawing()
+}
+
+// drawWeapon draws the weapon in hand over the world, then the crosshair,
+// or the scope, and the rounds left.
+func (a *app) drawWeapon() {
+	arsenal := a.arsenal()
+	if arsenal == nil {
+		return
+	}
+	kind := arsenal.Weapon()
+	if a.firstPerson() {
+		team := game.TeamNone
+		if own := a.session.localSoldier(); own != nil {
+			team = own.Team
+		}
+		a.view.draw(a.camera, kind, a.soldiers.tint(team))
+	}
+	if a.view.scoped(kind) && a.firstPerson() {
+		drawScope()
+	} else {
+		motion := game.Motion{}
+		if soldier := a.ownSoldier(); soldier != nil {
+			motion = game.Motion{Speed: horizontalSpeed(soldier.Velocity) / a.rules.Movement.SprintSpeed, Airborne: !soldier.Grounded}
+		}
+		aim := a.view.aim
+		if !a.firstPerson() {
+			aim = 0
+		}
+		spread := arsenal.Spread(&a.rules.Weapons, a.buttons.Has(game.ButtonAim), motion)
+		drawCrosshair(spread, a.camera.Fovy, aim)
+	}
+	drawArsenal(arsenal, &a.rules.Weapons)
 }
 
 // eye is where the camera is.
@@ -540,7 +744,6 @@ func (a *app) die() error {
 		return err
 	}
 	a.ragdoll = true
-	a.thirdPerson = true
 	return nil
 }
 
@@ -621,7 +824,7 @@ func (a *app) lose(reason error) error {
 			conn, err := dial(ctx, a.settings)
 			if err == nil {
 				var session *session
-				if session, err = resume(lost, conn, a.tuning); err == nil {
+				if session, err = resume(lost, conn, a.rules); err == nil {
 					r.done <- reconnected{session: session}
 					return
 				}
@@ -647,7 +850,7 @@ func (a *app) pollReconnect() error {
 			return result.err
 		}
 		a.session = result.session
-		a.predictor.reset()
+		a.predictor.join(a.session.welcome.MatchSeed)
 		log.Printf("reconnected as player %d", a.session.welcome.Player)
 	default:
 	}

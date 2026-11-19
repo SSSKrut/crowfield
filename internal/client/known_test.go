@@ -78,8 +78,8 @@ func TestJoiningAHostTwiceWithoutAFingerprint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tuning := game.DefaultMovementTuning()
-	local, err := startLocalServer(tuning, config.Client{Host: "127.0.0.1:0", ConfigDir: hostDir})
+	rules := game.DefaultRules()
+	local, err := startLocalServer(rules, config.Client{Host: "127.0.0.1:0", ConfigDir: hostDir})
 	if err != nil {
 		t.Fatal(err)
 	}

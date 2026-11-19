@@ -94,7 +94,7 @@ var errServerSilent = errors.New("the server stopped sending snapshots")
 // connect runs the handshake: Hello, then Welcome or Reject, then Ready. A
 // player who lost its connection gives the token of its last session to get
 // its place back; a new one gives none.
-func connect(conn transport.Conn, name string, tuning game.MovementTuning, token [16]byte) (*session, error) {
+func connect(conn transport.Conn, name string, rules game.Rules, token [16]byte) (*session, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), connectTimeout)
 	defer cancel()
 	sent := time.Now()
@@ -122,8 +122,8 @@ func connect(conn transport.Conn, name string, tuning game.MovementTuning, token
 	if welcome.TickRate != game.TickRate {
 		return nil, fmt.Errorf("server runs at %d Hz, the client at %d Hz", welcome.TickRate, game.TickRate)
 	}
-	if welcome.TuningHash != tuning.Hash() {
-		return nil, errors.New("server uses different movement tuning; prediction would not match")
+	if welcome.TuningHash != rules.Hash() {
+		return nil, errors.New("server uses different movement or weapon tuning; prediction would not match")
 	}
 	if welcome.Map != game.PrototypeMap {
 		return nil, fmt.Errorf("server plays map %q, the client only has %q", welcome.Map, game.PrototypeMap)
@@ -348,8 +348,8 @@ func (s *session) isBuried(id game.SoldierID, tick game.Tick) bool {
 
 // resume connects again as the player of a lost session, which the caller
 // has abandoned.
-func resume(lost *session, conn transport.Conn, tuning game.MovementTuning) (*session, error) {
-	return connect(conn, lost.name, tuning, lost.token())
+func resume(lost *session, conn transport.Conn, rules game.Rules) (*session, error) {
+	return connect(conn, lost.name, rules, lost.token())
 }
 
 // jump moves the client's clock by the given number of ticks, when the lead

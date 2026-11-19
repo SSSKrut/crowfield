@@ -27,6 +27,7 @@ type tickProfile struct {
 	total, longest time.Duration
 	systems        [systemCount]time.Duration
 	missedCommands uint64
+	shots          uint64
 	// snapshotBytes counts what snapshots cost on the wire, with the estimated
 	// overhead of every datagram.
 	snapshotBytes uint64

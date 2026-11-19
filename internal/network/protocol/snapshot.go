@@ -61,13 +61,16 @@ type SoldierState struct {
 	Velocity [3]int16 // 1/32 m/s, 12 bits each; a bot's in steps of 4, without Y
 	Yaw      uint16   // 12 bits of a full turn; a bot's in steps of 16
 	Pitch    int16    // 10 bits over [-π/2, π/2]; a bot's in steps of 16
-	Weapon   uint8    // 4 bits
+	Weapon   uint8    // 4 bits: the kind in its hands
 }
 
 // NewSoldierState quantizes a soldier. It fails when the soldier is outside the
 // range the protocol can represent, which means it left the map.
 func NewSoldierState(soldier *game.Soldier) (SoldierState, error) {
-	state := SoldierState{ID: soldier.ID, Team: soldier.Team, Bot: soldier.Controller.Kind == game.ControllerBot}
+	state := SoldierState{
+		ID: soldier.ID, Team: soldier.Team, Bot: soldier.Controller.Kind == game.ControllerBot,
+		Weapon: uint8(soldier.Arsenal.Weapon()),
+	}
 	if soldier.Alive {
 		state.Flags |= SoldierAlive
 	}
@@ -100,7 +103,8 @@ func NewSoldierState(soldier *game.Soldier) (SoldierState, error) {
 }
 
 // Apply writes the received state into a client-side soldier. The client only
-// learns whether a soldier is a bot, not which player or bot drives it.
+// learns whether a soldier is a bot, not which player or bot drives it, and
+// of its arsenal only the weapon in its hands.
 func (s SoldierState) Apply(soldier *game.Soldier) {
 	soldier.ID = s.ID
 	soldier.Team = s.Team
@@ -123,6 +127,7 @@ func (s SoldierState) Apply(soldier *game.Soldier) {
 	soldier.Yaw = float32(s.Yaw) * (2 * math.Pi / (1 << yawBits))
 	pitchLimit := int32(1)<<(pitchBits-1) - 1
 	soldier.Pitch = float32(max(-pitchLimit, int32(s.Pitch))) * (math.Pi / 2 / float32(pitchLimit))
+	soldier.Arsenal = game.Holding(game.WeaponKind(s.Weapon))
 }
 
 func (s *SoldierState) validate() error {
@@ -224,8 +229,8 @@ func (s *SoldierState) readAngles(r *BitReader) {
 const NoInput = math.MinInt8
 
 // PlayerState is the private part of a snapshot for the player who receives it.
-// Position and velocity keep full precision for reconciliation and are only
-// sent while the player has a soldier.
+// Position, velocity and the arsenal keep full precision for reconciliation
+// and are only sent while the player has a soldier.
 type PlayerState struct {
 	Processed         bool
 	LastProcessedTick game.Tick
@@ -237,6 +242,7 @@ type PlayerState struct {
 	Soldier   game.SoldierID
 	Position  physics.Vec3
 	Velocity  physics.Vec3
+	Arsenal   game.Arsenal
 }
 
 func (p *PlayerState) validate() error {
@@ -246,7 +252,13 @@ func (p *PlayerState) validate() error {
 	if !finite([3]float32{p.Position.X, p.Position.Y, p.Position.Z}) || !finite([3]float32{p.Velocity.X, p.Velocity.Y, p.Velocity.Z}) {
 		return ErrInvalidFloat
 	}
-	return nil
+	if p.Soldier == 0 {
+		if p.Arsenal != (game.Arsenal{}) {
+			return errors.New("an arsenal without a soldier")
+		}
+		return nil
+	}
+	return validateArsenal(&p.Arsenal)
 }
 
 func (p *PlayerState) bits() int {
@@ -255,7 +267,7 @@ func (p *PlayerState) bits() int {
 		bits += 32
 	}
 	if p.Soldier != 0 {
-		bits += 6 * 32
+		bits += 6*32 + arsenalBits(&p.Arsenal)
 	}
 	return bits
 }
@@ -271,6 +283,7 @@ func (p *PlayerState) write(w *BitWriter) {
 		for _, value := range [6]float32{p.Position.X, p.Position.Y, p.Position.Z, p.Velocity.X, p.Velocity.Y, p.Velocity.Z} {
 			w.WriteFloat32(value)
 		}
+		writeArsenal(w, &p.Arsenal)
 	}
 }
 
@@ -289,6 +302,7 @@ func (p *PlayerState) read(r *BitReader) {
 	}
 	p.Position = physics.V(r.ReadFloat32(), r.ReadFloat32(), r.ReadFloat32())
 	p.Velocity = physics.V(r.ReadFloat32(), r.ReadFloat32(), r.ReadFloat32())
+	readArsenal(r, &p.Arsenal)
 }
 
 // Snapshot is one server datagram. A snapshot of the world may take several,

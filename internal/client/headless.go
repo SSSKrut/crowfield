@@ -23,6 +23,7 @@ type Headless struct {
 	world     *physics.World
 	input     wanderer
 	last      time.Time
+	shots     int
 
 	mu    sync.Mutex
 	stats HeadlessStats
@@ -33,6 +34,9 @@ type HeadlessStats struct {
 	Ticks, Snapshots   int
 	Bytes              int64
 	Jumps, Corrections int
+	// Shots counts the shots predicted; WeaponCorrections the corrections
+	// where only the weapons disagreed with the server.
+	Shots, WeaponCorrections int
 	// Unresolved counts snapshot datagrams dropped for a missing delta base;
 	// Late counts snapshots that reported commands arriving too late.
 	Unresolved, Late int
@@ -43,7 +47,7 @@ type HeadlessStats struct {
 }
 
 // NewHeadless joins a server over conn.
-func NewHeadless(conn transport.Conn, name string, tuning game.MovementTuning, seed uint64) (*Headless, error) {
+func NewHeadless(conn transport.Conn, name string, rules game.Rules, seed uint64) (*Headless, error) {
 	world, err := physics.NewWorld()
 	if err != nil {
 		return nil, err
@@ -54,17 +58,18 @@ func NewHeadless(conn transport.Conn, name string, tuning game.MovementTuning, s
 			return nil, err
 		}
 	}
-	predictor, err := newPredictor(world, tuning)
+	predictor, err := newPredictor(world, rules)
 	if err != nil {
 		_ = world.Close()
 		return nil, err
 	}
-	session, err := connect(conn, name, tuning, [16]byte{})
+	session, err := connect(conn, name, rules, [16]byte{})
 	if err != nil {
 		_ = predictor.close()
 		_ = world.Close()
 		return nil, err
 	}
+	predictor.join(session.welcome.MatchSeed)
 	return &Headless{
 		session: session, predictor: predictor, world: world,
 		input: wanderer{random: rand.New(rand.NewPCG(seed, seed^0x5eed)), area: game.PrototypeScene().PlayArea},
@@ -100,8 +105,12 @@ func (h *Headless) Tick() error {
 	if err != nil {
 		return fmt.Errorf("disconnected: %w", err)
 	}
-	if err := h.predictor.predict(command); err != nil {
+	step, err := h.predictor.predict(command)
+	if err != nil {
 		return err
+	}
+	if step.Events.Has(game.EventFired) {
+		h.shots++
 	}
 	if err := h.world.Step(game.TickDelta); err != nil {
 		return err
@@ -133,6 +142,7 @@ func (h *Headless) publish() {
 	h.stats = HeadlessStats{
 		Ticks: h.stats.Ticks + 1, Snapshots: s.received, Bytes: s.bytes.Load(), Jumps: s.resyncs,
 		Corrections: h.predictor.corrections, Unresolved: s.unresolved, Late: s.late, Lead: s.lead,
+		Shots: h.shots, WeaponCorrections: h.predictor.weaponCorrections,
 		Soldiers: len(s.soldiers), LargestCorrection: max(h.stats.LargestCorrection, h.predictor.lastError),
 	}
 	h.mu.Unlock()
@@ -147,14 +157,14 @@ func (h *Headless) Stats() HeadlessStats {
 
 // Rejoin comes back over a new connection after Run ended with a lost one:
 // the server gives the player its place and team again.
-func (h *Headless) Rejoin(conn transport.Conn, tuning game.MovementTuning) error {
+func (h *Headless) Rejoin(conn transport.Conn, rules game.Rules) error {
 	h.session.abandon()
-	session, err := resume(h.session, conn, tuning)
+	session, err := resume(h.session, conn, rules)
 	if err != nil {
 		return err
 	}
 	h.session = session
-	h.predictor.reset()
+	h.predictor.join(session.welcome.MatchSeed)
 	return nil
 }
 
@@ -187,6 +197,7 @@ func (s *session) updateRemotes() {
 
 // wanderer is random input: it walks or runs in a direction for a few
 // seconds, sometimes stands or jumps, and turns back inside the play area.
+// Now and then it shoots, aims, reloads or takes another weapon.
 type wanderer struct {
 	random  *rand.Rand
 	area    float32
@@ -195,6 +206,9 @@ type wanderer struct {
 	yaw     float32
 	forward float32
 	buttons game.Buttons
+	firing  bool
+	weapon  uint8
+	ticks   int
 }
 
 func (w *wanderer) command(p *predictor) game.InputCommand {
@@ -214,10 +228,27 @@ func (w *wanderer) command(p *predictor) game.InputCommand {
 		case roll < 5:
 			w.buttons = game.ButtonSprint
 		}
+		w.firing = w.random.IntN(3) == 0
+		if w.firing && w.random.IntN(2) == 0 {
+			w.buttons |= game.ButtonAim
+		}
+		if w.random.IntN(5) == 0 {
+			w.weapon = uint8(w.random.IntN(game.MaxLoadout))
+		}
 	}
+	w.ticks++
 	buttons := w.buttons
 	if w.random.IntN(120) == 0 {
 		buttons |= game.ButtonJump
 	}
-	return game.NewInputCommand(0, w.forward, 0, w.yaw, 0, buttons)
+	// Pulls of a quarter second fire bursts and single shots alike.
+	if w.firing && w.ticks%30 < 15 {
+		buttons |= game.ButtonFire
+	}
+	if w.random.IntN(240) == 0 {
+		buttons |= game.ButtonReload
+	}
+	command := game.NewInputCommand(0, w.forward, 0, w.yaw, 0, buttons)
+	command.Weapon = w.weapon
+	return command
 }

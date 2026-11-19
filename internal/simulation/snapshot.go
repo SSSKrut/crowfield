@@ -130,7 +130,7 @@ func (s *Server) sendSnapshot(p *player) {
 		Processed: p.processed, LastProcessedTick: p.lastProcessed, InputLead: p.lead, Soldier: p.soldier,
 	}
 	if soldier := s.soldiers.Get(p.soldier); soldier != nil {
-		private.Position, private.Velocity = soldier.Position, soldier.Velocity
+		private.Position, private.Velocity, private.Arsenal = soldier.Position, soldier.Velocity, soldier.Arsenal
 	}
 	s.prioritize(p)
 	p.removals = slices.DeleteFunc(p.removals, func(r pendingRemoval) bool { return p.removalDelivered(&r) })
@@ -223,11 +223,11 @@ func (s *Server) viewpoint(p *player) viewpoint {
 	}
 	yaw, pitch := float64(p.last.YawRadians()), float64(p.last.PitchRadians())
 	view := viewpoint{
-		eye: soldier.Position.Add(physics.V(0, s.tuning.EyeHeight, 0)),
+		eye: soldier.Position.Add(physics.V(0, s.rules.Movement.EyeHeight, 0)),
 		forward: physics.V(
 			float32(math.Sin(yaw)*math.Cos(pitch)), float32(math.Sin(pitch)), -float32(math.Cos(yaw)*math.Cos(pitch)),
 		),
-		center: s.tuning.CenterHeight(), ok: true,
+		center: s.rules.Movement.CenterHeight(), ok: true,
 	}
 	return view
 }

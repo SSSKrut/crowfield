@@ -238,7 +238,7 @@ func (s *Server) hello(sess *session, hello *protocol.Hello) {
 	welcome := protocol.Welcome{
 		Player: id, SessionToken: p.token, TickRate: game.TickRate, SnapshotRate: uint8(s.settings.SnapshotRate),
 		ServerTick: s.tick, Map: game.PrototypeMap,
-		TuningHash: s.tuning.Hash(), MatchSeed: s.matchSeed,
+		TuningHash: s.rules.Hash(), MatchSeed: s.matchSeed,
 	}
 	if err := send(sess.conn, &welcome); err != nil {
 		s.drop(sess, err.Error())
@@ -321,11 +321,12 @@ func (s *Server) spawn(p *player) error {
 	}
 	id, err := s.soldiers.Add(game.Soldier{
 		Team: p.team, Controller: game.PlayerController(p.id), Alive: true, Position: s.scene.Spawn,
+		Arsenal: game.NewArsenal(game.DefaultLoadout(), &s.rules.Weapons),
 	})
 	if err != nil {
 		return err
 	}
-	controller, err := game.NewCharacterController(s.world, s.tuning, s.scene.Spawn)
+	controller, err := game.NewCharacterController(s.world, s.rules.Movement, s.scene.Spawn)
 	if err != nil {
 		s.soldiers.Remove(id)
 		return err
@@ -350,7 +351,9 @@ func (s *Server) respawn(sess *session) {
 	if p == nil || p.soldier == 0 {
 		return
 	}
-	if err := p.controller.Teleport(s.soldiers.Get(p.soldier), s.scene.Spawn); err != nil {
+	soldier := s.soldiers.Get(p.soldier)
+	soldier.Arsenal = game.NewArsenal(game.DefaultLoadout(), &s.rules.Weapons)
+	if err := p.controller.Teleport(soldier, s.scene.Spawn); err != nil {
 		log.Printf("player %d could not respawn: %v", p.id, err)
 	}
 }

@@ -18,8 +18,8 @@ import (
 // Two players join a hosted server over QUIC and see each other: one walks,
 // and the other's interpolated view of it follows.
 func TestTwoPlayersSeeEachOtherOverQUIC(t *testing.T) {
-	tuning := game.DefaultMovementTuning()
-	local, err := startLocalServer(tuning, config.Client{Host: "127.0.0.1:0"})
+	rules := game.DefaultRules()
+	local, err := startLocalServer(rules, config.Client{Host: "127.0.0.1:0"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +36,7 @@ func TestTwoPlayersSeeEachOtherOverQUIC(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if sessions[i], err = connect(conn, "player", tuning, [16]byte{}); err != nil {
+		if sessions[i], err = connect(conn, "player", rules, [16]byte{}); err != nil {
 			t.Fatal(err)
 		}
 		defer sessions[i].close()
@@ -78,8 +78,8 @@ func TestTwoPlayersSeeEachOtherOverQUIC(t *testing.T) {
 // every tick runs, the clock holds without a jump, no command comes late, no
 // delta misses its base, and the prediction never needs a correction.
 func TestHeadlessClientsPlayOverQUIC(t *testing.T) {
-	tuning := game.DefaultMovementTuning()
-	local, err := startLocalServer(tuning, config.Client{Host: "127.0.0.1:0", Dummies: 64})
+	rules := game.DefaultRules()
+	local, err := startLocalServer(rules, config.Client{Host: "127.0.0.1:0", Dummies: 64})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func TestHeadlessClientsPlayOverQUIC(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if players[i], err = NewHeadless(conn, "headless", tuning, uint64(i+1)); err != nil {
+		if players[i], err = NewHeadless(conn, "headless", rules, uint64(i+1)); err != nil {
 			t.Fatal(err)
 		}
 		defer players[i].Close()
@@ -136,7 +136,7 @@ func TestPlayerComesBackAfterTheLinkBreaks(t *testing.T) {
 	address := startTestServer(t, config.Server{
 		MaxPlayers: 2, SnapshotRate: 20, InputTimeout: 300 * time.Millisecond, ReconnectWindow: 10 * time.Second,
 	})
-	tuning := game.DefaultMovementTuning()
+	rules := game.DefaultRules()
 	watcher := joinHeadless(t, address, transport.QUICOptions{}, 1)
 	link := &cuttable{}
 	breaker := joinHeadless(t, address, transport.QUICOptions{WrapPacketConn: func(udp net.PacketConn) net.PacketConn {
@@ -176,7 +176,7 @@ func TestPlayerComesBackAfterTheLinkBreaks(t *testing.T) {
 	play("removing the lost soldier", 3*time.Second, func() bool { return len(remoteSoldiers(watcher)) == 0 })
 
 	conn := dialTestServer(t, address, transport.QUICOptions{})
-	if err := breaker.Rejoin(conn, tuning); err != nil {
+	if err := breaker.Rejoin(conn, rules); err != nil {
 		t.Fatal(err)
 	}
 	breakerPlays = true
@@ -196,7 +196,7 @@ func TestPlayerComesBackAfterTheLinkBreaks(t *testing.T) {
 		t.Errorf("back as soldier %#04x of team %d; was %#04x of team %d", after.ID, after.Team, before.ID, before.Team)
 	}
 	if others := remoteSoldiers(breaker); len(others) != 1 || breaker.Stats().Corrections != 0 {
-		t.Errorf("the returned player sees %d others and had %d corrections", len(others), breaker.Stats().Corrections)
+		t.Errorf("the returned player sees %d others and had %d corrections: %+v", len(others), breaker.Stats().Corrections, breaker.Stats())
 	}
 }
 
@@ -234,7 +234,7 @@ func startTestServer(t *testing.T, settings config.Server) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server, err := simulation.NewServer(settings, game.DefaultMovementTuning())
+	server, err := simulation.NewServer(settings, game.DefaultRules())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -265,7 +265,7 @@ func dialTestServer(t *testing.T, address string, options transport.QUICOptions)
 
 func joinHeadless(t *testing.T, address string, options transport.QUICOptions, seed uint64) *Headless {
 	t.Helper()
-	player, err := NewHeadless(dialTestServer(t, address, options), "player", game.DefaultMovementTuning(), seed)
+	player, err := NewHeadless(dialTestServer(t, address, options), "player", game.DefaultRules(), seed)
 	if err != nil {
 		t.Fatal(err)
 	}

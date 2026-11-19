@@ -119,7 +119,7 @@ func BenchmarkTick(b *testing.B) {
 
 func newTestServer(t testing.TB, settings config.Server) *Server {
 	t.Helper()
-	server, err := NewServer(settings, game.DefaultMovementTuning())
+	server, err := NewServer(settings, game.DefaultRules())
 	if err != nil {
 		t.Fatal(err)
 	}

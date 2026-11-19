@@ -2,12 +2,10 @@ package game
 
 import (
 	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"hash/fnv"
 	"math"
-	"os"
 )
 
 // MovementTuning holds the parameters that decide where a human soldier ends
@@ -35,15 +33,8 @@ func DefaultMovementTuning() MovementTuning {
 // LoadMovementTuning reads a JSON file on top of the defaults, so the file only
 // needs the values it changes.
 func LoadMovementTuning(path string) (MovementTuning, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return MovementTuning{}, err
-	}
-	defer file.Close()
 	tuning := DefaultMovementTuning()
-	decoder := json.NewDecoder(file)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&tuning); err != nil {
+	if err := loadJSON(path, &tuning); err != nil {
 		return MovementTuning{}, fmt.Errorf("movement tuning %q: %w", path, err)
 	}
 	if err := tuning.Validate(); err != nil {

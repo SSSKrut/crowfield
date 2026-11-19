@@ -22,6 +22,7 @@ func main() {
 	flag.StringVar(&settings.Certificate, "cert", settings.Certificate, "certificate file, created on the first run")
 	flag.StringVar(&settings.Key, "key", settings.Key, "private key file, created on the first run")
 	flag.StringVar(&settings.Tuning, "tuning", "", "JSON file overriding movement tuning; clients need the same")
+	flag.StringVar(&settings.Weapons, "weapons", "", "JSON file overriding weapon tuning; clients need the same")
 	flag.IntVar(&settings.MaxPlayers, "max-players", settings.MaxPlayers, "maximum number of human players")
 	flag.IntVar(&settings.SnapshotRate, "snapshot-rate", settings.SnapshotRate, "snapshots per second; must divide the tick rate")
 	flag.IntVar(&settings.Dummies, "dummies", 0, "roaming bot soldiers without AI, for load tests")
@@ -37,13 +38,9 @@ func main() {
 }
 
 func run(settings config.Server) error {
-	tuning := game.DefaultMovementTuning()
-	if settings.Tuning != "" {
-		loaded, err := game.LoadMovementTuning(settings.Tuning)
-		if err != nil {
-			return err
-		}
-		tuning = loaded
+	rules, err := game.LoadRules(settings.Tuning, settings.Weapons)
+	if err != nil {
+		return err
 	}
 	certificate, fingerprint, err := transport.LoadOrCreateCertificate(settings.Certificate, settings.Key)
 	if err != nil {
@@ -53,7 +50,7 @@ func run(settings config.Server) error {
 		return err
 	}
 	defer physics.Shutdown()
-	server, err := simulation.NewServer(settings, tuning)
+	server, err := simulation.NewServer(settings, rules)
 	if err != nil {
 		return err
 	}

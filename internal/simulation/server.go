@@ -31,7 +31,7 @@ const (
 
 type Server struct {
 	settings         config.Server
-	tuning           game.MovementTuning
+	rules            game.Rules
 	scene            game.Scene
 	world            *physics.World
 	bodies           []*physics.Body
@@ -57,7 +57,7 @@ type Server struct {
 // NewServer builds the world of the prototype scene. Only its static part runs
 // on the server: dynamic props are not replicated yet, so clients keep them as
 // local decoration.
-func NewServer(settings config.Server, tuning game.MovementTuning) (*Server, error) {
+func NewServer(settings config.Server, rules game.Rules) (*Server, error) {
 	if settings.MaxPlayers < 1 || settings.MaxPlayers > game.MaxPlayers {
 		return nil, fmt.Errorf("max players must be in 1..%d", game.MaxPlayers)
 	}
@@ -76,7 +76,7 @@ func NewServer(settings config.Server, tuning game.MovementTuning) (*Server, err
 	if settings.ClientBandwidth < 0 {
 		return nil, fmt.Errorf("client bandwidth %d is negative", settings.ClientBandwidth)
 	}
-	if err := tuning.Validate(); err != nil {
+	if err := rules.Validate(); err != nil {
 		return nil, err
 	}
 	if settings.Dummies < 0 || settings.MaxPlayers+settings.Dummies > game.MaxSoldiers {
@@ -97,7 +97,7 @@ func NewServer(settings config.Server, tuning game.MovementTuning) (*Server, err
 		binary.LittleEndian.PutUint64(seed[:], settings.Seed)
 	}
 	s := &Server{
-		settings: settings, tuning: tuning, scene: game.PrototypeScene(), world: world, soldiers: soldiers,
+		settings: settings, rules: rules, scene: game.PrototypeScene(), world: world, soldiers: soldiers,
 		sessions: make(map[transport.Conn]*session), events: make(chan event, 4096),
 		snapshotInterval: game.Tick(game.TickRate / settings.SnapshotRate), matchSeed: binary.LittleEndian.Uint64(seed[:]),
 		grid: game.NewSoldierGrid(gridCellSize), history: newPoseHistory(capacity),
@@ -173,8 +173,8 @@ func (s *Server) run(ctx context.Context) error {
 			players := s.playerCount()
 			var memory runtime.MemStats
 			runtime.ReadMemStats(&memory)
-			log.Printf("server running: tick=%d rate=%.1f players=%d soldiers=%d missed_commands=%d snapshots=%.1fKB/s/player heap=%.1fMB goroutines=%d %s",
-				s.tick, float64(s.profile.ticks)/since.Seconds(), players, s.soldiers.Len(), s.profile.missedCommands,
+			log.Printf("server running: tick=%d rate=%.1f players=%d soldiers=%d missed_commands=%d shots=%d snapshots=%.1fKB/s/player heap=%.1fMB goroutines=%d %s",
+				s.tick, float64(s.profile.ticks)/since.Seconds(), players, s.soldiers.Len(), s.profile.missedCommands, s.profile.shots,
 				float64(s.profile.snapshotBytes)/1024/since.Seconds()/float64(max(1, players)),
 				float64(memory.HeapInuse)/(1<<20), runtime.NumGoroutine(), &s.profile)
 			lastStats = time.Now()
@@ -246,8 +246,13 @@ func (s *Server) movePlayer(p *player) error {
 	command.Sanitize()
 	p.last = command
 	soldier := s.soldiers.Get(p.soldier)
-	if err := p.controller.Step(soldier, command); err != nil {
+	step, err := game.RunCommand(p.controller, &s.rules.Weapons, soldier, command, s.matchSeed)
+	if err != nil {
 		return err
+	}
+	if step.Events.Has(game.EventFired) {
+		// Shots hit nothing yet: hit tests come with step 2.2.
+		s.profile.shots++
 	}
 	if soldier.Position.Y < fallLimit {
 		if err := p.controller.Teleport(soldier, s.scene.Spawn); err != nil {

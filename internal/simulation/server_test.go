@@ -43,8 +43,9 @@ func TestInputBuffer(t *testing.T) {
 	}
 }
 
-// The full network path must not change movement: the server applies the
-// commands at their ticks, and the result matches the controller run directly.
+// The full network path must not change movement or weapons: the server
+// applies the commands at their ticks, and the result matches the controller
+// and the arsenal run directly.
 func TestServerMovesSoldierExactlyLikeTheController(t *testing.T) {
 	server, listener := startServer(t, config.Server{MaxPlayers: 2, SnapshotRate: game.TickRate})
 	client := join(t, listener, "runner")
@@ -52,7 +53,26 @@ func TestServerMovesSoldierExactlyLikeTheController(t *testing.T) {
 	spawnTick := first.ServerTick
 	start := spawnTick + 5
 	const ticks = 150
+	var movement func(tick game.Tick) game.InputCommand
 	route := func(tick game.Tick) game.InputCommand {
+		command := movement(tick)
+		// The assault rifle fires a burst on the run; the rifle comes out on
+		// the ramp, fires single shots and reloads.
+		switch step := tick - start; {
+		case step < 30:
+			command.Buttons |= game.ButtonFire
+		case step >= 40:
+			command.Weapon = 1
+			if step%20 < 3 {
+				command.Buttons |= game.ButtonFire
+			}
+			if step == 120 {
+				command.Buttons |= game.ButtonReload
+			}
+		}
+		return command
+	}
+	movement = func(tick game.Tick) game.InputCommand {
 		step := tick - start
 		switch {
 		case step < 36:
@@ -94,23 +114,28 @@ func TestServerMovesSoldierExactlyLikeTheController(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	controller, err := game.NewCharacterController(world, server.tuning, server.scene.Spawn)
+	controller, err := game.NewCharacterController(world, server.rules.Movement, server.scene.Spawn)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer controller.Close()
-	var reference game.Soldier
+	reference := game.Soldier{ID: first.Player.Soldier, Arsenal: game.NewArsenal(game.DefaultLoadout(), &server.rules.Weapons)}
 	if err := controller.Teleport(&reference, server.scene.Spawn); err != nil {
 		t.Fatal(err)
 	}
 	var idle game.InputCommand
+	shots := 0
 	for tick := spawnTick; tick <= final.ServerTick; tick++ {
 		command := idle.Repeated(tick)
 		if tick >= start && tick <= last {
 			command = route(tick)
 		}
-		if err := controller.Step(&reference, command); err != nil {
+		step, err := game.RunCommand(controller, &server.rules.Weapons, &reference, command, client.welcome.MatchSeed)
+		if err != nil {
 			t.Fatal(err)
+		}
+		if step.Events.Has(game.EventFired) {
+			shots++
 		}
 		if err := world.Step(game.TickDelta); err != nil {
 			t.Fatal(err)
@@ -119,6 +144,13 @@ func TestServerMovesSoldierExactlyLikeTheController(t *testing.T) {
 	if final.Player.Position != reference.Position || final.Player.Velocity != reference.Velocity {
 		t.Errorf("server ended at %+v v=%+v, the controller at %+v v=%+v",
 			final.Player.Position, final.Player.Velocity, reference.Position, reference.Velocity)
+	}
+	if final.Player.Arsenal != reference.Arsenal {
+		t.Errorf("server arsenal %+v, the reference %+v", final.Player.Arsenal, reference.Arsenal)
+	}
+	// The rifle is out from step 88 and fires once before the reload.
+	if shots != 6 {
+		t.Errorf("%d shots, want a burst of 5 and a rifle shot", shots)
 	}
 	if distance := math.Hypot(float64(reference.Position.X), float64(reference.Position.Z-server.scene.Spawn.Z)); distance < 10 {
 		t.Errorf("the route moved the soldier only %.1f m", distance)
@@ -185,7 +217,7 @@ func TestRespawnReturnsTheSoldierToTheSpawn(t *testing.T) {
 
 func startServer(t *testing.T, settings config.Server) (*Server, *transport.MemoryListener) {
 	t.Helper()
-	server, err := NewServer(settings, game.DefaultMovementTuning())
+	server, err := NewServer(settings, game.DefaultRules())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +261,8 @@ func join(t *testing.T, listener *transport.MemoryListener, name string) *testCl
 	if err := client.welcome.Decode(data); err != nil {
 		t.Fatal(err)
 	}
-	if client.welcome.TuningHash != game.DefaultMovementTuning().Hash() || client.welcome.TickRate != game.TickRate {
+	rules := game.DefaultRules()
+	if client.welcome.TuningHash != rules.Hash() || client.welcome.TickRate != game.TickRate {
 		t.Fatalf("welcome %+v", client.welcome)
 	}
 	sendMessage(t, conn, &protocol.Ready{})

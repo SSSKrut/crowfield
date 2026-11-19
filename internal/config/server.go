@@ -9,7 +9,9 @@ type Server struct {
 	Certificate   string
 	Key           string
 	Tuning        string
-	MaxPlayers    int
+	// Weapons overrides the weapon tuning; clients must use the same.
+	Weapons    string
+	MaxPlayers int
 	// SnapshotRate is how many snapshots per second each client receives; it
 	// must divide the tick rate.
 	SnapshotRate int

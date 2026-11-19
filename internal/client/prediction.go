@@ -33,22 +33,30 @@ type predictedTick struct {
 	stepped bool
 }
 
-// predictor moves the player's own soldier as soon as a command is made, with
-// the movement code of the server, and corrects it when a snapshot disagrees.
+// predictor moves the player's own soldier and works its weapons as soon as a
+// command is made, with the code of the server, and corrects them when a
+// snapshot disagrees.
 type predictor struct {
 	controller *game.CharacterController
-	ticks      [predictionHistory]predictedTick
-	soldier    game.Soldier
-	previous   physics.Vec3
-	offset     physics.Vec3
-	started    bool
-	last       game.Tick
+	weapons    game.WeaponSet
+	// match is the match seed, which the spread of shots comes from.
+	match    uint64
+	ticks    [predictionHistory]predictedTick
+	soldier  game.Soldier
+	previous physics.Vec3
+	offset   physics.Vec3
+	started  bool
+	last     game.Tick
 
-	corrections int
-	lastError   float32
+	// corrections counts the corrections, weaponCorrections those of them
+	// where only the weapons disagreed.
+	corrections       int
+	weaponCorrections int
+	lastError         float32
 }
 
-func newPredictor(world *physics.World, tuning game.MovementTuning) (*predictor, error) {
+func newPredictor(world *physics.World, rules game.Rules) (*predictor, error) {
+	tuning := rules.Movement
 	// The client never pushes props: they are its own decoration, and every
 	// replay would push them once more.
 	tuning.PushStrength = 0
@@ -56,13 +64,18 @@ func newPredictor(world *physics.World, tuning game.MovementTuning) (*predictor,
 	if err != nil {
 		return nil, err
 	}
-	return &predictor{controller: controller}, nil
+	return &predictor{controller: controller, weapons: rules.Weapons}, nil
 }
 
-// reset forgets the soldier, for a new session: the next confirmed state
-// starts the prediction again.
-func (p *predictor) reset() {
-	p.started, p.offset = false, physics.Vec3{}
+// join starts a new session with the match seed it got: the next confirmed
+// state starts the prediction again. The ticks of the last session are
+// forgotten: the new one may reuse their numbers, and the server never saw
+// their commands.
+func (p *predictor) join(match uint64) {
+	p.started, p.offset, p.match = false, physics.Vec3{}, match
+	for i := range p.ticks {
+		p.ticks[i] = predictedTick{state: p.ticks[i].state}
+	}
 }
 
 func (p *predictor) close() error {
@@ -71,7 +84,8 @@ func (p *predictor) close() error {
 
 // predict records the command of a tick and, once the soldier exists, applies
 // it. Ticks skipped by a clock jump get the repeated command the server uses.
-func (p *predictor) predict(command game.InputCommand) error {
+// It returns what the weapons did at the tick of the command, for the effects.
+func (p *predictor) predict(command game.InputCommand) (game.WeaponStep, error) {
 	if p.started && command.Tick <= p.last {
 		// The clock jumped back; start again from the next confirmed state.
 		p.started = false
@@ -80,8 +94,8 @@ func (p *predictor) predict(command game.InputCommand) error {
 		previous := p.ticks[p.last%predictionHistory].command
 		for tick := p.last + 1; tick != command.Tick && command.Tick-tick < predictionHistory; tick++ {
 			p.previous = p.soldier.Position
-			if err := p.record(previous.Repeated(tick), true); err != nil {
-				return err
+			if _, err := p.record(previous.Repeated(tick), true); err != nil {
+				return game.WeaponStep{}, err
 			}
 		}
 		p.previous = p.soldier.Position
@@ -89,23 +103,24 @@ func (p *predictor) predict(command game.InputCommand) error {
 	return p.record(command, p.started)
 }
 
-func (p *predictor) record(command game.InputCommand, step bool) error {
+func (p *predictor) record(command game.InputCommand, step bool) (game.WeaponStep, error) {
 	slot := &p.ticks[command.Tick%predictionHistory]
 	state := slot.state
 	*slot = predictedTick{tick: command.Tick, command: command, state: state}
 	p.last = command.Tick
 	if !step {
-		return nil
+		return game.WeaponStep{}, nil
 	}
 	return p.step(slot)
 }
 
-func (p *predictor) step(slot *predictedTick) error {
-	if err := p.controller.Step(&p.soldier, slot.command); err != nil {
-		return err
+func (p *predictor) step(slot *predictedTick) (game.WeaponStep, error) {
+	step, err := game.RunCommand(p.controller, &p.weapons, &p.soldier, slot.command, p.match)
+	if err != nil {
+		return step, err
 	}
 	slot.soldier, slot.stepped = p.soldier, true
-	return p.controller.SaveState(&slot.state)
+	return step, p.controller.SaveState(&slot.state)
 }
 
 // reconcile compares the server's state of a tick with the prediction for that
@@ -118,12 +133,15 @@ func (p *predictor) reconcile(server protocol.PlayerState) error {
 	tick := server.LastProcessedTick
 	slot := &p.ticks[tick%predictionHistory]
 	known := p.started && slot.tick == tick && slot.stepped
-	if known && near(slot.soldier.Position, server.Position, acceptedPositionError) &&
-		near(slot.soldier.Velocity, server.Velocity, acceptedVelocityError) {
+	moved := !known || !near(slot.soldier.Position, server.Position, acceptedPositionError) ||
+		!near(slot.soldier.Velocity, server.Velocity, acceptedVelocityError)
+	if !moved && slot.soldier.Arsenal.Agrees(&server.Arsenal) {
 		return nil
 	}
 	before := p.soldier.Position
-	confirmed := game.Soldier{ID: server.Soldier, Alive: true, Position: server.Position, Velocity: server.Velocity}
+	confirmed := game.Soldier{
+		ID: server.Soldier, Alive: true, Position: server.Position, Velocity: server.Velocity, Arsenal: server.Arsenal,
+	}
 	var err error
 	if known && distance(slot.soldier.Position, server.Position) < teleportDistance {
 		err = p.controller.Restore(&confirmed, &slot.state)
@@ -136,6 +154,9 @@ func (p *predictor) reconcile(server protocol.PlayerState) error {
 	if known {
 		p.corrections++
 		p.lastError = distance(slot.soldier.Position, server.Position)
+		if !moved {
+			p.weaponCorrections++
+		}
 	}
 	p.soldier = confirmed
 	previous := game.InputCommand{}
@@ -152,16 +173,16 @@ func (p *predictor) reconcile(server protocol.PlayerState) error {
 			state := next.state
 			*next = predictedTick{tick: replay, command: previous.Repeated(replay), state: state}
 		}
-		if err := p.step(next); err != nil {
+		if _, err := p.step(next); err != nil {
 			return err
 		}
 		previous = next.command
 	}
-	moved := p.soldier.Position.Sub(before)
+	shift := p.soldier.Position.Sub(before)
 	if !p.started || distance(before, p.soldier.Position) > teleportDistance {
 		p.offset, p.previous = physics.Vec3{}, p.soldier.Position
 	} else {
-		p.previous, p.offset = p.previous.Add(moved), p.offset.Sub(moved)
+		p.previous, p.offset = p.previous.Add(shift), p.offset.Sub(shift)
 	}
 	p.started = true
 	return nil
