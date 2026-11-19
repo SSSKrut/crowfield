@@ -27,7 +27,9 @@ const maxWeaponSlot = 15
 
 // InputCommand is what a human player sends for one tick. Values are quantized
 // on creation, so the client predicts from exactly what the server receives.
-// ViewDelta and ViewFrac locate the snapshot the player saw, for lag compensation.
+// ViewDelta and ViewFrac tell which moment of the server the player saw when
+// it made the command, for lag compensation: ViewDelta ticks before Tick and
+// ViewFrac/256 of a tick after that. A zero ViewDelta means now.
 type InputCommand struct {
 	Tick        Tick
 	MoveForward int8
@@ -62,6 +64,15 @@ func (c InputCommand) PitchRadians() float32 {
 // Repeated stands in for a command that did not arrive in time for its tick: the
 // player probably still moves and looks the same way, but one-off actions are
 // not repeated.
+// ViewTime is the moment of the server the player saw, as a fractional tick,
+// or false for now.
+func (c InputCommand) ViewTime() (float64, bool) {
+	if c.ViewDelta == 0 {
+		return 0, false
+	}
+	return float64(c.Tick) - float64(c.ViewDelta) + float64(c.ViewFrac)/256, true
+}
+
 func (c InputCommand) Repeated(tick Tick) InputCommand {
 	c.Tick = tick
 	c.Buttons &^= edgeButtons

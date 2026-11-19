@@ -2,6 +2,7 @@ package client
 
 import (
 	"fmt"
+	"image/color"
 	"math"
 	"strings"
 
@@ -100,8 +101,17 @@ func drawArsenal(arsenal *game.Arsenal, weapons *game.WeaponSet) {
 	}
 }
 
-// drawHealth shows the health of the own soldier in the bottom left corner.
-func drawHealth(health uint8) {
+// drawHealth shows the health of the own soldier in the bottom left corner,
+// and the team it fights for: the soldiers of the other colour are enemies.
+func drawHealth(health uint8, team string, tint color.RGBA) {
+	height := int32(rl.GetScreenHeight())
+	label := strings.ToUpper(team) + " TEAM"
+	rl.DrawRectangle(18, height-24-92, rl.MeasureText(label, 20)+12, 26, rl.NewColor(0, 0, 0, 110))
+	rl.DrawText(label, 24, height-24-88, 20, tint)
+	drawHealthBar(health)
+}
+
+func drawHealthBar(health uint8) {
 	height := int32(rl.GetScreenHeight())
 	left, bottom := int32(24), height-24
 	share := float32(health) / game.MaxHealth

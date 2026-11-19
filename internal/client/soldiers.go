@@ -27,6 +27,8 @@ const (
 	knockDown = 16
 )
 
+var teamNames = [...]string{game.TeamNone: "no", game.TeamBlue: "blue", game.TeamRed: "red"}
+
 var teamColors = map[game.Team]color.RGBA{
 	game.TeamBlue: rl.NewColor(60, 110, 220, 255), game.TeamRed: rl.NewColor(210, 70, 60, 255),
 }

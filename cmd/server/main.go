@@ -31,6 +31,7 @@ func main() {
 	flag.DurationVar(&settings.ReconnectWindow, "reconnect-window", config.DefaultReconnectWindow, "keep the place of a lost player this long")
 	flag.DurationVar(&settings.RespawnDelay, "respawn-delay", config.DefaultRespawnDelay, "how long the dead wait to come back")
 	flag.BoolVar(&settings.FriendlyFire, "friendly-fire", false, "let shots hurt the shooter's own team")
+	flag.DurationVar(&settings.MaxRewind, "max-rewind", config.DefaultMaxRewind, "how far back lag compensation looks")
 	bandwidth := flag.Int("client-bandwidth", settings.ClientBandwidth/1024, "snapshot budget of each client, KB/s")
 	flag.Parse()
 	settings.ClientBandwidth = *bandwidth * 1024

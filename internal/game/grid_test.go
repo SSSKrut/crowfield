@@ -69,7 +69,7 @@ func TestSoldierGridFindsExactlyTheSoldiersAlongARay(t *testing.T) {
 			direction = physics.V(0, 1, 0)
 		}
 		length := random.Float32() * 150
-		margin := random.Float32() * 4
+		margin := random.Float32() * 10
 		want := map[SoldierID]bool{}
 		flat := float32(math.Hypot(float64(direction.X), float64(direction.Z)))
 		for soldier := range soldiers.All() {

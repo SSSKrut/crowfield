@@ -50,9 +50,9 @@ func (g *SoldierGrid) Rebuild(soldiers *SoldierSet) {
 
 // AlongRay yields the soldiers whose positions at the last rebuild lie
 // within margin of the horizontal track of a ray from origin along the unit
-// direction, as far as length; the margin must not exceed half a cell. It
-// walks the cells along the track, half a cell at a time, and only through
-// the occupied part of the grid.
+// direction, as far as length. It walks the track half a cell at a time,
+// only through the occupied part of the grid, and looks into every cell
+// within the margin of each point.
 func (g *SoldierGrid) AlongRay(origin, direction physics.Vec3, length, margin float32) iter.Seq2[SoldierID, physics.Vec3] {
 	return func(yield func(SoldierID, physics.Vec3) bool) {
 		flat := float32(math.Hypot(float64(direction.X), float64(direction.Z)))

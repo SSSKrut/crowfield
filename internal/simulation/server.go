@@ -50,6 +50,8 @@ type Server struct {
 	// shots are the shots of the current tick, resolved after every
 	// soldier acted.
 	shots []pendingShot
+	// totalHits counts the hits since the start, past the profile.
+	totalHits uint64
 
 	// states are the soldiers of the current snapshot by slot, quantized once
 	// for every player; a zero ID marks an empty slot.
@@ -78,6 +80,12 @@ func NewServer(settings config.Server, rules game.Rules) (*Server, error) {
 	}
 	if settings.RespawnDelay <= 0 {
 		settings.RespawnDelay = config.DefaultRespawnDelay
+	}
+	if settings.MaxRewind <= 0 {
+		settings.MaxRewind = config.DefaultMaxRewind
+	}
+	if settings.MaxRewind >= historyTicks*game.TickDuration {
+		return nil, fmt.Errorf("max rewind %s is not shorter than the history of %s", settings.MaxRewind, historyTicks*game.TickDuration)
 	}
 	if settings.ClientBandwidth < 0 {
 		return nil, fmt.Errorf("client bandwidth %d is negative", settings.ClientBandwidth)
@@ -271,11 +279,16 @@ func (s *Server) movePlayer(p *player) error {
 		return err
 	}
 	if step.Events.Has(game.EventFired) {
-		s.shots = append(s.shots, pendingShot{shooter: soldier.ID, team: soldier.Team, shot: step.Shot})
+		s.shots = append(s.shots, pendingShot{shooter: soldier.ID, team: soldier.Team, shot: step.Shot, view: s.viewTime(command)})
 		s.profile.shots++
 	}
 	if soldier.Position.Y < fallLimit {
 		return p.controller.Teleport(soldier, s.scene.SpawnOf(soldier.Team))
 	}
 	return nil
+}
+
+// Hits counts the shots that struck a soldier; call it after Serve returned.
+func (s *Server) Hits() uint64 {
+	return s.totalHits
 }

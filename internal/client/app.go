@@ -676,7 +676,11 @@ func (a *app) draw(feet physics.Vec3, spawned bool) {
 	a.drawWeapon()
 	if player := a.session.player; player.Soldier != 0 {
 		if player.Health > 0 {
-			drawHealth(player.Health)
+			team := game.TeamNone
+			if own := a.session.localSoldier(); own != nil {
+				team = own.Team
+			}
+			drawHealth(player.Health, teamNames[team], a.soldiers.tint(team))
 		} else {
 			drawDeath(player.Respawn)
 		}

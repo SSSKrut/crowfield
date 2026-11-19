@@ -5,18 +5,29 @@ import (
 	"ravenfield/internal/physics"
 )
 
-// hitMargin is how far beside a shot's track a soldier's position may be
-// for the shot to reach its hitboxes: their reach and a tick of a sprint,
-// since the grid was built at the end of the last tick.
-const hitMargin = game.HitboxReach + 0.25
-
 // pendingShot is a shot fired this tick, resolved once every soldier has
 // acted: a soldier killed in a tick still fires its shot of that tick, so
-// two soldiers can kill each other.
+// two soldiers can kill each other. view is the moment, as a fractional
+// tick, whose poses the shot is tested against.
 type pendingShot struct {
 	shooter game.SoldierID
 	team    game.Team
 	shot    game.Shot
+	view    float64
+}
+
+// viewTime is the moment a human's shot is tested at (ARCHITECTURE.md, 6.9):
+// what the player saw when it fired, no further back than the rewind limit,
+// and the latest recorded tick for a player that says it saw now. The
+// shooter itself is not moved back.
+func (s *Server) viewTime(command game.InputCommand) float64 {
+	latest := float64(s.tick) - 1
+	view, ok := command.ViewTime()
+	if !ok {
+		return latest
+	}
+	oldest := float64(s.tick) - float64(s.settings.MaxRewind)/float64(game.TickDuration)
+	return max(oldest, min(latest, view))
 }
 
 // hit is where a shot struck a soldier.
@@ -38,6 +49,7 @@ func (s *Server) resolveShots() error {
 			continue
 		}
 		s.profile.hits++
+		s.totalHits++
 		victim := s.soldiers.Get(struck.soldier)
 		if victim == nil || !victim.Alive || (victim.Team == pending.team && !s.settings.FriendlyFire) {
 			continue
@@ -51,9 +63,11 @@ func (s *Server) resolveShots() error {
 
 // hitscan finds the soldier a shot strikes first, if any (ARCHITECTURE.md,
 // 6.9): a ray through the static world and vehicles limits its reach, the
-// grid gives the soldiers near its track, and their hitboxes are tested
-// where they stood at the end of the last tick. A teammate stops a shot even
-// without friendly fire.
+// grid gives the soldiers near its track, with a margin for how far they
+// can have moved since the moment of the shot, and their hitboxes are
+// tested where the pose history has them at that moment. A soldier that did
+// not exist then cannot be hit: the player could not see it. A teammate
+// stops a shot even without friendly fire.
 func (s *Server) hitscan(pending pendingShot) (hit, bool, error) {
 	shot := pending.shot
 	reach := s.rules.Weapons.Get(shot.Weapon).Range
@@ -65,17 +79,21 @@ func (s *Server) hitscan(pending pendingShot) (hit, bool, error) {
 	if wall.Hit {
 		reach *= wall.Fraction
 	}
+	// The grid has the soldiers at the end of the last tick; since the
+	// moment of the shot they moved at most at a sprint, or a fall.
+	since := float32(float64(s.tick)-pending.view) / game.TickRate
+	margin := game.HitboxReach + 2*s.rules.Movement.SprintSpeed*since
 	var struck hit
-	for id := range s.grid.AlongRay(shot.Origin, shot.Direction, reach, hitMargin) {
+	for id := range s.grid.AlongRay(shot.Origin, shot.Direction, reach, margin) {
 		target := s.soldiers.Get(id)
 		if id == pending.shooter || target == nil || !target.Alive {
 			continue
 		}
-		position, yaw := target.Position, target.Yaw
-		if pose, ok := s.history.at(id, float64(s.tick-1)); ok {
-			position, yaw = pose.position, pose.yaw
+		pose, ok := s.history.at(id, pending.view)
+		if !ok || !pose.alive {
+			continue
 		}
-		if distance, zone, ok := game.RayHitboxes(shot.Origin, shot.Direction, reach, position, yaw); ok {
+		if distance, zone, ok := game.RayHitboxes(shot.Origin, shot.Direction, reach, pose.position, pose.yaw); ok {
 			reach, struck = distance, hit{soldier: id, zone: zone, distance: distance}
 		}
 	}

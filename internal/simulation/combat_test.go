@@ -207,3 +207,66 @@ func TestDeadPlayerWaitsAndRespawns(t *testing.T) {
 		t.Errorf("came back at %+v, the spawn is %+v", back.Position, spawn)
 	}
 }
+
+// A target walks across the line of fire. A shot made by a player who saw it
+// ten ticks ago, aimed where it was then, hits; aimed where it is now, it
+// misses. A player who claims to have seen it a second ago is tested at the
+// rewind limit.
+func TestShotsAreTestedWhereThePlayerSawTheTarget(t *testing.T) {
+	r := newRangeTest(t, config.Server{MaxRewind: 300 * time.Millisecond})
+	s := r.server
+	// The open floor between the steps and the ramp.
+	target := r.target(game.TeamRed, physics.V(-3.5, 0, 4))
+	walk := func(ticks int) {
+		for range ticks {
+			soldier := s.soldiers.Get(target)
+			soldier.Position.X += 5 * game.TickDelta
+			soldier.Velocity = physics.V(5, 0, 0)
+			r.idle(1)
+		}
+	}
+	walk(game.TickRate)
+	at := func(back int) physics.Vec3 {
+		pose, ok := s.history.at(target, float64(s.tick)-float64(back))
+		if !ok {
+			t.Fatalf("no pose %d ticks back", back)
+		}
+		return pose.position.Add(physics.V(0, 0.85, 0))
+	}
+	for _, c := range []struct {
+		name     string
+		saw, aim int
+		hit      bool
+	}{
+		{"where it was seen", 10, 10, true},
+		{"where it is now", 10, 1, false},
+		{"far in the past", 60, 60, false},
+		{"at the limit", 60, 18, true},
+	} {
+		before := r.health(target)
+		r.fireSeeing(at(c.aim), c.saw)
+		if hit := r.health(target) < before; hit != c.hit {
+			t.Errorf("%s: hit %t, want %t", c.name, hit, c.hit)
+		}
+		walk(1)
+	}
+}
+
+// fireSeeing shoots once at a point, by a player who saw the world the
+// given number of ticks before its command.
+func (r *rangeTest) fireSeeing(at physics.Vec3, back int) {
+	r.t.Helper()
+	s := r.server
+	eye := s.soldiers.Get(r.shooter.soldier).Position.Add(physics.V(0, s.rules.Movement.EyeHeight, 0))
+	to := at.Sub(eye)
+	yaw := math.Atan2(float64(to.X), float64(-to.Z))
+	pitch := math.Atan2(float64(to.Y), math.Hypot(float64(to.X), float64(to.Z)))
+	command := game.NewInputCommand(s.tick, 0, 0, float32(yaw), float32(pitch), game.ButtonFire)
+	command.ViewDelta = uint8(back)
+	r.shooter.inputs.put(command, s.tick)
+	release := game.NewInputCommand(s.tick+1, 0, 0, float32(yaw), float32(pitch), 0)
+	r.shooter.inputs.put(release, s.tick)
+	r.idle(1)
+	soldier := s.soldiers.Get(r.shooter.soldier)
+	soldier.Arsenal.Cooldown = 0
+}

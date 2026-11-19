@@ -30,6 +30,10 @@ type Server struct {
 	RespawnDelay time.Duration
 	// FriendlyFire lets shots hurt soldiers of the shooter's own team.
 	FriendlyFire bool
+	// MaxRewind bounds how far back in time lag compensation tests a shot;
+	// a player who saw further back is tested at the limit. Zero means the
+	// default.
+	MaxRewind time.Duration
 	// ClientBandwidth is the snapshot budget of each client in bytes per
 	// second, transport overhead included; zero means the default.
 	ClientBandwidth int
@@ -42,6 +46,10 @@ const (
 	DefaultInputTimeout    = 5 * time.Second
 	DefaultReconnectWindow = time.Minute
 	DefaultRespawnDelay    = 5 * time.Second
+	// DefaultMaxRewind covers a round trip of 200 ms with jitter: the player
+	// also sees the others an interpolation delay late, and its commands
+	// come early.
+	DefaultMaxRewind = 500 * time.Millisecond
 )
 
 func DefaultServer() Server {

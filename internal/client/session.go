@@ -152,6 +152,7 @@ func (s *session) sendCommand(command game.InputCommand) (game.InputCommand, err
 		return command, err
 	}
 	command.Tick = s.tick
+	command.ViewDelta, command.ViewFrac = s.view(command.Tick)
 	if len(s.history) == cap(s.history) {
 		copy(s.history, s.history[1:])
 		s.history = s.history[:len(s.history)-1]
@@ -165,6 +166,22 @@ func (s *session) sendCommand(command game.InputCommand) (game.InputCommand, err
 	s.buffer = data
 	s.tick++
 	return command, s.conn.SendUnreliable(data)
+}
+
+// view tells the server for lag compensation which moment of its own the
+// player sees while it makes the command of tick: the interpolation time of
+// the last frame drawn, as whole ticks before the command and a fraction of
+// a tick after that. Zero, before the clock started, means now.
+func (s *session) view(tick game.Tick) (delta, fraction uint8) {
+	if !s.clock.started {
+		return 0, 0
+	}
+	whole := math.Floor(s.clock.renderTick)
+	back := float64(tick) - whole
+	if back < 1 {
+		return 0, 0
+	}
+	return uint8(min(math.MaxUint8, back)), uint8(min(math.MaxUint8, math.Round((s.clock.renderTick-whole)*256)))
 }
 
 func (s *session) respawn() error {
