@@ -13,6 +13,9 @@ type Server struct {
 	// SnapshotRate is how many snapshots per second each client receives; it
 	// must divide the tick rate.
 	SnapshotRate int
+	// Dummies are bot soldiers without AI that roam the map, to load the
+	// network and the clients until real bots exist.
+	Dummies int
 }
 
 func DefaultServer() Server {

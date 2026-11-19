@@ -1,10 +1,13 @@
 package client
 
 import (
+	"cmp"
 	"context"
 	"fmt"
+	"image/color"
 	"log"
 	"math"
+	"slices"
 
 	"ravenfield/internal/animation"
 	"ravenfield/internal/config"
@@ -25,7 +28,9 @@ type app struct {
 	session     *session
 	predictor   *predictor
 	model       *animation.CharacterModel
-	remotes     map[game.SoldierID]*animation.CharacterModel
+	models      []*animation.CharacterModel
+	modelFor    map[game.SoldierID]*animation.CharacterModel
+	views       []remoteView
 	alpha       float32
 	camera      rl.Camera3D
 	yaw         float32
@@ -77,6 +82,32 @@ func Run(settings config.Client) error {
 	}
 	defer scene.Close()
 
+	predictor, err := newPredictor(world, tuning)
+	if err != nil {
+		return err
+	}
+	defer predictor.close()
+	model, err := animation.LoadCharacterModel(characterModelPath)
+	if err != nil {
+		return err
+	}
+	defer model.Close()
+	a := &app{
+		settings: settings, world: world, scene: scene, spawn: description.Spawn, tuning: tuning,
+		predictor: predictor, model: model, modelFor: make(map[game.SoldierID]*animation.CharacterModel),
+		captured: settings.FrameLimit == 0, debug: settings.Debug, thirdPerson: true,
+	}
+	defer a.closeRemotes()
+	// Everything is loaded before connecting: once connected, the client must
+	// send a command every tick, and a stall puts its clock behind the server.
+	for range animatedRemotes {
+		model, err := animation.LoadCharacterModel(characterModelPath)
+		if err != nil {
+			return err
+		}
+		a.models = append(a.models, model)
+	}
+
 	conn, stop, err := open(settings, tuning)
 	if err != nil {
 		return err
@@ -86,30 +117,12 @@ func Run(settings config.Client) error {
 		log.Printf("simulating network: %s", conditions)
 		conn = transport.Simulate(conn, conditions)
 	}
-	session, err := connect(conn, settings.Name, tuning)
+	a.session, err = connect(conn, settings.Name, tuning)
 	if err != nil {
 		_ = conn.Close("handshake failed")
 		return err
 	}
-	defer session.close()
-	predictor, err := newPredictor(world, tuning)
-	if err != nil {
-		return err
-	}
-	defer predictor.close()
-
-	model, err := animation.LoadCharacterModel(characterModelPath)
-	if err != nil {
-		return err
-	}
-	defer model.Close()
-
-	a := &app{
-		settings: settings, world: world, scene: scene, spawn: description.Spawn, tuning: tuning, session: session,
-		predictor: predictor, model: model, remotes: make(map[game.SoldierID]*animation.CharacterModel),
-		captured: settings.FrameLimit == 0, debug: settings.Debug, thirdPerson: true,
-	}
-	defer a.closeRemotes()
+	defer a.session.close()
 	if a.captured {
 		rl.DisableCursor()
 	}
@@ -141,7 +154,7 @@ func open(settings config.Client, tuning game.MovementTuning) (transport.Conn, f
 		}
 		return conn, func() {}, nil
 	}
-	local, err := startLocalServer(tuning, settings.Host)
+	local, err := startLocalServer(tuning, settings)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -240,7 +253,7 @@ func (a *app) run() error {
 		if err := a.model.Update(deltaTime, speed); err != nil {
 			return err
 		}
-		a.updateRemotes(deltaTime)
+		a.updateRemotes(deltaTime, feet)
 		a.updateCamera(feet)
 		a.draw(feet, soldier != nil)
 		frames++
@@ -269,35 +282,47 @@ func (a *app) ownSoldier() *game.Soldier {
 	return &a.predictor.soldier
 }
 
-// updateRemotes animates every other soldier with its own model; models of
-// soldiers that left are freed. One model per soldier is fine for 16 players;
-// shared models come with step 1.8.
-func (a *app) updateRemotes(deltaTime float32) {
-	for id, model := range a.remotes {
-		if a.session.remotes[id] == nil {
-			_ = model.Close()
-			delete(a.remotes, id)
-		}
-	}
+// animatedRemotes is how many other soldiers get an animated model; farther
+// ones are capsules. Every model is a separate copy skinned on the CPU, which
+// does not scale to hundreds; shared models come with step 1.8.
+const animatedRemotes = 16
+
+type remoteView struct {
+	id       game.SoldierID
+	soldier  game.Soldier
+	distance float32
+}
+
+// updateRemotes places every other soldier at the interpolation time and lends
+// the models of a small pool to the nearest ones.
+func (a *app) updateRemotes(deltaTime float32, eye physics.Vec3) {
+	a.views = a.views[:0]
 	for id, remote := range a.session.remotes {
-		model := a.remotes[id]
-		if model == nil {
-			loaded, err := animation.LoadCharacterModel(characterModelPath)
-			if err != nil {
-				log.Printf("model for soldier %#04x: %v", id, err)
-				continue
-			}
-			model = loaded
-			a.remotes[id] = model
-		}
-		_ = model.Update(deltaTime, horizontalSpeed(remote.at(a.session.clock.renderTick).Velocity))
+		soldier := remote.at(a.session.clock.renderTick)
+		a.views = append(a.views, remoteView{id: id, soldier: soldier, distance: distance(soldier.Position, eye)})
+	}
+	slices.SortFunc(a.views, func(first, second remoteView) int { return cmp.Compare(first.distance, second.distance) })
+	clear(a.modelFor)
+	for i := range min(len(a.views), len(a.models)) {
+		_ = a.models[i].Update(deltaTime, horizontalSpeed(a.views[i].soldier.Velocity))
+		a.modelFor[a.views[i].id] = a.models[i]
 	}
 }
 
 func (a *app) closeRemotes() {
-	for _, model := range a.remotes {
+	for _, model := range a.models {
 		_ = model.Close()
 	}
+}
+
+var teamColors = map[game.Team]color.RGBA{
+	game.TeamNone: rl.Gray, game.TeamBlue: rl.NewColor(60, 110, 220, 255), game.TeamRed: rl.NewColor(210, 70, 60, 255),
+}
+
+func (a *app) drawCapsule(soldier game.Soldier, tint color.RGBA) {
+	feet := render.Vector(soldier.Position.Add(physics.V(0, a.tuning.CapsuleRadius, 0)))
+	head := render.Vector(soldier.Position.Add(physics.V(0, a.tuning.CapsuleRadius+2*a.tuning.CapsuleHalfHeight, 0)))
+	rl.DrawCapsule(feet, head, a.tuning.CapsuleRadius, 4, 6, tint)
 }
 
 // facing turns the character model, which looks along +Z, towards where a
@@ -390,13 +415,14 @@ func (a *app) draw(feet physics.Vec3, spawned bool) {
 	if spawned && (a.thirdPerson || a.ragdoll) {
 		a.model.Draw(feet, facing(a.yaw))
 	}
-	for id, remote := range a.session.remotes {
-		soldier := remote.at(a.session.clock.renderTick)
-		if model := a.remotes[id]; model != nil {
-			model.Draw(soldier.Position, facing(soldier.Yaw))
+	for _, view := range a.views {
+		if model := a.modelFor[view.id]; model != nil {
+			model.Draw(view.soldier.Position, facing(view.soldier.Yaw))
+		} else {
+			a.drawCapsule(view.soldier, teamColors[view.soldier.Team])
 		}
 		if a.debug {
-			center := soldier.Position.Add(physics.V(0, a.tuning.CenterHeight(), 0))
+			center := view.soldier.Position.Add(physics.V(0, a.tuning.CenterHeight(), 0))
 			render.DrawCharacterCapsule(center, a.tuning.CapsuleHalfHeight, a.tuning.CapsuleRadius)
 		}
 	}

@@ -21,12 +21,15 @@ type localServer struct {
 	done    chan error
 }
 
-// startLocalServer starts a solo server, or a hosted one when host is a UDP
-// address. A host makes a fresh certificate every run and prints its fingerprint.
-func startLocalServer(tuning game.MovementTuning, host string) (*localServer, error) {
+// startLocalServer starts a solo server, or a hosted one when the client
+// settings name a host address. A host makes a fresh certificate every run and
+// prints its fingerprint.
+func startLocalServer(tuning game.MovementTuning, client config.Client) (*localServer, error) {
+	host := client.Host
 	settings := config.DefaultServer()
 	settings.MaxPlayers = 1
 	settings.StatsInterval = 0
+	settings.Dummies = client.Dummies
 	local := &localServer{memory: transport.NewMemoryListener(), done: make(chan error, 1)}
 	listeners := []transport.Listener{local.memory}
 	if host != "" {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -32,11 +33,14 @@ type session struct {
 	// judgeFrom is the first tick sent since the clock was last set: a missing
 	// command for an earlier tick says nothing about the current clock.
 	judgeFrom game.Tick
-	history   []game.InputCommand
-	acks      ackTracker
-	buffer    []byte
-	resyncs   int
-	received  int
+	// settleUntil is the client tick from which snapshots can reflect commands
+	// sent under the current clock; earlier ones were already on their way.
+	settleUntil game.Tick
+	history     []game.InputCommand
+	acks        ackTracker
+	buffer      []byte
+	resyncs     int
+	received    int
 
 	serverTick game.Tick
 	player     protocol.PlayerState
@@ -174,7 +178,7 @@ func (s *session) apply(snapshot *protocol.Snapshot) bool {
 	if own := s.soldiers[s.player.Soldier]; own != nil {
 		own.Position, own.Velocity = s.player.Position, s.player.Velocity
 	}
-	if s.player.Processed && snapshot.ServerTick >= s.judgeFrom &&
+	if s.player.Processed && snapshot.ServerTick >= s.judgeFrom && s.tick >= s.settleUntil &&
 		(s.player.BufferedCommands < 0 || s.player.BufferedCommands > maxBuffered) {
 		s.resync()
 	}
@@ -184,9 +188,12 @@ func (s *session) apply(snapshot *protocol.Snapshot) bool {
 // resync jumps the client tick back to its lead when the server reports that
 // commands arrive late or too early.
 func (s *session) resync() {
+	before := s.tick
 	s.setClock(s.serverTick, s.conn.Stats().RTT)
 	s.history = s.history[:0]
 	s.resyncs++
+	log.Printf("clock resync: the server had %d of our commands queued at tick %d; client tick %d -> %d",
+		s.player.BufferedCommands, s.serverTick, before, s.tick)
 }
 
 // setClock sets the client tick from a server tick the client just learned.
@@ -197,6 +204,7 @@ func (s *session) setClock(serverTick game.Tick, rtt time.Duration) {
 	ahead := game.Tick((rtt + game.TickDuration - 1) / game.TickDuration)
 	s.tick = serverTick + 1 + commandLead + ahead
 	s.judgeFrom = s.tick
+	s.settleUntil = s.tick + ahead + commandLead + 2
 }
 
 // localSoldier is the player's own soldier as of the latest snapshot, or nil

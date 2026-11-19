@@ -24,6 +24,7 @@ func main() {
 	flag.StringVar(&settings.Host, "host", "", "let other players join on this UDP address, e.g. :7777")
 	flag.StringVar(&settings.Connect, "connect", "", "join the server at this address instead of playing solo")
 	flag.StringVar(&settings.Fingerprint, "fingerprint", "", "certificate fingerprint the -connect server must have")
+	flag.IntVar(&settings.Dummies, "dummies", 0, "roaming bot soldiers without AI on the embedded server")
 	flag.Parse()
 	if err := client.Run(settings); err != nil {
 		log.Fatal(err)

@@ -24,6 +24,7 @@ func main() {
 	flag.StringVar(&settings.Tuning, "tuning", "", "JSON file overriding movement tuning; clients need the same")
 	flag.IntVar(&settings.MaxPlayers, "max-players", settings.MaxPlayers, "maximum number of human players")
 	flag.IntVar(&settings.SnapshotRate, "snapshot-rate", settings.SnapshotRate, "snapshots per second; must divide the tick rate")
+	flag.IntVar(&settings.Dummies, "dummies", 0, "roaming bot soldiers without AI, for load tests")
 	flag.Parse()
 	if err := run(settings); err != nil {
 		log.Fatal(err)

@@ -17,7 +17,9 @@ type Client struct {
 	// Connect joins a server at this address instead of starting one.
 	Connect string
 	// Fingerprint pins the certificate of the server given by Connect.
-	Fingerprint      string
+	Fingerprint string
+	// Dummies adds roaming bot soldiers without AI to the embedded server.
+	Dummies          int
 	MouseSensitivity float32
 	FieldOfView      float32
 }

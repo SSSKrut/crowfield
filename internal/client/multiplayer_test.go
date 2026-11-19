@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"ravenfield/internal/config"
 	"ravenfield/internal/game"
 	"ravenfield/internal/network/transport"
 )
@@ -14,7 +15,7 @@ import (
 // and the other's interpolated view of it follows.
 func TestTwoPlayersSeeEachOtherOverQUIC(t *testing.T) {
 	tuning := game.DefaultMovementTuning()
-	local, err := startLocalServer(tuning, "127.0.0.1:0")
+	local, err := startLocalServer(tuning, config.Client{Host: "127.0.0.1:0"})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -6,7 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"ravenfield/internal/config"
 	"ravenfield/internal/game"
+	"ravenfield/internal/network/protocol"
 	"ravenfield/internal/network/transport"
 	"ravenfield/internal/physics"
 )
@@ -56,7 +58,7 @@ func TestSoloSessionThroughTheEmbeddedServer(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			tuning := game.DefaultMovementTuning()
-			local, err := startLocalServer(tuning, "")
+			local, err := startLocalServer(tuning, config.Client{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -116,8 +118,88 @@ func TestSoloSessionThroughTheEmbeddedServer(t *testing.T) {
 	}
 }
 
+// With dummies a snapshot no longer fits one datagram; the client still gets
+// every soldier, from the parts.
+func TestClientReceivesEverySoldierOfASplitSnapshot(t *testing.T) {
+	tuning := game.DefaultMovementTuning()
+	local, err := startLocalServer(tuning, config.Client{Dummies: 256})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer local.stop()
+	conn, err := local.dial()
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := connect(conn, "tester", tuning)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.close()
+	ticker := time.NewTicker(game.TickDuration)
+	defer ticker.Stop()
+	for range game.TickRate {
+		<-ticker.C
+		if _, err := session.sendCommand(game.InputCommand{}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := session.poll(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(session.soldiers) != 257 || len(session.remotes) != 256 {
+		t.Errorf("client knows %d soldiers and %d remotes, want 257 and 256", len(session.soldiers), len(session.remotes))
+	}
+	bots := 0
+	for _, soldier := range session.soldiers {
+		if soldier.Controller.Kind == game.ControllerBot {
+			bots++
+		}
+	}
+	if bots != 256 {
+		t.Errorf("%d soldiers are marked as bots, want 256", bots)
+	}
+}
+
+// Snapshots that were on their way when the clock jumped still report late
+// commands. One stalled frame may apply a burst of them before the client sends
+// anything under the new clock; that burst must not make the clock jump again.
+func TestStaleSnapshotsDoNotResyncAgain(t *testing.T) {
+	conn, peer := transport.NewMemoryPair()
+	defer conn.Close("done")
+	defer peer.Close("done")
+	s := &session{
+		conn: conn, soldiers: map[game.SoldierID]*game.Soldier{}, remotes: map[game.SoldierID]*remoteSoldier{},
+		clock: newInterpolationClock(20),
+	}
+	snapshot := func(tick game.Tick, buffered int8) *protocol.Snapshot {
+		return &protocol.Snapshot{ServerTick: tick, Player: protocol.PlayerState{
+			Processed: true, LastProcessedTick: tick, BufferedCommands: buffered, Soldier: 0x1000,
+		}}
+	}
+	s.setClock(100, 0)
+	s.tick = 110
+	s.apply(snapshot(105, -1))
+	if s.resyncs != 1 {
+		t.Fatalf("%d resyncs for a late command, want 1", s.resyncs)
+	}
+	for tick := game.Tick(108); tick <= 120; tick += 3 {
+		s.apply(snapshot(tick, -1))
+	}
+	if s.resyncs != 1 {
+		t.Errorf("%d resyncs after a burst of stale snapshots, want still 1", s.resyncs)
+	}
+	for tick := game.Tick(123); tick <= 160; tick += 3 {
+		s.tick += 3
+		s.apply(snapshot(tick, 2))
+	}
+	if s.resyncs != 1 {
+		t.Errorf("%d resyncs once commands arrive in time", s.resyncs)
+	}
+}
+
 func TestConnectRefusesADifferentTuning(t *testing.T) {
-	local, err := startLocalServer(game.DefaultMovementTuning(), "")
+	local, err := startLocalServer(game.DefaultMovementTuning(), config.Client{})
 	if err != nil {
 		t.Fatal(err)
 	}

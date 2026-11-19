@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"ravenfield/internal/config"
 	"ravenfield/internal/game"
 	"ravenfield/internal/network/protocol"
 	"ravenfield/internal/network/transport"
@@ -190,7 +191,7 @@ func TestReconcileReplaysFromTheServerState(t *testing.T) {
 func soloWithPrediction(t *testing.T, conditions transport.NetworkConditions) (*session, *predictor) {
 	t.Helper()
 	tuning := game.DefaultMovementTuning()
-	local, err := startLocalServer(tuning, "")
+	local, err := startLocalServer(tuning, config.Client{})
 	if err != nil {
 		t.Fatal(err)
 	}

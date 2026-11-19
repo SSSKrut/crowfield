@@ -22,6 +22,9 @@ import (
 const (
 	// A soldier that falls this far below the map goes back to the spawn.
 	fallLimit = -10
+	// gridCellSize suits the prototype map and the queries of dummies; it will
+	// be tuned with the queries of bots.
+	gridCellSize = 8
 )
 
 type Server struct {
@@ -39,15 +42,13 @@ type Server struct {
 	tick             game.Tick
 	snapshotInterval game.Tick
 	matchSeed        uint64
+	dummies          dummies
+	grid             *game.SoldierGrid
+	history          *poseHistory
 
 	states    []protocol.SoldierState
 	removedID []game.SoldierID
-	stats     tickStats
-}
-
-type tickStats struct {
-	missedCommands uint64
-	maxTick        time.Duration
+	profile   tickProfile
 }
 
 // NewServer builds the world of the prototype scene. Only its static part runs
@@ -63,7 +64,11 @@ func NewServer(settings config.Server, tuning game.MovementTuning) (*Server, err
 	if err := tuning.Validate(); err != nil {
 		return nil, err
 	}
-	soldiers, err := game.NewSoldierSet(settings.MaxPlayers)
+	if settings.Dummies < 0 || settings.MaxPlayers+settings.Dummies > game.MaxSoldiers {
+		return nil, fmt.Errorf("at most %d soldiers fit, %d players and %d dummies asked", game.MaxSoldiers, settings.MaxPlayers, settings.Dummies)
+	}
+	capacity := settings.MaxPlayers + settings.Dummies
+	soldiers, err := game.NewSoldierSet(capacity)
 	if err != nil {
 		return nil, err
 	}
@@ -77,6 +82,7 @@ func NewServer(settings config.Server, tuning game.MovementTuning) (*Server, err
 		settings: settings, tuning: tuning, scene: game.PrototypeScene(), world: world, soldiers: soldiers,
 		sessions: make(map[transport.Conn]*session), events: make(chan event, 4096),
 		snapshotInterval: game.Tick(game.TickRate / settings.SnapshotRate), matchSeed: binary.LittleEndian.Uint64(seed[:]),
+		grid: game.NewSoldierGrid(gridCellSize), history: newPoseHistory(capacity),
 	}
 	for _, box := range s.scene.Boxes {
 		body, err := world.CreateBox(box)
@@ -85,6 +91,10 @@ func NewServer(settings config.Server, tuning game.MovementTuning) (*Server, err
 			return nil, err
 		}
 		s.bodies = append(s.bodies, body)
+	}
+	if err := s.spawnDummies(settings.Dummies); err != nil {
+		_ = s.Close()
+		return nil, err
 	}
 	return s, nil
 }
@@ -131,7 +141,7 @@ func (s *Server) run(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Printf("server stopped: tick=%d players=%d max_tick=%s", s.tick, s.soldiers.Len(), s.stats.maxTick)
+			log.Printf("server stopped: tick=%d soldiers=%d", s.tick, s.soldiers.Len())
 			return nil
 		default:
 		}
@@ -139,13 +149,14 @@ func (s *Server) run(ctx context.Context) error {
 		if err := s.step(); err != nil {
 			return err
 		}
-		s.stats.maxTick = max(s.stats.maxTick, time.Since(started))
+		s.profile.finish(started)
 		next = next.Add(game.TickDuration)
-		if s.settings.StatsInterval > 0 && time.Since(lastStats) >= s.settings.StatsInterval {
-			log.Printf("server running: tick=%d rate=%d players=%d missed_commands=%d max_tick=%s",
-				s.tick, game.TickRate, s.soldiers.Len(), s.stats.missedCommands, s.stats.maxTick)
+		if since := time.Since(lastStats); s.settings.StatsInterval > 0 && since >= s.settings.StatsInterval {
+			log.Printf("server running: tick=%d rate=%.1f players=%d soldiers=%d missed_commands=%d %s",
+				s.tick, float64(s.profile.ticks)/since.Seconds(), s.playerCount(), s.soldiers.Len(),
+				s.profile.missedCommands, &s.profile)
 			lastStats = time.Now()
-			s.stats = tickStats{}
+			s.profile = tickProfile{}
 		}
 		if delay := time.Until(next); delay > 0 {
 			time.Sleep(delay)
@@ -158,8 +169,10 @@ func (s *Server) run(ctx context.Context) error {
 // step runs one tick. Commands for this tick move the soldiers, then the world
 // steps, then the snapshot describes the state at the end of the tick.
 func (s *Server) step() error {
+	s.profile.start()
 	s.handleEvents()
 	s.dropSilentSessions()
+	s.profile.lap(systemEvents)
 	for _, p := range s.players {
 		if p != nil && p.soldier != 0 {
 			if err := s.movePlayer(p); err != nil {
@@ -167,14 +180,35 @@ func (s *Server) step() error {
 			}
 		}
 	}
+	s.profile.lap(systemPlayers)
+	if err := s.moveDummies(); err != nil {
+		return err
+	}
+	s.profile.lap(systemDummies)
 	if err := s.world.Step(game.TickDelta); err != nil {
 		return err
 	}
+	s.profile.lap(systemPhysics)
+	s.grid.Rebuild(s.soldiers)
+	s.profile.lap(systemGrid)
+	s.history.record(s.tick, s.soldiers)
+	s.profile.lap(systemHistory)
 	if s.tick%s.snapshotInterval == 0 {
 		s.sendSnapshots()
 	}
+	s.profile.lap(systemSnapshots)
 	s.tick++
 	return nil
+}
+
+func (s *Server) playerCount() int {
+	count := 0
+	for _, p := range s.players {
+		if p != nil {
+			count++
+		}
+	}
+	return count
 }
 
 func (s *Server) movePlayer(p *player) error {
@@ -184,7 +218,7 @@ func (s *Server) movePlayer(p *player) error {
 	} else {
 		command = p.last.Repeated(s.tick)
 		p.buffered = -1
-		s.stats.missedCommands++
+		s.profile.missedCommands++
 	}
 	command.Sanitize()
 	p.last = command
