@@ -61,6 +61,10 @@ type Soldier struct {
 	// Health runs from MaxHealth down to zero, at which the soldier dies.
 	Health  uint8
 	Arsenal Arsenal
+	// Shots counts the rounds the soldier fired, wrapping; clients show the
+	// shots of others from it.
+	Shots   uint8
+	LastHit HitMark
 }
 
 // SoldierID packs a slot into the low 12 bits and a generation into the high 4.

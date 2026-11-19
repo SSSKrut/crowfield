@@ -48,9 +48,15 @@ type remoteView struct {
 // dropped when it is gone. A soldier that dies falls as a ragdoll into the
 // bodies of the world.
 type soldiers struct {
-	asset      *animation.CharacterAsset
-	world      *physics.World
-	bodies     *bodies
+	asset  *animation.CharacterAsset
+	world  *physics.World
+	bodies *bodies
+	// What the soldiers' shots and hits show with: the weapons in hand, the
+	// effects and the sounds. Without them nothing is shown, as headless.
+	weapons    *viewModel
+	effects    *effects
+	sounds     *sounds
+	rules      game.Rules
 	characters map[game.SoldierID]*animation.Character
 	views      []remoteView
 	frustum    render.Frustum
@@ -83,6 +89,7 @@ func (s *soldiers) update(session *session, deltaTime float32, camera rl.Camera3
 		}
 		known.remote.smooth(deltaTime)
 		soldier := known.remote.at(session.clock.renderTick)
+		s.showCombat(known, &soldier, session.clock.renderTick, camera)
 		character := s.characters[id]
 		if !soldier.Alive {
 			if character != nil {
@@ -116,13 +123,77 @@ func (s *soldiers) update(session *session, deltaTime float32, camera rl.Camera3
 	return nil
 }
 
+// Shots further behind than staleShots ticks are not shown: the soldier was
+// not drawn for a while.
+const staleShots = game.TickRate / 2
+
+// showCombat shows the shots a soldier fired and the hit it took once the
+// interpolation reaches them: a flash at the muzzle of its weapon, a tracer
+// to where its aim meets the world, the sound, and sparks off the hitbox
+// that was struck.
+func (s *soldiers) showCombat(known *knownSoldier, soldier *game.Soldier, renderTick float64, camera rl.Camera3D) {
+	if s.effects == nil {
+		known.shots, known.hurt = known.shots[:0], false
+		return
+	}
+	shown := 0
+	for ; shown < len(known.shots) && known.shots[shown] <= renderTick; shown++ {
+		if known.shots[shown] < renderTick-staleShots {
+			continue
+		}
+		s.showShot(soldier, camera)
+	}
+	known.shots = known.shots[:copy(known.shots, known.shots[shown:])]
+	if known.hurt && known.hit <= renderTick {
+		known.hurt = false
+		if box := int(soldier.LastHit.Box); box < game.HitboxCount {
+			hitbox := game.Hitboxes(soldier.Position, soldier.Yaw)[box]
+			s.effects.hit(hitbox.A.Add(hitbox.B).Mul(0.5), game.ViewDirection(soldier.LastHit.Yaw, 0))
+		}
+	}
+}
+
+// showShot shows one shot of another soldier. Its spread is the server's
+// secret; a little scatter keeps a burst from drawing one line.
+func (s *soldiers) showShot(soldier *game.Soldier, camera rl.Camera3D) {
+	kind := soldier.Arsenal.Weapon()
+	tuning := s.rules.Weapons.Get(kind)
+	muzzle, ok := s.weapons.heldMuzzle(soldier)
+	if tuning == nil || !ok {
+		return
+	}
+	scatter := float32(0.012)
+	direction := game.ViewDirection(soldier.Yaw+scatter*(s.effects.random.Float32()*2-1), soldier.Pitch+scatter*(s.effects.random.Float32()*2-1))
+	eye := soldier.Position.Add(physics.V(0, s.rules.Movement.EyeHeight, 0))
+	end := eye.Add(direction.Mul(tuning.Range))
+	hit, err := s.world.RayCast(physics.Ray{Origin: eye, Direction: direction, Distance: tuning.Range},
+		physics.Mask(physics.LayerStatic, physics.LayerVehicle))
+	struck := err == nil && hit.Hit
+	if struck {
+		end = hit.Position
+	}
+	s.effects.flash(muzzle)
+	s.effects.shot(muzzle, end, struck)
+	listener := physics.V(camera.Position.X, camera.Position.Y, camera.Position.Z)
+	forward := rl.Vector3Normalize(rl.Vector3Subtract(camera.Target, camera.Position))
+	right := rl.Vector3Normalize(rl.Vector3CrossProduct(forward, camera.Up))
+	toward := muzzle.Sub(listener)
+	away := distance(muzzle, listener)
+	pan := float32(0)
+	if away > 1e-3 {
+		pan = (toward.X*right.X + toward.Y*right.Y + toward.Z*right.Z) / away
+	}
+	s.sounds.shotAt(kind, away, pan)
+}
+
 // fall turns a soldier that died into a ragdoll from its pose, knocked back.
 // Far away, where it would be a capsule, it is simply gone.
 func (s *soldiers) fall(character *animation.Character, soldier game.Soldier, eye physics.Vec3) error {
 	if s.world == nil || distance(soldier.Position, eye) > capsuleDistance {
 		return character.Close()
 	}
-	impulse := game.ViewDirection(soldier.Yaw, 0).Mul(-25).Add(physics.V(0, 10, 0))
+	// Knocked along the shot that killed it.
+	impulse := game.ViewDirection(soldier.LastHit.Yaw, 0).Mul(25).Add(physics.V(0, 10, 0))
 	if err := character.CreateRagdoll(s.world, soldier.Position, facing(soldier.Yaw), soldier.Velocity, impulse); err != nil {
 		_ = character.Close()
 		return err
@@ -160,6 +231,9 @@ func (s *soldiers) draw(tuning game.MovementTuning, debug bool) {
 			view.character.Draw(view.soldier.Position, facing(view.soldier.Yaw), tint, view.detail)
 			if view.detail == animation.DetailFull {
 				s.full++
+			}
+			if s.weapons != nil {
+				s.weapons.drawHeld(&view.soldier, tint)
 			}
 		}
 		if debug {

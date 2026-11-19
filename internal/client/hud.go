@@ -128,12 +128,13 @@ func drawHealthBar(health uint8) {
 	rl.DrawRectangle(left, bottom-4, int32(220*share), 4, tint)
 }
 
-// drawDeath tells the dead player when it comes back.
-func drawDeath(respawn uint16) {
+// drawDeath tells the dead player who killed it and when it comes back.
+func drawDeath(respawn uint16, killedBy string) {
 	width, height := int32(rl.GetScreenWidth()), int32(rl.GetScreenHeight())
-	rl.DrawRectangle(0, height/2-60, width, 120, rl.NewColor(0, 0, 0, 120))
+	rl.DrawRectangle(0, height/2-70, width, 140, rl.NewColor(0, 0, 0, 120))
 	title := "KILLED"
-	rl.DrawText(title, (width-rl.MeasureText(title, 48))/2, height/2-46, 48, rl.Red)
+	rl.DrawText(title, (width-rl.MeasureText(title, 48))/2, height/2-58, 48, rl.Red)
+	rl.DrawText(killedBy, (width-rl.MeasureText(killedBy, 22))/2, height/2-4, 22, rl.White)
 	back := fmt.Sprintf("Back in the fight in %.1f s", float32(respawn)/game.TickRate)
-	rl.DrawText(back, (width-rl.MeasureText(back, 22))/2, height/2+14, 22, rl.White)
+	rl.DrawText(back, (width-rl.MeasureText(back, 22))/2, height/2+28, 22, rl.LightGray)
 }

@@ -78,7 +78,11 @@ type session struct {
 	bytes atomic.Int64
 
 	snapshots chan received
-	graph     netGraph
+	// events are the combat events on their way to the frame loop; news are
+	// those the last poll took in, for the frame to show.
+	events chan protocol.Message
+	news   []protocol.Message
+	graph  netGraph
 	// heard is when the last snapshot came; after timeout without one the
 	// server is taken for lost.
 	heard    time.Time
@@ -136,6 +140,7 @@ func connect(conn transport.Conn, name string, rules game.Rules, token [16]byte)
 		conn: conn, name: name, welcome: welcome, history: make([]game.InputCommand, 0, protocol.MaxCommandsPerInput),
 		soldiers: make(map[int]*knownSoldier), baselines: protocol.NewBaselines(), buried: make(map[game.SoldierID]game.Tick),
 		clock: newInterpolationClock(int(welcome.SnapshotRate)), snapshots: make(chan received, 64),
+		events: make(chan protocol.Message, 256),
 		cancel: stop, failed: make(chan struct{}), timeout: serverTimeout, heard: time.Now(),
 	}
 	s.setClock(welcome.ServerTick, handshakeRTT)
@@ -192,7 +197,14 @@ func (s *session) respawn() error {
 // whether the player's own state changed, which calls for reconciliation.
 func (s *session) poll() (bool, error) {
 	updated := false
+	s.news = s.news[:0]
 	for {
+		select {
+		case event := <-s.events:
+			s.news = append(s.news, event)
+			continue
+		default:
+		}
 		select {
 		case datagram := <-s.snapshots:
 			s.heard = time.Now()
@@ -229,7 +241,16 @@ type knownSoldier struct {
 	tick    game.Tick
 	updates int
 	remote  remoteSoldier
+	// shots are the server ticks of shots the soldier fired that are not
+	// shown yet, oldest first, and hit the tick of a hit it took; shown
+	// when the interpolation reaches them.
+	shots []float64
+	hit   float64
+	hurt  bool
 }
+
+// maxPendingShots bounds the shots waiting to be shown of one soldier.
+const maxPendingShots = 16
 
 // apply takes in one snapshot datagram. Its soldiers are applied even when it
 // arrives late, since a soldier may be in no newer datagram; only the private
@@ -320,6 +341,9 @@ func (s *session) update(state protocol.SoldierState, tick game.Tick, own game.S
 		s.soldiers[state.ID.Slot()] = known
 	}
 	if int32(tick-known.tick) >= 0 {
+		if known.updates > 0 && state.ID != own {
+			known.schedule(state, tick)
+		}
 		state.Apply(&known.soldier)
 		known.tick = tick
 	}
@@ -339,6 +363,23 @@ func (s *session) update(state protocol.SoldierState, tick game.Tick, own game.S
 	before := remote.at(s.clock.renderTick).Position
 	remote.add(tick, soldier)
 	remote.keep(before, s.clock.renderTick)
+}
+
+// schedule spreads the shots a soldier fired since its last state over the
+// ticks between the two states, and marks a new hit at the tick of the new
+// one: the client shows them as the interpolation passes those ticks.
+func (k *knownSoldier) schedule(state protocol.SoldierState, tick game.Tick) {
+	fired := int((state.Shots - k.soldier.Shots) & 15)
+	span := float64(int32(tick - k.tick))
+	for i := 1; i <= fired; i++ {
+		if len(k.shots) == maxPendingShots {
+			k.shots = k.shots[1:]
+		}
+		k.shots = append(k.shots, float64(k.tick)+span*float64(i)/float64(fired))
+	}
+	if state.HitCount != k.soldier.LastHit.Count {
+		k.hit, k.hurt = float64(tick), true
+	}
 }
 
 func (s *session) bury(id game.SoldierID, tick game.Tick) {
@@ -443,12 +484,36 @@ func (s *session) readSnapshots(ctx context.Context) {
 	}
 }
 
-// readControl only watches the control channel for now: nothing arrives on it
-// after Welcome until match events exist, but a closed connection ends here.
+// readControl takes the events of combat to the frame loop; a closed
+// connection ends here. Nothing else arrives on the reliable channels after
+// Welcome yet.
 func (s *session) readControl(ctx context.Context) {
 	for {
-		if _, _, err := s.conn.ReceiveReliable(ctx); err != nil {
+		channel, data, err := s.conn.ReceiveReliable(ctx)
+		if err != nil {
 			s.fail(err)
+			return
+		}
+		if channel != transport.ChannelEvents {
+			continue
+		}
+		messageType, err := protocol.PeekType(data)
+		if err != nil {
+			continue
+		}
+		var event protocol.Message
+		switch messageType {
+		case protocol.MessageHitConfirm, protocol.MessageDamage, protocol.MessageDeath:
+			event, _ = protocol.New(messageType)
+		default:
+			continue
+		}
+		if event.Decode(data) != nil {
+			continue
+		}
+		select {
+		case s.events <- event:
+		case <-ctx.Done():
 			return
 		}
 	}

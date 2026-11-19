@@ -34,6 +34,7 @@ type app struct {
 	view      *viewModel
 	effects   *effects
 	sounds    *sounds
+	feedback  feedback
 	alpha     float32
 	camera    rl.Camera3D
 	yaw       float32
@@ -134,6 +135,7 @@ func Run(settings config.Client) error {
 	defer a.self.Close()
 	defer a.bodies.close()
 	a.soldiers.world, a.soldiers.bodies = world, &a.bodies
+	a.soldiers.weapons, a.soldiers.effects, a.soldiers.sounds, a.soldiers.rules = a.view, a.effects, a.sounds, rules
 	defer a.view.close()
 	defer a.sounds.close()
 
@@ -314,7 +316,9 @@ func (a *app) run() error {
 		updated := false
 		if lost == nil && a.reconnect == nil {
 			updated, lost = a.session.poll()
+			a.feedback.take(a.session.news, a.session.player.Soldier, a.sounds)
 		}
+		a.feedback.update(deltaTime)
 		if lost != nil {
 			if err := a.lose(lost); err != nil {
 				return err
@@ -558,6 +562,16 @@ func (a *app) arsenal() *game.Arsenal {
 	return nil
 }
 
+// held is the own soldier as seen from outside, standing at feet with its
+// weapon along the view; nil before it is predicted.
+func (a *app) held(feet physics.Vec3) *game.Soldier {
+	arsenal := a.arsenal()
+	if arsenal == nil {
+		return nil
+	}
+	return &game.Soldier{Position: feet, Yaw: a.yaw, Pitch: a.pitch, Arsenal: *arsenal}
+}
+
 // firstPerson reports whether the camera is the soldier's eye.
 func (a *app) firstPerson() bool {
 	return !a.thirdPerson && !a.ragdoll && !a.settings.Overview && a.ownSoldier() != nil
@@ -625,6 +639,9 @@ func (a *app) updateWeapon(deltaTime float32, soldier *game.Soldier) {
 			end = hit.Position
 		}
 		muzzle := a.eye()
+		if held := a.held(a.feet); held != nil {
+			muzzle, _ = a.view.heldMuzzle(held)
+		}
 		if placed {
 			muzzle = a.view.muzzleInWorld(a.camera)
 			a.view.fired(rand32(shot.Direction))
@@ -654,6 +671,9 @@ func (a *app) draw(feet physics.Vec3, spawned bool) {
 			team = own.Team
 		}
 		a.self.Draw(feet, facing(a.yaw), a.soldiers.tint(team), animation.DetailFull)
+		if held := a.held(feet); held != nil && !a.ragdoll {
+			a.view.drawHeld(held, a.soldiers.tint(team))
+		}
 	}
 	a.soldiers.draw(a.rules.Movement, a.debug)
 	bodies := a.bodies.draw(&a.soldiers.frustum)
@@ -682,9 +702,10 @@ func (a *app) draw(feet physics.Vec3, spawned bool) {
 			}
 			drawHealth(player.Health, teamNames[team], a.soldiers.tint(team))
 		} else {
-			drawDeath(player.Respawn)
+			drawDeath(player.Respawn, a.feedback.killedBy)
 		}
 	}
+	a.feedback.draw(a.yaw, teamColors)
 	rl.DrawText("WASD move | Space jump | Shift sprint | LMB fire | RMB aim | R reload | 1-3, wheel weapon", 18, 18, 18, rl.White)
 	rl.DrawText("K ragdoll | Backspace respawn | L knock down nearest | F1 physics | F2 network | F3 camera | Esc cursor", 18, 44, 18, rl.White)
 	rl.DrawText(fmt.Sprintf("FPS %d | XYZ %.2f %.2f %.2f | %s | drawn %d (full %d, capsules %d) | bodies %d (ragdolls %d)",
@@ -792,7 +813,7 @@ func (a *app) followLife() error {
 			return err
 		}
 	case !dead && a.fallen != 0 && player.Soldier != a.fallen:
-		a.fallen, a.ragdoll = 0, false
+		a.fallen, a.ragdoll, a.feedback.killedBy = 0, false, ""
 		return a.self.RemoveRagdoll()
 	}
 	return nil

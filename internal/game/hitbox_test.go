@@ -45,7 +45,7 @@ func TestHitboxesFollowTheSoldier(t *testing.T) {
 			zone   HitZone
 		}{{1.6, 0, ZoneHead}, {1.05, 0, ZoneTorso}, {0.7, 0, ZoneTorso}, {0.3, 0.26, ZoneLimb}, {0.6, 1.2, ZoneNone}} {
 			origin := physics.V(3+c.side, 0.5+c.height, 0)
-			distance, zone, hit := RayHitboxes(origin, physics.V(0, 0, -1), 100, position, yaw)
+			distance, box, hit := RayHitboxes(origin, physics.V(0, 0, -1), 100, position, yaw)
 			sideways := math.Abs(math.Sin(float64(yaw))) > 0.9
 			// From the side the arm covers the lower body, and the legs stand
 			// one behind the other.
@@ -54,8 +54,9 @@ func TestHitboxesFollowTheSoldier(t *testing.T) {
 			}
 			if sideways && c.zone == ZoneLimb {
 				origin.X = 3
-				distance, zone, hit = RayHitboxes(origin, physics.V(0, 0, -1), 100, position, yaw)
+				distance, box, hit = RayHitboxes(origin, physics.V(0, 0, -1), 100, position, yaw)
 			}
+			zone := HitboxZone(box)
 			if zone != c.zone || hit != (c.zone != ZoneNone) {
 				t.Errorf("yaw %.1f, height %.2f: hit %s, want %s", yaw, c.height, zone, c.zone)
 			}

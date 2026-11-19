@@ -16,6 +16,7 @@ const (
 	maxTracers = 64
 	maxImpacts = 128
 	maxSparks  = 256
+	maxFlashes = 32
 	// A tracer is a streak tracerLength long flying at tracerSpeed.
 	tracerSpeed  = 400
 	tracerLength = 3
@@ -31,6 +32,9 @@ var (
 	tracerColor = rl.NewColor(255, 214, 140, 210)
 	impactColor = rl.NewColor(28, 26, 24, 255)
 	sparkColors = [...]color.RGBA{rl.NewColor(170, 160, 140, 255), rl.NewColor(130, 120, 105, 255), rl.NewColor(255, 200, 110, 255)}
+	// A bullet strikes sparks from a robot.
+	hitColors  = [...]color.RGBA{rl.NewColor(255, 220, 120, 255), rl.NewColor(255, 150, 60, 255), rl.NewColor(80, 80, 85, 255)}
+	flashColor = rl.NewColor(255, 200, 110, 255)
 )
 
 type tracer struct {
@@ -49,20 +53,45 @@ type spark struct {
 	tint               color.RGBA
 }
 
-// effects are what shots leave in the world: tracers, bullet holes and the
-// dust they kick up. They are cosmetic; where a shot hits is the server's
+// flash is the muzzle flash of another soldier's shot.
+type flash struct {
+	position physics.Vec3
+	age      float32
+}
+
+// effects are what shots leave in the world: tracers, bullet holes, the
+// dust they kick up, the flashes of other soldiers' shots and the sparks of
+// hits on soldiers. They are cosmetic; where a shot hits is the server's
 // call, and the client only shows its own guess of the wall it struck.
 type effects struct {
 	tracers []tracer
 	impacts []impact
 	sparks  []spark
+	flashes []flash
 	random  *rand.Rand
 }
 
 func newEffects() *effects {
 	return &effects{
 		tracers: make([]tracer, 0, maxTracers), impacts: make([]impact, 0, maxImpacts), sparks: make([]spark, 0, maxSparks),
-		random: rand.New(rand.NewPCG(1, 2)),
+		flashes: make([]flash, 0, maxFlashes), random: rand.New(rand.NewPCG(1, 2)),
+	}
+}
+
+// flash shows the muzzle flash of another soldier's shot.
+func (e *effects) flash(muzzle physics.Vec3) {
+	e.flashes = appendLimited(e.flashes, flash{position: muzzle})
+}
+
+// hit throws sparks off a soldier struck at point by a shot travelling along
+// direction.
+func (e *effects) hit(point, direction physics.Vec3) {
+	for range 2 * sparksPerHit {
+		scatter := physics.V(e.random.Float32()*2-1, e.random.Float32()*2-1, e.random.Float32()*2-1)
+		velocity := direction.Mul(-1.5 + 4*e.random.Float32()).Add(scatter.Mul(1.5)).Add(physics.V(0, 1, 0))
+		e.sparks = appendLimited(e.sparks, spark{
+			position: point, velocity: velocity, tint: hitColors[e.random.IntN(len(hitColors))],
+		})
 	}
 }
 
@@ -122,6 +151,13 @@ func (e *effects) update(deltaTime float32) {
 		}
 	}
 	e.sparks = sparks
+	flashes := e.flashes[:0]
+	for _, f := range e.flashes {
+		if f.age += deltaTime; f.age < flashTime {
+			flashes = append(flashes, f)
+		}
+	}
+	e.flashes = flashes
 }
 
 func (e *effects) draw() {
@@ -135,6 +171,9 @@ func (e *effects) draw() {
 		rl.DrawCube(render.Vector(s.position), size, size, size, s.tint)
 	}
 	rl.BeginBlendMode(rl.BlendAdditive)
+	for _, f := range e.flashes {
+		rl.DrawSphere(render.Vector(f.position), 0.07*(1-f.age/flashTime), flashColor)
+	}
 	for _, t := range e.tracers {
 		head := min(t.flown, t.length)
 		tail := max(0, t.flown-tracerLength)

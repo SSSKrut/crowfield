@@ -1,7 +1,13 @@
 package simulation
 
 import (
+	"fmt"
+	"log"
+	"math"
+
 	"ravenfield/internal/game"
+	"ravenfield/internal/network/protocol"
+	"ravenfield/internal/network/transport"
 	"ravenfield/internal/physics"
 )
 
@@ -30,15 +36,15 @@ func (s *Server) viewTime(command game.InputCommand) float64 {
 	return max(oldest, min(latest, view))
 }
 
-// hit is where a shot struck a soldier.
+// hit is where a shot struck a soldier: which hitbox, how far away.
 type hit struct {
 	soldier  game.SoldierID
-	zone     game.HitZone
+	box      int
 	distance float32
 }
 
 // resolveShots tests every shot of the tick against the world and the
-// soldiers, and applies the damage.
+// soldiers, applies the damage and tells the people involved.
 func (s *Server) resolveShots() error {
 	for _, pending := range s.shots {
 		struck, ok, err := s.hitscan(pending)
@@ -54,11 +60,85 @@ func (s *Server) resolveShots() error {
 		if victim == nil || !victim.Alive || (victim.Team == pending.team && !s.settings.FriendlyFire) {
 			continue
 		}
+		zone := game.HitboxZone(struck.box)
+		direction := pending.shot.Direction
+		victim.LastHit = game.HitMark{
+			Count: victim.LastHit.Count + 1, Box: uint8(struck.box),
+			Yaw: float32(math.Atan2(float64(direction.X), float64(-direction.Z))),
+		}
 		tuning := s.rules.Weapons.Get(pending.shot.Weapon)
-		s.damage(victim, tuning.HitDamage(struck.zone, struck.distance))
+		taken, killed := s.damage(victim, tuning.HitDamage(zone, struck.distance))
+		s.tellHit(pending, victim, zone, taken, killed)
 	}
 	s.shots = s.shots[:0]
 	return nil
+}
+
+// tellHit sends the events of a hit: the shooter learns it hit, the victim
+// where from, and everyone a death a human took part in.
+func (s *Server) tellHit(pending pendingShot, victim *game.Soldier, zone game.HitZone, taken int, killed bool) {
+	shooter := s.soldiers.Get(pending.shooter)
+	if p := s.playerOf(shooter); p != nil {
+		s.sendEvent(p, &protocol.HitConfirm{Tick: s.tick, Victim: victim.ID, Zone: zone, Damage: uint8(min(taken, math.MaxUint8)), Killed: killed})
+	}
+	victimPlayer := s.playerOf(victim)
+	if victimPlayer != nil {
+		yaw := math.Atan2(float64(pending.shot.Direction.X), float64(-pending.shot.Direction.Z)) / (2 * math.Pi)
+		s.sendEvent(victimPlayer, &protocol.Damage{
+			Tick: s.tick, Attacker: pending.shooter, Yaw: uint8(int(math.Round(yaw*256)) & 0xFF),
+			Zone: zone, Damage: uint8(min(taken, math.MaxUint8)),
+		})
+	}
+	if !killed || (victimPlayer == nil && s.playerOf(shooter) == nil) {
+		return
+	}
+	death := &protocol.Death{
+		Tick: s.tick, Victim: victim.ID, Killer: pending.shooter, VictimTeam: victim.Team, KillerTeam: pending.team,
+		VictimName: s.nameOf(victim), KillerName: s.nameOf(shooter), Weapon: pending.shot.Weapon, Zone: zone,
+	}
+	for _, p := range s.players {
+		if p != nil && p.ready {
+			s.sendEvent(p, death)
+		}
+	}
+}
+
+// playerOf is the player of a human soldier, or nil.
+func (s *Server) playerOf(soldier *game.Soldier) *player {
+	if soldier == nil || soldier.Controller.Kind != game.ControllerPlayer {
+		return nil
+	}
+	if p := s.players[soldier.Controller.Player]; p != nil && p.soldier == soldier.ID {
+		return p
+	}
+	return nil
+}
+
+// nameOf is how the kill feed calls a soldier.
+func (s *Server) nameOf(soldier *game.Soldier) string {
+	switch {
+	case soldier == nil:
+		return "?"
+	case soldier.Controller.Kind == game.ControllerBot:
+		return fmt.Sprintf("Dummy %d", soldier.Controller.Bot)
+	}
+	if p := s.players[soldier.Controller.Player]; p != nil {
+		return p.name
+	}
+	return fmt.Sprintf("Player %d", soldier.Controller.Player)
+}
+
+// sendEvent sends an event on the reliable channel. A player who does not
+// read its events is dropped: its queue is full.
+func (s *Server) sendEvent(p *player, message protocol.Message) {
+	data, err := message.Encode(nil)
+	if err == nil {
+		err = p.conn.SendReliable(transport.ChannelEvents, data)
+	}
+	if err != nil {
+		log.Printf("player %d: event %s: %v", p.id, message.Type(), err)
+		_ = p.conn.Close("events not delivered")
+	}
 }
 
 // hitscan finds the soldier a shot strikes first, if any (ARCHITECTURE.md,
@@ -93,8 +173,8 @@ func (s *Server) hitscan(pending pendingShot) (hit, bool, error) {
 		if !ok || !pose.alive {
 			continue
 		}
-		if distance, zone, ok := game.RayHitboxes(shot.Origin, shot.Direction, reach, pose.position, pose.yaw); ok {
-			reach, struck = distance, hit{soldier: id, zone: zone, distance: distance}
+		if distance, box, ok := game.RayHitboxes(shot.Origin, shot.Direction, reach, pose.position, pose.yaw); ok {
+			reach, struck = distance, hit{soldier: id, box: box, distance: distance}
 		}
 	}
 	return struck, struck.soldier != 0, nil
@@ -103,11 +183,13 @@ func (s *Server) hitscan(pending pendingShot) (hit, bool, error) {
 // damage takes health from a soldier; at zero it dies. A dead soldier stays
 // where it fell until it comes back as a new soldier, so that every client
 // sees it die. A dead human loses its capsule and its commands are ignored.
-func (s *Server) damage(victim *game.Soldier, amount int) {
+// It returns the health taken and whether the soldier died.
+func (s *Server) damage(victim *game.Soldier, amount int) (int, bool) {
 	if int(victim.Health) > amount {
 		victim.Health -= uint8(amount)
-		return
+		return amount, false
 	}
+	taken := int(victim.Health)
 	victim.Health, victim.Alive, victim.Velocity = 0, false, physics.Vec3{}
 	s.profile.kills++
 	back := s.tick + game.Tick(s.settings.RespawnDelay/game.TickDuration)
@@ -125,6 +207,7 @@ func (s *Server) damage(victim *game.Soldier, amount int) {
 			s.dummies.all[bot].respawnAt = back
 		}
 	}
+	return taken, true
 }
 
 // respawnDead brings back the soldiers whose time has come: each as a new

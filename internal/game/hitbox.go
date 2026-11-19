@@ -77,15 +77,33 @@ func Hitboxes(position physics.Vec3, yaw float32) [HitboxCount]Hitbox {
 
 // RayHitboxes finds where a ray from origin along the unit direction first
 // enters the hitboxes of a soldier standing at position and looking along
-// yaw, no farther than limit.
-func RayHitboxes(origin, direction physics.Vec3, limit float32, position physics.Vec3, yaw float32) (float32, HitZone, bool) {
-	nearest, zone := limit, ZoneNone
-	for _, box := range Hitboxes(position, yaw) {
+// yaw, no farther than limit, and which hitbox it enters.
+func RayHitboxes(origin, direction physics.Vec3, limit float32, position physics.Vec3, yaw float32) (float32, int, bool) {
+	nearest, entered := limit, -1
+	for i, box := range Hitboxes(position, yaw) {
 		if t, ok := box.Ray(origin, direction); ok && t <= nearest {
-			nearest, zone = t, box.Zone
+			nearest, entered = t, i
 		}
 	}
-	return nearest, zone, zone != ZoneNone
+	return nearest, entered, entered >= 0
+}
+
+// HitboxZone is the zone of a hitbox by its index.
+func HitboxZone(box int) HitZone {
+	if box < 0 || box >= HitboxCount {
+		return ZoneNone
+	}
+	return standingHitboxes[box].Zone
+}
+
+// HitMark is the last hit a soldier took, which every client sees: a
+// counter that changes with each hit, the hitbox, and the yaw the shot
+// travelled along. The client shows the hit with it, and the fall when it
+// killed.
+type HitMark struct {
+	Count uint8
+	Box   uint8
+	Yaw   float32
 }
 
 // Ray returns the distance along a ray from origin in the unit direction to

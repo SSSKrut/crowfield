@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"ravenfield/internal/game"
+	"ravenfield/internal/network/protocol"
 	"ravenfield/internal/network/transport"
 	"ravenfield/internal/physics"
 )
@@ -24,6 +25,9 @@ type Headless struct {
 	input     wanderer
 	last      time.Time
 	shots     int
+	hits      int
+	kills     int
+	deaths    int
 
 	mu    sync.Mutex
 	stats HeadlessStats
@@ -35,8 +39,11 @@ type HeadlessStats struct {
 	Bytes              int64
 	Jumps, Corrections int
 	// Shots counts the shots predicted; WeaponCorrections the corrections
-	// where only the weapons disagreed with the server.
+	// where only the weapons disagreed with the server. Hits and Kills are
+	// what the server confirmed of the shots, Deaths how often the
+	// client's own soldier died.
 	Shots, WeaponCorrections int
+	Hits, Kills, Deaths      int
 	// Unresolved counts snapshot datagrams dropped for a missing delta base;
 	// Late counts snapshots that reported commands arriving too late.
 	Unresolved, Late int
@@ -124,6 +131,19 @@ func (h *Headless) Tick() error {
 			return err
 		}
 	}
+	for _, event := range h.session.news {
+		switch event := event.(type) {
+		case *protocol.HitConfirm:
+			h.hits++
+			if event.Killed {
+				h.kills++
+			}
+		case *protocol.Death:
+			if event.Victim == h.session.player.Soldier {
+				h.deaths++
+			}
+		}
+	}
 	now := time.Now()
 	if h.last.IsZero() {
 		h.last = now
@@ -142,7 +162,7 @@ func (h *Headless) publish() {
 	h.stats = HeadlessStats{
 		Ticks: h.stats.Ticks + 1, Snapshots: s.received, Bytes: s.bytes.Load(), Jumps: s.resyncs,
 		Corrections: h.predictor.corrections, Unresolved: s.unresolved, Late: s.late, Lead: s.lead,
-		Shots: h.shots, WeaponCorrections: h.predictor.weaponCorrections,
+		Shots: h.shots, WeaponCorrections: h.predictor.weaponCorrections, Hits: h.hits, Kills: h.kills, Deaths: h.deaths,
 		Soldiers: len(s.soldiers), LargestCorrection: max(h.stats.LargestCorrection, h.predictor.lastError),
 	}
 	h.mu.Unlock()

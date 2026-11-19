@@ -13,8 +13,11 @@ import (
 const (
 	sampleRate = 44100
 	// Rapid fire overlaps: every weapon sound plays on shotVoices voices in turn.
-	shotVoices = 4
+	shotVoices = 6
 )
+
+// shotVolumes are the volumes of the weapons' shots, at the shooter.
+var shotVolumes = [game.WeaponKinds]float32{game.WeaponAssaultRifle: 0.85, game.WeaponRifle: 1, game.WeaponPistol: 0.7}
 
 // sounds are the sounds of the player's own weapons. There are no sound
 // files yet: they are made at start from noise and tones.
@@ -26,6 +29,8 @@ type sounds struct {
 	magOut rl.Sound
 	magIn  rl.Sound
 	equip  rl.Sound
+	// marker ticks when a shot of the player hurt someone.
+	marker rl.Sound
 }
 
 // loadSounds opens the audio device; without one the game is silent.
@@ -56,7 +61,46 @@ func loadSounds(volume float32) *sounds {
 	s.magOut = synthesize(0.25, clicks(0, 0.09), 0.35)
 	s.magIn = synthesize(0.25, clicks(0, 0.12), 0.5)
 	s.equip = synthesize(0.2, clicks(0, 0.06), 0.3)
+	s.marker = synthesize(0.08, tone(2400, 0.015), 0.35)
 	return s
+}
+
+// tone is a short beep of the given pitch that fades with decay.
+func tone(pitch, decay float32) func(t float32) float32 {
+	return func(t float32) float32 {
+		return float32(math.Sin(2*math.Pi*float64(pitch*t)) * math.Exp(-float64(t/decay)))
+	}
+}
+
+// hitMarker ticks for a shot that hurt someone, higher for a kill.
+func (s *sounds) hitMarker(killed bool) {
+	if !s.ready {
+		return
+	}
+	pitch := float32(1)
+	if killed {
+		pitch = 0.75
+	}
+	rl.SetSoundPitch(s.marker, pitch)
+	rl.PlaySound(s.marker)
+}
+
+// shotAt plays another soldier's shot from where it was fired, quieter with
+// distance, to the side it came from: pan is the share of the direction to
+// the shot along the listener's right.
+func (s *sounds) shotAt(kind game.WeaponKind, distance, pan float32) {
+	if !s.ready || kind >= game.WeaponKinds || s.shots[kind][0].FrameCount == 0 {
+		return
+	}
+	volume := 1 / (1 + distance/12)
+	if volume < 0.03 {
+		return
+	}
+	sound := s.shots[kind][s.next[kind]]
+	s.next[kind] = (s.next[kind] + 1) % shotVoices
+	rl.SetSoundVolume(sound, volume*shotVolumes[kind])
+	rl.SetSoundPan(sound, max(-1, min(1, pan)))
+	rl.PlaySound(sound)
 }
 
 func (s *sounds) close() {
@@ -72,7 +116,7 @@ func (s *sounds) close() {
 		}
 		rl.UnloadSound(s.shots[kind][0])
 	}
-	for _, sound := range []rl.Sound{s.dry, s.magOut, s.magIn, s.equip} {
+	for _, sound := range []rl.Sound{s.dry, s.magOut, s.magIn, s.equip, s.marker} {
 		rl.UnloadSound(sound)
 	}
 	rl.CloseAudioDevice()
@@ -84,8 +128,11 @@ func (s *sounds) weapon(kind game.WeaponKind, events game.WeaponEvents) {
 		return
 	}
 	if events.Has(game.EventFired) && kind < game.WeaponKinds && s.shots[kind][0].FrameCount > 0 {
-		rl.PlaySound(s.shots[kind][s.next[kind]])
+		sound := s.shots[kind][s.next[kind]]
 		s.next[kind] = (s.next[kind] + 1) % shotVoices
+		rl.SetSoundVolume(sound, shotVolumes[kind])
+		rl.SetSoundPan(sound, 0)
+		rl.PlaySound(sound)
 	}
 	if events.Has(game.EventDryFire) {
 		rl.PlaySound(s.dry)

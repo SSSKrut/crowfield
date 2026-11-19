@@ -35,7 +35,9 @@ var (
 // along +Z through the origin, so that aiming puts that line on the
 // crosshair.
 type weaponModel struct {
-	boxes  []render.Box
+	// gun is the weapon itself, arms the hands that hold it in first person.
+	gun    []render.Box
+	arms   []render.Box
 	muzzle physics.Vec3
 	// hip and aim place the origin of the model in front of the eye: X
 	// right, Y up, Z forward.
@@ -74,7 +76,7 @@ func weaponModels() [game.WeaponKinds]*weaponModel {
 	v := physics.V
 	var models [game.WeaponKinds]*weaponModel
 	models[game.WeaponAssaultRifle] = &weaponModel{
-		boxes: append([]render.Box{
+		gun: []render.Box{
 			{Center: v(0, -0.055, 0.06), Half: v(0.024, 0.034, 0.17), Color: gunMetal},
 			{Center: v(0, -0.019, 0.07), Half: v(0.01, 0.004, 0.15), Color: gunDark},
 			{Center: v(0, -0.05, 0.31), Half: v(0.028, 0.03, 0.09), Color: gunPolymer},
@@ -87,11 +89,12 @@ func weaponModels() [game.WeaponKinds]*weaponModel {
 			{Center: v(0, -0.16, 0.12), Half: v(0.015, 0.07, 0.028), Pitch: 0.3, Color: gunDark},
 			{Center: v(0, -0.125, -0.06), Half: v(0.015, 0.05, 0.02), Pitch: -0.35, Color: gunPolymer},
 			{Center: v(0, -0.07, -0.24), Half: v(0.02, 0.04, 0.09), Color: gunPolymer},
-		}, arms(v(0.004, -0.11, -0.05), v(0.11, -0.3, -0.42), v(-0.006, -0.085, 0.3), v(-0.17, -0.3, 0.02))...),
+		},
+		arms:   arms(v(0.004, -0.11, -0.05), v(0.11, -0.3, -0.42), v(-0.006, -0.085, 0.3), v(-0.17, -0.3, 0.02)),
 		muzzle: v(0, -0.045, 0.6), hip: v(0.15, -0.16, 0.26), aim: v(0, 0, 0.23), kickBack: 0.035, kickPitch: 0.05,
 	}
 	models[game.WeaponRifle] = &weaponModel{
-		boxes: append([]render.Box{
+		gun: []render.Box{
 			{Center: v(0, -0.065, 0), Half: v(0.022, 0.035, 0.3), Color: gunWood},
 			{Center: v(0, -0.04, 0.08), Half: v(0.018, 0.018, 0.13), Color: gunMetal},
 			{Center: v(0, -0.04, 0.45), Half: v(0.01, 0.01, 0.22), Color: gunDark},
@@ -103,12 +106,13 @@ func weaponModels() [game.WeaponKinds]*weaponModel {
 			{Center: v(0, -0.11, 0.06), Half: v(0.014, 0.025, 0.035), Color: gunDark},
 			{Center: v(0, -0.11, -0.15), Half: v(0.018, 0.045, 0.06), Pitch: -0.3, Color: gunWood},
 			{Center: v(0, -0.09, -0.32), Half: v(0.02, 0.05, 0.07), Color: gunWood},
-		}, arms(v(0.004, -0.11, -0.13), v(0.12, -0.3, -0.48), v(-0.006, -0.095, 0.24), v(-0.17, -0.3, -0.02))...),
+		},
+		arms:   arms(v(0.004, -0.11, -0.13), v(0.12, -0.3, -0.48), v(-0.006, -0.095, 0.24), v(-0.17, -0.3, -0.02)),
 		muzzle: v(0, -0.04, 0.67), hip: v(0.15, -0.15, 0.24), aim: v(0, 0, 0.16), kickBack: 0.07, kickPitch: 0.12,
 		scope: true,
 	}
 	models[game.WeaponPistol] = &weaponModel{
-		boxes: append([]render.Box{
+		gun: []render.Box{
 			{Center: v(0, -0.012, 0.03), Half: v(0.013, 0.016, 0.09), Color: gunMetal},
 			{Center: v(0, -0.036, 0.025), Half: v(0.012, 0.009, 0.08), Color: gunDark},
 			{Center: v(0, -0.085, -0.04), Half: v(0.013, 0.048, 0.022), Pitch: -0.25, Color: gunDark},
@@ -116,7 +120,8 @@ func weaponModels() [game.WeaponKinds]*weaponModel {
 			{Center: v(0, 0.006, 0.11), Half: v(0.002, 0.003, 0.003), Color: gunDark},
 			{Center: v(-0.006, 0.006, -0.05), Half: v(0.003, 0.003, 0.003), Color: gunDark},
 			{Center: v(0.006, 0.006, -0.05), Half: v(0.003, 0.003, 0.003), Color: gunDark},
-		}, arms(v(0.006, -0.08, -0.05), v(0.1, -0.24, -0.38), v(-0.024, -0.088, -0.035), v(-0.15, -0.24, -0.36))...),
+		},
+		arms:   arms(v(0.006, -0.08, -0.05), v(0.1, -0.24, -0.38), v(-0.024, -0.088, -0.035), v(-0.15, -0.24, -0.36)),
 		muzzle: v(0, -0.012, 0.125), hip: v(0.1, -0.095, 0.4), aim: v(0, -0.003, 0.36), kickBack: 0.03, kickPitch: 0.18,
 	}
 	return models
@@ -128,6 +133,8 @@ func weaponModels() [game.WeaponKinds]*weaponModel {
 type viewModel struct {
 	shapes [game.WeaponKinds]*weaponModel
 	models [game.WeaponKinds]*render.BoxModel
+	// held are the weapons alone, as other soldiers carry them.
+	held [game.WeaponKinds]*render.BoxModel
 	// aim goes from 0 at the hip to 1 down the sights.
 	aim float32
 	// The walk sways the model: bob is its phase, stride its strength.
@@ -146,18 +153,56 @@ func newViewModel(shader rl.Shader) *viewModel {
 	v := &viewModel{shapes: weaponModels()}
 	for kind, shape := range v.shapes {
 		if shape != nil {
-			v.models[kind] = render.NewBoxModel(shape.boxes, shader)
+			v.models[kind] = render.NewBoxModel(append(append([]render.Box(nil), shape.gun...), shape.arms...), shader)
+			v.held[kind] = render.NewBoxModel(shape.gun, shader)
 		}
 	}
 	return v
 }
 
 func (v *viewModel) close() {
-	for _, model := range v.models {
+	for kind, model := range v.models {
 		if model != nil {
 			model.Close()
+			v.held[kind].Close()
 		}
 	}
+}
+
+const (
+	// A soldier holds its weapon at its right side, at the height of the
+	// chest and somewhat forward, along its aim; a little larger than in
+	// first person, to suit the chunky robot.
+	heldScale = 1.2
+)
+
+var heldOffset = physics.V(0.26, 1.0, 0.3)
+
+// heldTransform places the weapon a soldier carries.
+func heldTransform(soldier *game.Soldier) rl.Matrix {
+	right := physics.V(float32(math.Cos(float64(soldier.Yaw))), 0, float32(math.Sin(float64(soldier.Yaw))))
+	forward := game.ViewDirection(soldier.Yaw, 0)
+	at := soldier.Position.Add(right.Mul(heldOffset.X)).Add(physics.V(0, heldOffset.Y, 0)).Add(forward.Mul(heldOffset.Z))
+	transform := rl.MatrixMultiply(rl.MatrixScale(heldScale, heldScale, heldScale), rl.MatrixRotateX(soldier.Pitch))
+	transform = rl.MatrixMultiply(transform, rl.MatrixRotateY(-soldier.Yaw))
+	return rl.MatrixMultiply(transform, rl.MatrixTranslate(at.X, at.Y, at.Z))
+}
+
+// drawHeld draws the weapon a soldier carries, if any.
+func (v *viewModel) drawHeld(soldier *game.Soldier, tint color.RGBA) {
+	if kind := soldier.Arsenal.Weapon(); v.shapeOf(kind) != nil {
+		v.held[kind].Draw(heldTransform(soldier), tint)
+	}
+}
+
+// heldMuzzle is where the weapon a soldier carries fires from.
+func (v *viewModel) heldMuzzle(soldier *game.Soldier) (physics.Vec3, bool) {
+	shape := v.shapeOf(soldier.Arsenal.Weapon())
+	if shape == nil {
+		return physics.Vec3{}, false
+	}
+	point := rl.Vector3Transform(render.Vector(render.Forward(shape.muzzle)), heldTransform(soldier))
+	return physics.V(point.X, point.Y, point.Z), true
 }
 
 // fired starts the kick of the model and the muzzle flash.

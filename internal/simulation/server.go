@@ -280,6 +280,7 @@ func (s *Server) movePlayer(p *player) error {
 	}
 	if step.Events.Has(game.EventFired) {
 		s.shots = append(s.shots, pendingShot{shooter: soldier.ID, team: soldier.Team, shot: step.Shot, view: s.viewTime(command)})
+		soldier.Shots++
 		s.profile.shots++
 	}
 	if soldier.Position.Y < fallLimit {

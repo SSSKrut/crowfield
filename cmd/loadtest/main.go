@@ -141,7 +141,7 @@ func run(count int, duration, report time.Duration, address, fingerprint string,
 
 type summary struct {
 	clients, ticks, snapshots, jumps, corrections, unresolved, late int
-	shots, weaponCorrections                                        int
+	shots, weaponCorrections, hits, kills, deaths                   int
 	bytes                                                           int64
 	seconds                                                         float64
 	lowestLead                                                      float64
@@ -150,10 +150,10 @@ type summary struct {
 
 func (s summary) String() string {
 	perClient := float64(s.bytes) / 1024 / max(s.seconds, 1e-3) / float64(max(1, s.clients))
-	return fmt.Sprintf("clients=%d ticks/s=%.1f snapshots/s=%.1f snapshots=%.1fKB/s/client jumps=%d corrections=%d (largest %.3fm, weapons only %d) shots=%d late=%d unresolved=%d lowest_lead=%.2f",
+	return fmt.Sprintf("clients=%d ticks/s=%.1f snapshots/s=%.1f snapshots=%.1fKB/s/client jumps=%d corrections=%d (largest %.3fm, weapons only %d) shots=%d hits=%d kills=%d deaths=%d late=%d unresolved=%d lowest_lead=%.2f",
 		s.clients, float64(s.ticks)/max(s.seconds, 1e-3)/float64(max(1, s.clients)),
 		float64(s.snapshots)/max(s.seconds, 1e-3)/float64(max(1, s.clients)), perClient,
-		s.jumps, s.corrections, s.largestCorrection, s.weaponCorrections, s.shots, s.late, s.unresolved, s.lowestLead)
+		s.jumps, s.corrections, s.largestCorrection, s.weaponCorrections, s.shots, s.hits, s.kills, s.deaths, s.late, s.unresolved, s.lowestLead)
 }
 
 // summarize adds up the clients since the previous stats, or from the start
@@ -174,6 +174,9 @@ func summarize(players []*client.Headless, previous []client.HeadlessStats) summ
 		sum.late += current.Late - before.Late
 		sum.shots += current.Shots - before.Shots
 		sum.weaponCorrections += current.WeaponCorrections - before.WeaponCorrections
+		sum.hits += current.Hits - before.Hits
+		sum.kills += current.Kills - before.Kills
+		sum.deaths += current.Deaths - before.Deaths
 		sum.lowestLead = min(sum.lowestLead, current.Lead)
 		sum.largestCorrection = max(sum.largestCorrection, current.LargestCorrection)
 	}

@@ -31,6 +31,14 @@ func sampleMessages() []Message {
 		&Snapshot{Sequence: 1, ServerTick: 2, Player: PlayerState{InputLead: -3}},
 		&Snapshot{Sequence: 3, ServerTick: 4, Player: PlayerState{Soldier: soldierID(1, 1), Health: game.MaxHealth, Arsenal: readyArsenal()}},
 		&Snapshot{Sequence: 5, ServerTick: 6, Player: PlayerState{Soldier: soldierID(2, 3), Respawn: 299, Arsenal: readyArsenal()}},
+		&HitConfirm{Tick: math.MaxUint32, Victim: soldierID(4095, 15), Zone: game.ZoneHead, Damage: 255, Killed: true},
+		&HitConfirm{Tick: 1, Victim: soldierID(0, 1)},
+		&Damage{Tick: 77, Attacker: soldierID(17, 2), Yaw: 255, Zone: game.ZoneLimb, Damage: 19},
+		&Death{
+			Tick: 123, Victim: soldierID(3, 4), Killer: soldierID(5, 6), VictimTeam: game.TeamRed, KillerTeam: game.TeamBlue,
+			VictimName: "Ворон", KillerName: "Dummy 12", Weapon: game.WeaponRifle, Zone: game.ZoneHead,
+		},
+		&Death{Tick: 9, Victim: soldierID(3, 4), Killer: soldierID(3, 4)},
 	}
 }
 
@@ -81,6 +89,7 @@ func sampleSnapshot(soldiers int) *Snapshot {
 		state := SoldierState{
 			ID: soldierID(slot, uint8(1+i%15)), Bot: i%2 == 1, Team: game.Team(i % 3), Flags: SoldierFlags(i * 37),
 			Position: [3]int32{-1 << 20, (1 << 18) - 1 - int32(i), int32(i * 1000)}, Weapon: uint8(i % 16),
+			Shots: uint8(15 - i%16), HitCount: uint8(i % 8), HitBox: uint8(7 - i%8), HitYaw: uint8(63 - i%64),
 		}
 		if state.Bot {
 			state.Velocity, state.Yaw, state.Pitch = [3]int16{-512, 0, int16(4 * i)}, uint16(4080-16*i), int16(-512+16*i)
@@ -93,7 +102,7 @@ func sampleSnapshot(soldiers int) *Snapshot {
 			record = delta(state, uint8(1+i), FieldMove|FieldAngles)
 			record.Move = [3]int32{int32(i) - 30, 0, 1 << 14}
 		case 2:
-			record = delta(state, MaxBaseAge, FieldPosition|FieldVelocity|FieldFlags|FieldWeapon)
+			record = delta(state, MaxBaseAge, FieldPosition|FieldVelocity|FieldFlags|FieldWeapon|FieldShots|FieldHit)
 		case 3:
 			record = delta(state, uint8(i), 0)
 		}
@@ -120,6 +129,12 @@ func delta(state SoldierState, base uint8, fields RecordFields) SoldierRecord {
 	}
 	if fields&FieldWeapon != 0 {
 		carried.Weapon = state.Weapon
+	}
+	if fields&FieldShots != 0 {
+		carried.Shots = state.Shots
+	}
+	if fields&FieldHit != 0 {
+		carried.HitCount, carried.HitBox, carried.HitYaw = state.HitCount, state.HitBox, state.HitYaw
 	}
 	return SoldierRecord{State: carried, Base: base, Fields: fields}
 }
@@ -196,7 +211,7 @@ func TestDecodeRejectsDamagedMessages(t *testing.T) {
 	if err := (&Hello{}).Decode(ready); err == nil {
 		t.Error("hello decoded a ready message")
 	}
-	for _, data := range [][]byte{{0}, {byte(MessageRespawn) + 1}} {
+	for _, data := range [][]byte{{0}, {byte(MessageDeath) + 1}} {
 		if _, err := PeekType(data); !errors.Is(err, ErrUnknownMessage) {
 			t.Errorf("type %d: %v", data[0], err)
 		}

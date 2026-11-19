@@ -12,7 +12,7 @@ import (
 	"fmt"
 )
 
-const ProtocolVersion = 8
+const ProtocolVersion = 9
 
 type MessageType uint8
 
@@ -24,6 +24,9 @@ const (
 	MessageInput
 	MessageSnapshot
 	MessageRespawn
+	MessageHitConfirm
+	MessageDamage
+	MessageDeath
 )
 
 func (t MessageType) String() string {
@@ -42,6 +45,12 @@ func (t MessageType) String() string {
 		return "snapshot"
 	case MessageRespawn:
 		return "respawn"
+	case MessageHitConfirm:
+		return "hit confirm"
+	case MessageDamage:
+		return "damage"
+	case MessageDeath:
+		return "death"
 	}
 	return fmt.Sprintf("message %d", uint8(t))
 }
@@ -65,7 +74,7 @@ func PeekType(data []byte) (MessageType, error) {
 		return 0, ErrShortMessage
 	}
 	t := MessageType(data[0])
-	if t < MessageHello || t > MessageRespawn {
+	if t < MessageHello || t > MessageDeath {
 		return t, ErrUnknownMessage
 	}
 	return t, nil
@@ -88,6 +97,12 @@ func New(t MessageType) (Message, error) {
 		return &Snapshot{}, nil
 	case MessageRespawn:
 		return &Respawn{}, nil
+	case MessageHitConfirm:
+		return &HitConfirm{}, nil
+	case MessageDamage:
+		return &Damage{}, nil
+	case MessageDeath:
+		return &Death{}, nil
 	}
 	return nil, ErrUnknownMessage
 }

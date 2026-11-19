@@ -26,6 +26,11 @@ const (
 	removedCountBits = 8
 	healthBits       = 7
 	respawnBits      = 16
+	shotsBits        = 4
+	hitCountBits     = 3
+	hitBoxBits       = 3
+	hitYawBits       = 6
+	hitBits          = hitCountBits + hitBoxBits + hitYawBits
 	teamBits         = 2
 	flagsBits        = 8
 	horizontalBits   = 21
@@ -64,6 +69,14 @@ type SoldierState struct {
 	Yaw      uint16   // 12 bits of a full turn; a bot's in steps of 16
 	Pitch    int16    // 10 bits over [-π/2, π/2]; a bot's in steps of 16
 	Weapon   uint8    // 4 bits: the kind in its hands
+	// Shots counts the rounds fired, in 4 bits; clients play the shots
+	// between two states from the difference.
+	Shots uint8
+	// The last hit taken: a counter in 3 bits, the hitbox in 3 and the yaw
+	// the shot travelled along in 6.
+	HitCount uint8
+	HitBox   uint8
+	HitYaw   uint8
 }
 
 // NewSoldierState quantizes a soldier. It fails when the soldier is outside the
@@ -71,7 +84,9 @@ type SoldierState struct {
 func NewSoldierState(soldier *game.Soldier) (SoldierState, error) {
 	state := SoldierState{
 		ID: soldier.ID, Team: soldier.Team, Bot: soldier.Controller.Kind == game.ControllerBot,
-		Weapon: uint8(soldier.Arsenal.Weapon()),
+		Weapon: uint8(soldier.Arsenal.Weapon()), Shots: soldier.Shots & (1<<shotsBits - 1),
+		HitCount: soldier.LastHit.Count & (1<<hitCountBits - 1), HitBox: soldier.LastHit.Box & (1<<hitBoxBits - 1),
+		HitYaw: uint8(quantizeTurn(soldier.LastHit.Yaw, hitYawBits) >> (yawBits - hitYawBits)),
 	}
 	if soldier.Alive {
 		state.Flags |= SoldierAlive
@@ -130,6 +145,8 @@ func (s SoldierState) Apply(soldier *game.Soldier) {
 	pitchLimit := int32(1)<<(pitchBits-1) - 1
 	soldier.Pitch = float32(max(-pitchLimit, int32(s.Pitch))) * (math.Pi / 2 / float32(pitchLimit))
 	soldier.Arsenal = game.Holding(game.WeaponKind(s.Weapon))
+	soldier.Shots = s.Shots
+	soldier.LastHit = game.HitMark{Count: s.HitCount, Box: s.HitBox, Yaw: float32(s.HitYaw) * (2 * math.Pi / (1 << hitYawBits))}
 }
 
 func (s *SoldierState) validate() error {
@@ -143,6 +160,8 @@ func (s *SoldierState) validate() error {
 		return fmt.Errorf("soldier %#04x is outside the map range", s.ID)
 	case s.Yaw >= 1<<yawBits || s.Weapon >= 1<<weaponBits:
 		return fmt.Errorf("soldier %#04x yaw or weapon is out of range", s.ID)
+	case s.Shots >= 1<<shotsBits || s.HitCount >= 1<<hitCountBits || s.HitBox >= 1<<hitBoxBits || s.HitYaw >= 1<<hitYawBits:
+		return fmt.Errorf("soldier %#04x shots or last hit is out of range", s.ID)
 	}
 	if s.Bot {
 		if s.Velocity[1] != 0 || !onGrid(int32(s.Velocity[0]), botVelocityStep, botVelocityBits) ||
@@ -215,6 +234,18 @@ func (s *SoldierState) writeAngles(w *BitWriter) {
 	}
 	w.WriteBits(uint32(s.Yaw), yawBits)
 	w.WriteSigned(int32(s.Pitch), pitchBits)
+}
+
+func (s *SoldierState) writeHit(w *BitWriter) {
+	w.WriteBits(uint32(s.HitCount), hitCountBits)
+	w.WriteBits(uint32(s.HitBox), hitBoxBits)
+	w.WriteBits(uint32(s.HitYaw), hitYawBits)
+}
+
+func (s *SoldierState) readHit(r *BitReader) {
+	s.HitCount = uint8(r.ReadBits(hitCountBits))
+	s.HitBox = uint8(r.ReadBits(hitBoxBits))
+	s.HitYaw = uint8(r.ReadBits(hitYawBits))
 }
 
 func (s *SoldierState) readAngles(r *BitReader) {

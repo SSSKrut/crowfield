@@ -17,17 +17,20 @@ func TestRecordSizes(t *testing.T) {
 	walked.Position[0] += PositionUnitsPerMetre // a metre since the base
 	turned := walked
 	turned.Velocity[2], turned.Yaw = 160, 512
+	fired := turned
+	fired.Shots, fired.HitCount, fired.HitBox = 3, 1, 1
 	for _, c := range []struct {
 		name  string
 		state SoldierState
 		base  *SoldierState
 		bits  int
 	}{
-		{"full human", human, nil, 150},
-		{"full bot", bot, nil, 122},
-		{"bot that stood still", bot, &bot, 23},
-		{"bot that walked a metre", walked, &bot, 60},
-		{"bot that walked and turned", turned, &bot, 90},
+		{"full human", human, nil, 166},
+		{"full bot", bot, nil, 138},
+		{"bot that stood still", bot, &bot, 25},
+		{"bot that walked a metre", walked, &bot, 62},
+		{"bot that walked and turned", turned, &bot, 92},
+		{"bot that also fired and was hit", fired, &bot, 108},
 	} {
 		record := NewSoldierRecord(c.state, c.base, 3)
 		// After a record in the previous slot, as a full datagram mostly has.

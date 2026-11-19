@@ -27,7 +27,7 @@ const (
 	moveWidthBits = 4
 	maxMoveBits   = 1 << moveWidthBits
 	// minRecordBits is the smallest record: a delta that changes nothing.
-	minRecordBits = 1 + shortGapBits + generationBits + 1 + baseBits + 2 + 4
+	minRecordBits = 1 + shortGapBits + generationBits + 1 + baseBits + 2 + 6
 )
 
 // Position modes of a delta record.
@@ -38,7 +38,7 @@ const (
 )
 
 // RecordFields lists what a delta record carries.
-type RecordFields uint8
+type RecordFields uint16
 
 const (
 	// FieldPosition carries the whole position and FieldMove its difference
@@ -49,7 +49,9 @@ const (
 	FieldAngles
 	FieldFlags
 	FieldWeapon
-	knownFields = FieldWeapon<<1 - 1
+	FieldShots
+	FieldHit
+	knownFields = FieldHit<<1 - 1
 )
 
 var ErrMissingBase = errors.New("the base of a delta is missing")
@@ -97,6 +99,12 @@ func NewSoldierRecord(state SoldierState, base *SoldierState, age int) SoldierRe
 	if state.Weapon != base.Weapon {
 		record.Fields |= FieldWeapon
 	}
+	if state.Shots != base.Shots {
+		record.Fields |= FieldShots
+	}
+	if state.HitCount != base.HitCount || state.HitBox != base.HitBox || state.HitYaw != base.HitYaw {
+		record.Fields |= FieldHit
+	}
 	return record
 }
 
@@ -130,6 +138,12 @@ func (r *SoldierRecord) Resolve(base *SoldierState) (SoldierState, error) {
 	if r.Fields&FieldWeapon != 0 {
 		state.Weapon = r.State.Weapon
 	}
+	if r.Fields&FieldShots != 0 {
+		state.Shots = r.State.Shots
+	}
+	if r.Fields&FieldHit != 0 {
+		state.HitCount, state.HitBox, state.HitYaw = r.State.HitCount, r.State.HitBox, r.State.HitYaw
+	}
 	return state, state.validate()
 }
 
@@ -155,9 +169,9 @@ func (r *SoldierRecord) bodyBits() int {
 	s := &r.State
 	bits := generationBits + 1 + baseBits
 	if r.Base == 0 {
-		return bits + teamBits + flagsBits + positionBits + s.velocityBits() + s.angleBits() + weaponBits
+		return bits + teamBits + flagsBits + positionBits + s.velocityBits() + s.angleBits() + weaponBits + shotsBits + hitBits
 	}
-	bits += 2 + 4
+	bits += 2 + 6
 	switch {
 	case r.Fields&FieldPosition != 0:
 		bits += positionBits
@@ -175,6 +189,12 @@ func (r *SoldierRecord) bodyBits() int {
 	}
 	if r.Fields&FieldWeapon != 0 {
 		bits += weaponBits
+	}
+	if r.Fields&FieldShots != 0 {
+		bits += shotsBits
+	}
+	if r.Fields&FieldHit != 0 {
+		bits += hitBits
 	}
 	return bits
 }
@@ -203,6 +223,8 @@ func (r *SoldierRecord) writeBody(w *BitWriter) {
 		s.writeVelocity(w)
 		s.writeAngles(w)
 		w.WriteBits(uint32(s.Weapon), weaponBits)
+		w.WriteBits(uint32(s.Shots), shotsBits)
+		s.writeHit(w)
 		return
 	}
 	switch {
@@ -235,6 +257,14 @@ func (r *SoldierRecord) writeBody(w *BitWriter) {
 	if r.Fields&FieldWeapon != 0 {
 		w.WriteBits(uint32(s.Weapon), weaponBits)
 	}
+	w.WriteBool(r.Fields&FieldShots != 0)
+	if r.Fields&FieldShots != 0 {
+		w.WriteBits(uint32(s.Shots), shotsBits)
+	}
+	w.WriteBool(r.Fields&FieldHit != 0)
+	if r.Fields&FieldHit != 0 {
+		s.writeHit(w)
+	}
 }
 
 // read reads a record into a zero one. Every value has one encoding: a long
@@ -264,6 +294,8 @@ func (r *SoldierRecord) read(reader *BitReader, previous int) {
 		s.readVelocity(reader)
 		s.readAngles(reader)
 		s.Weapon = uint8(reader.ReadBits(weaponBits))
+		s.Shots = uint8(reader.ReadBits(shotsBits))
+		s.readHit(reader)
 	} else {
 		switch reader.ReadBits(2) {
 		case positionKept:
@@ -297,6 +329,14 @@ func (r *SoldierRecord) read(reader *BitReader, previous int) {
 		if reader.ReadBool() {
 			r.Fields |= FieldWeapon
 			s.Weapon = uint8(reader.ReadBits(weaponBits))
+		}
+		if reader.ReadBool() {
+			r.Fields |= FieldShots
+			s.Shots = uint8(reader.ReadBits(shotsBits))
+		}
+		if reader.ReadBool() {
+			r.Fields |= FieldHit
+			s.readHit(reader)
 		}
 	}
 	if reader.Err() == nil {
