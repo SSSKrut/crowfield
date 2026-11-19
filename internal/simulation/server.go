@@ -2,7 +2,6 @@ package simulation
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"time"
 
@@ -15,13 +14,10 @@ type Server struct {
 	settings config.Server
 	world    *physics.World
 	bodies   []*physics.Body
-	tick     uint64
+	tick     game.Tick
 }
 
 func NewServer(settings config.Server) (*Server, error) {
-	if settings.TickRate <= 0 {
-		return nil, fmt.Errorf("tick rate must be positive")
-	}
 	if err := physics.Init(); err != nil {
 		return nil, err
 	}
@@ -62,8 +58,6 @@ func (s *Server) Close() error {
 }
 
 func (s *Server) Run(ctx context.Context) error {
-	step := time.Second / time.Duration(s.settings.TickRate)
-	fixedDelta := float32(1.0 / float64(s.settings.TickRate))
 	next := time.Now()
 	lastStats := time.Now()
 	var maxTick time.Duration
@@ -75,7 +69,7 @@ func (s *Server) Run(ctx context.Context) error {
 		default:
 		}
 		started := time.Now()
-		if err := s.world.Step(fixedDelta); err != nil {
+		if err := s.world.Step(game.TickDelta); err != nil {
 			return err
 		}
 		s.tick++
@@ -83,9 +77,9 @@ func (s *Server) Run(ctx context.Context) error {
 		if elapsed > maxTick {
 			maxTick = elapsed
 		}
-		next = next.Add(step)
+		next = next.Add(game.TickDuration)
 		if time.Since(lastStats) >= s.settings.StatsInterval {
-			log.Printf("server running: tick=%d rate=%d bodies=%d max_tick=%s", s.tick, s.settings.TickRate, len(s.bodies), maxTick)
+			log.Printf("server running: tick=%d rate=%d bodies=%d max_tick=%s", s.tick, game.TickRate, len(s.bodies), maxTick)
 			lastStats = time.Now()
 			maxTick = 0
 		}

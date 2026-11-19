@@ -9,6 +9,7 @@ type Client struct {
 	Movement         bool
 	Cycles           int
 	Debug            bool
+	Tuning           string
 	MouseSensitivity float32
 	FieldOfView      float32
 }

@@ -6,7 +6,10 @@ package physics
 */
 import "C"
 
-import "unsafe"
+import (
+	"errors"
+	"unsafe"
+)
 
 type Ragdoll struct {
 	world *World
@@ -19,11 +22,11 @@ func (w *World) CreateRagdoll(parts []RagdollPart, linearVelocity, rootImpulse V
 		return nil, ErrClosed
 	}
 	if len(parts) == 0 {
-		return nil, lastError()
+		return nil, errors.New("ragdoll has no parts")
 	}
 	memory := C.malloc(C.size_t(len(parts)) * C.size_t(unsafe.Sizeof(C.RFRagdollPart{})))
 	if memory == nil {
-		return nil, lastError()
+		return nil, errors.New("out of memory for ragdoll parts")
 	}
 	defer C.free(memory)
 	cParts := unsafe.Slice((*C.RFRagdollPart)(memory), len(parts))
@@ -40,15 +43,17 @@ func (w *World) CreateRagdoll(parts []RagdollPart, linearVelocity, rootImpulse V
 			joint_limit: C.float(part.JointLimit),
 		}
 	}
+	var nativeErr C.RFError
 	ptr := C.rf_ragdoll_create(
 		w.ptr,
 		(*C.RFRagdollPart)(memory),
 		C.size_t(len(parts)),
 		cVec(linearVelocity),
 		cVec(rootImpulse),
+		&nativeErr,
 	)
 	if ptr == nil {
-		return nil, lastError()
+		return nil, goError(&nativeErr)
 	}
 	ragdoll := &Ragdoll{world: w, ptr: ptr, count: len(parts)}
 	w.ragdolls[ragdoll] = struct{}{}
@@ -71,7 +76,7 @@ func (r *Ragdoll) Transforms() ([]Transform, error) {
 	}
 	memory := C.malloc(C.size_t(r.count) * C.size_t(unsafe.Sizeof(C.RFTransform{})))
 	if memory == nil {
-		return nil, lastError()
+		return nil, errors.New("out of memory for ragdoll transforms")
 	}
 	defer C.free(memory)
 	C.rf_ragdoll_get_transforms(r.ptr, (*C.RFTransform)(memory), C.size_t(r.count))

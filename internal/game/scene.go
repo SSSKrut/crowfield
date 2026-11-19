@@ -16,7 +16,7 @@ func PrototypeScene() Scene {
 		return physics.Transform{Position: position, Rotation: physics.QuatFromAxisAngle(axis, angle)}
 	}
 	return Scene{
-		Spawn: physics.V(0, 1.1, 7),
+		Spawn: physics.V(0, 0.2, 7),
 		Boxes: []physics.BoxDesc{
 			{HalfExtents: physics.V(15, 0.25, 15), Transform: identity(physics.V(0, -0.25, 0))},
 			{HalfExtents: physics.V(2.5, 0.2, 3), Transform: rotated(physics.V(4, 0.65, 0), physics.V(1, 0, 0), -0.22)},

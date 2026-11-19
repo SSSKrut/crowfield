@@ -8,13 +8,13 @@ import (
 	"syscall"
 
 	"ravenfield/internal/config"
+	"ravenfield/internal/game"
 	"ravenfield/internal/physics"
 	"ravenfield/internal/simulation"
 )
 
 func main() {
 	settings := config.DefaultServer()
-	flag.IntVar(&settings.TickRate, "tick-rate", settings.TickRate, "simulation ticks per second")
 	flag.DurationVar(&settings.StatsInterval, "stats", settings.StatsInterval, "statistics logging interval")
 	flag.DurationVar(&settings.RunDuration, "duration", 0, "stop after this duration")
 	flag.Parse()
@@ -38,6 +38,6 @@ func run(settings config.Server) error {
 	}
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	log.Printf("server started: tick_rate=%d", settings.TickRate)
+	log.Printf("server started: tick_rate=%d", game.TickRate)
 	return server.Run(ctx)
 }

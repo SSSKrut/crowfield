@@ -20,30 +20,71 @@
 #include <Jolt/Physics/Constraints/PointConstraint.h>
 #include <Jolt/Physics/Constraints/SwingTwistConstraint.h>
 #include <Jolt/Physics/PhysicsSystem.h>
+#include <Jolt/Physics/StateRecorderImpl.h>
 #include <Jolt/RegisterTypes.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
-#include <string>
+#include <cstdio>
+#include <cstring>
 #include <thread>
 #include <utility>
 #include <vector>
 
 namespace {
 
-constexpr JPH::ObjectLayer layer_static = 0;
-constexpr JPH::ObjectLayer layer_moving = 1;
-constexpr JPH::ObjectLayer layer_cosmetic = 2;
 constexpr JPH::BroadPhaseLayer broad_static(0);
 constexpr JPH::BroadPhaseLayer broad_moving(1);
 constexpr JPH::BroadPhaseLayer broad_cosmetic(2);
 constexpr JPH::uint broad_layer_count = 3;
 
-thread_local std::string last_error;
-bool initialized = false;
+constexpr uint32_t bit(RFLayer layer) {
+    return 1u << layer;
+}
 
-void set_error(const std::string &message) {
-    last_error = message;
+// Which layers each layer collides with. Characters do not collide with each
+// other: remote soldiers are shown in the past, so a hard contact would break
+// prediction. Cosmetic ragdolls only touch the world and each other.
+constexpr uint32_t layer_collides[RF_LAYER_COUNT] = {
+    /* static    */ bit(RF_LAYER_CHARACTER) | bit(RF_LAYER_VEHICLE) | bit(RF_LAYER_DYNAMIC) | bit(RF_LAYER_COSMETIC),
+    /* character */ bit(RF_LAYER_STATIC) | bit(RF_LAYER_VEHICLE) | bit(RF_LAYER_DYNAMIC),
+    /* vehicle   */ bit(RF_LAYER_STATIC) | bit(RF_LAYER_CHARACTER) | bit(RF_LAYER_VEHICLE) | bit(RF_LAYER_DYNAMIC),
+    /* dynamic   */ bit(RF_LAYER_STATIC) | bit(RF_LAYER_CHARACTER) | bit(RF_LAYER_VEHICLE) | bit(RF_LAYER_DYNAMIC),
+    /* cosmetic  */ bit(RF_LAYER_STATIC) | bit(RF_LAYER_COSMETIC),
+};
+
+constexpr bool layer_table_is_symmetric() {
+    for (int first = 0; first < RF_LAYER_COUNT; ++first) {
+        for (int second = 0; second < RF_LAYER_COUNT; ++second) {
+            if (((layer_collides[first] >> second) & 1u) != ((layer_collides[second] >> first) & 1u)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+static_assert(layer_table_is_symmetric(), "layer collision table must be symmetric");
+
+JPH::BroadPhaseLayer broad_layer(JPH::ObjectLayer layer) {
+    switch (layer) {
+    case RF_LAYER_STATIC:
+        return broad_static;
+    case RF_LAYER_COSMETIC:
+        return broad_cosmetic;
+    default:
+        return broad_moving;
+    }
+}
+
+bool initialized = false;
+JPH::JobSystemThreadPool *jobs = nullptr;
+std::atomic<int> open_worlds{0};
+
+void set_error(RFError *error, const char *message) {
+    if (error != nullptr) {
+        std::snprintf(error->message, sizeof(error->message), "%s", message);
+    }
 }
 
 JPH::Vec3 vec(RFVec3 value) {
@@ -70,6 +111,17 @@ RFTransform identity_transform() {
     return {{0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 1.0f}};
 }
 
+// Broad phase layers that contain at least one layer from the mask.
+uint32_t broad_mask(uint32_t layer_mask) {
+    uint32_t mask = 0;
+    for (JPH::ObjectLayer layer = 0; layer < RF_LAYER_COUNT; ++layer) {
+        if ((layer_mask >> layer) & 1u) {
+            mask |= 1u << broad_layer(layer).GetValue();
+        }
+    }
+    return mask;
+}
+
 class BroadPhaseLayers final : public JPH::BroadPhaseLayerInterface {
 public:
     JPH::uint GetNumBroadPhaseLayers() const override {
@@ -77,43 +129,68 @@ public:
     }
 
     JPH::BroadPhaseLayer GetBroadPhaseLayer(JPH::ObjectLayer layer) const override {
-        switch (layer) {
-        case layer_static:
-            return broad_static;
-        case layer_moving:
-            return broad_moving;
-        default:
-            return broad_cosmetic;
-        }
+        return broad_layer(layer);
     }
 };
 
 class ObjectBroadPhaseFilter final : public JPH::ObjectVsBroadPhaseLayerFilter {
 public:
-    bool ShouldCollide(JPH::ObjectLayer layer, JPH::BroadPhaseLayer broad_layer) const override {
-        switch (layer) {
-        case layer_static:
-            return broad_layer == broad_moving || broad_layer == broad_cosmetic;
-        case layer_moving:
-            return broad_layer == broad_static || broad_layer == broad_moving;
-        default:
-            return broad_layer == broad_static || broad_layer == broad_cosmetic;
-        }
+    bool ShouldCollide(JPH::ObjectLayer layer, JPH::BroadPhaseLayer broad) const override {
+        return layer < RF_LAYER_COUNT && ((broad_mask(layer_collides[layer]) >> broad.GetValue()) & 1u) != 0;
     }
 };
 
 class ObjectPairFilter final : public JPH::ObjectLayerPairFilter {
 public:
     bool ShouldCollide(JPH::ObjectLayer first, JPH::ObjectLayer second) const override {
-        if (first == layer_static) {
-            return second != layer_static;
-        }
-        if (first == layer_moving) {
-            return second == layer_static || second == layer_moving;
-        }
-        return second == layer_static || second == layer_cosmetic;
+        return first < RF_LAYER_COUNT && second < RF_LAYER_COUNT && ((layer_collides[first] >> second) & 1u) != 0;
     }
 };
+
+class MaskBroadPhaseFilter final : public JPH::BroadPhaseLayerFilter {
+public:
+    explicit MaskBroadPhaseFilter(uint32_t layer_mask) : mask(broad_mask(layer_mask)) {}
+
+    bool ShouldCollide(JPH::BroadPhaseLayer layer) const override {
+        return ((mask >> layer.GetValue()) & 1u) != 0;
+    }
+
+private:
+    uint32_t mask;
+};
+
+class MaskObjectLayerFilter final : public JPH::ObjectLayerFilter {
+public:
+    explicit MaskObjectLayerFilter(uint32_t layer_mask) : mask(layer_mask) {}
+
+    bool ShouldCollide(JPH::ObjectLayer layer) const override {
+        return layer < RF_LAYER_COUNT && ((mask >> layer) & 1u) != 0;
+    }
+
+private:
+    uint32_t mask;
+};
+
+void cast_ray(
+    const JPH::NarrowPhaseQuery &query, const RFRay &ray, const JPH::BroadPhaseLayerFilter &broad_filter,
+    const JPH::ObjectLayerFilter &object_filter, RFRayHit &out_hit) {
+    out_hit = {};
+    const JPH::Vec3 direction = vec(ray.direction).NormalizedOr(JPH::Vec3::sZero());
+    if (ray.distance <= 0.0f || direction.IsNearZero()) {
+        return;
+    }
+    JPH::RRayCast cast(rvec(ray.origin), direction * ray.distance);
+    JPH::RayCastResult result;
+    if (!query.CastRay(cast, result, broad_filter, object_filter)) {
+        return;
+    }
+    out_hit.position = vec(cast.GetPointOnRay(result.mFraction));
+    out_hit.fraction = result.mFraction;
+    out_hit.body_id = result.mBodyID.GetIndexAndSequenceNumber();
+    out_hit.hit = 1;
+}
+
+constexpr size_t rays_per_job = 32;
 
 JPH::Vec3 perpendicular(JPH::Vec3Arg axis) {
     JPH::Vec3 normalized = axis.NormalizedOr(JPH::Vec3::sAxisY());
@@ -131,17 +208,13 @@ void forget(std::vector<T *> &items, T *item) {
 } // namespace
 
 struct RFWorld {
-    RFWorld()
-        : temp_allocator(16 * 1024 * 1024),
-          jobs(JPH::cMaxPhysicsJobs, JPH::cMaxPhysicsBarriers,
-               static_cast<int>(std::max(1u, std::thread::hardware_concurrency()) - 1)) {
+    RFWorld() : temp_allocator(16 * 1024 * 1024) {
         system.Init(4096, 0, 4096, 4096, broad_layers, object_broad_filter, object_pair_filter);
         system.SetGravity(JPH::Vec3(0.0f, -9.81f, 0.0f));
     }
 
     JPH::PhysicsSystem system;
     JPH::TempAllocatorImpl temp_allocator;
-    JPH::JobSystemThreadPool jobs;
     BroadPhaseLayers broad_layers;
     ObjectBroadPhaseFilter object_broad_filter;
     ObjectPairFilter object_pair_filter;
@@ -167,37 +240,48 @@ struct RFRagdoll {
     std::vector<JPH::Ref<JPH::Constraint>> constraints;
 };
 
-int rf_initialize(void) {
+int rf_initialize(RFError *error) {
     if (initialized) {
         return 1;
     }
     JPH::RegisterDefaultAllocator();
     JPH::Factory::sInstance = new JPH::Factory();
     JPH::RegisterTypes();
+    // Two worlds (the embedded server and the client) may step at the same
+    // time, so the pool has room for two physics updates plus ray batches.
+    const int threads = static_cast<int>(std::max(1u, std::thread::hardware_concurrency()) - 1);
+    jobs = new JPH::JobSystemThreadPool(2 * JPH::cMaxPhysicsJobs, JPH::cMaxPhysicsBarriers, threads);
     initialized = true;
     return 1;
 }
 
-void rf_shutdown(void) {
+int rf_shutdown(RFError *error) {
     if (!initialized) {
-        return;
+        return 1;
     }
+    if (open_worlds.load() != 0) {
+        char message[96];
+        std::snprintf(message, sizeof(message), "%d physics worlds are still open", open_worlds.load());
+        set_error(error, message);
+        return 0;
+    }
+    delete jobs;
+    jobs = nullptr;
     JPH::UnregisterTypes();
     delete JPH::Factory::sInstance;
     JPH::Factory::sInstance = nullptr;
     initialized = false;
+    return 1;
 }
 
-const char *rf_last_error(void) {
-    return last_error.c_str();
-}
-
-RFWorld *rf_world_create(void) {
+RFWorld *rf_world_create(RFError *error) {
     if (!initialized) {
-        set_error("Jolt is not initialized");
+        set_error(error, "Jolt is not initialized");
         return nullptr;
     }
-    return new RFWorld();
+    RFWorld *world = new RFWorld();
+    ++open_worlds;
+    return world;
 }
 
 void rf_world_destroy(RFWorld *world) {
@@ -214,52 +298,65 @@ void rf_world_destroy(RFWorld *world) {
         rf_body_destroy(world->bodies.back());
     }
     delete world;
+    --open_worlds;
 }
 
 void rf_world_step(RFWorld *world, float delta_time) {
     if (world == nullptr || delta_time <= 0.0f) {
         return;
     }
-    world->system.Update(delta_time, 1, &world->temp_allocator, &world->jobs);
+    world->system.Update(delta_time, 1, &world->temp_allocator, jobs);
 }
 
-int rf_world_ray_cast(RFWorld *world, RFVec3 origin, RFVec3 direction, float distance, RFRayHit *out_hit) {
-    if (world == nullptr || out_hit == nullptr || distance <= 0.0f) {
+int rf_world_ray_cast(RFWorld *world, RFRay ray, uint32_t layer_mask, RFRayHit *out_hit) {
+    if (world == nullptr || out_hit == nullptr) {
         return 0;
     }
-    JPH::Vec3 normalized = vec(direction).NormalizedOr(JPH::Vec3::sZero());
-    if (normalized.IsNearZero()) {
-        return 0;
-    }
-    JPH::RRayCast ray(rvec(origin), normalized * distance);
-    JPH::RayCastResult result;
-    const bool hit = world->system.GetNarrowPhaseQuery().CastRay(
-        ray,
-        result,
-        world->system.GetDefaultBroadPhaseLayerFilter(layer_moving),
-        world->system.GetDefaultLayerFilter(layer_moving));
-    if (!hit) {
-        return 0;
-    }
-    out_hit->position = vec(ray.GetPointOnRay(result.mFraction));
-    out_hit->fraction = result.mFraction;
-    out_hit->body_id = result.mBodyID.GetIndexAndSequenceNumber();
-    return 1;
+    cast_ray(world->system.GetNarrowPhaseQuery(), ray, MaskBroadPhaseFilter(layer_mask),
+             MaskObjectLayerFilter(layer_mask), *out_hit);
+    return out_hit->hit;
 }
 
-static RFBody *create_body(RFWorld *world, const JPH::Shape *shape, RFTransform transform, int dynamic) {
+void rf_world_ray_cast_batch(RFWorld *world, const RFRay *rays, size_t count, uint32_t layer_mask, RFRayHit *out_hits) {
+    if (world == nullptr || rays == nullptr || out_hits == nullptr || count == 0) {
+        return;
+    }
+    const MaskBroadPhaseFilter broad_filter(layer_mask);
+    const MaskObjectLayerFilter object_filter(layer_mask);
+    const JPH::NarrowPhaseQuery &query = world->system.GetNarrowPhaseQuery();
+    const auto cast_range = [&](size_t begin, size_t end) {
+        for (size_t i = begin; i < end; ++i) {
+            cast_ray(query, rays[i], broad_filter, object_filter, out_hits[i]);
+        }
+    };
+    JPH::JobSystem::Barrier *barrier = count > rays_per_job ? jobs->CreateBarrier() : nullptr;
+    if (barrier == nullptr) {
+        cast_range(0, count);
+        return;
+    }
+    for (size_t begin = 0; begin < count; begin += rays_per_job) {
+        const size_t end = std::min(count, begin + rays_per_job);
+        barrier->AddJob(jobs->CreateJob("RayCastBatch", JPH::Color::sGreen, [&cast_range, begin, end] {
+            cast_range(begin, end);
+        }));
+    }
+    jobs->WaitForJobs(barrier);
+    jobs->DestroyBarrier(barrier);
+}
+
+static RFBody *create_body(RFWorld *world, const JPH::Shape *shape, RFTransform transform, int dynamic, RFError *error) {
     if (world == nullptr || shape == nullptr) {
-        set_error("Invalid body parameters");
+        set_error(error, "Invalid body parameters");
         return nullptr;
     }
     const JPH::EMotionType motion = dynamic ? JPH::EMotionType::Dynamic : JPH::EMotionType::Static;
-    const JPH::ObjectLayer layer = dynamic ? layer_moving : layer_static;
+    const JPH::ObjectLayer layer = dynamic ? RF_LAYER_DYNAMIC : RF_LAYER_STATIC;
     JPH::BodyCreationSettings settings(shape, rvec(transform.position), quat(transform.rotation), motion, layer);
     settings.mFriction = 0.7f;
     JPH::BodyInterface &interface = world->system.GetBodyInterface();
     JPH::BodyID id = interface.CreateAndAddBody(settings, dynamic ? JPH::EActivation::Activate : JPH::EActivation::DontActivate);
     if (id.IsInvalid()) {
-        set_error("Jolt could not create a body");
+        set_error(error, "Jolt could not create a body");
         return nullptr;
     }
     RFBody *body = new RFBody{world, id};
@@ -267,22 +364,22 @@ static RFBody *create_body(RFWorld *world, const JPH::Shape *shape, RFTransform 
     return body;
 }
 
-RFBody *rf_body_create_box(RFWorld *world, RFVec3 half_extents, RFTransform transform, int dynamic) {
+RFBody *rf_body_create_box(RFWorld *world, RFVec3 half_extents, RFTransform transform, int dynamic, RFError *error) {
     if (half_extents.x <= 0.0f || half_extents.y <= 0.0f || half_extents.z <= 0.0f) {
-        set_error("Box extents must be positive");
+        set_error(error, "Box extents must be positive");
         return nullptr;
     }
     JPH::RefConst<JPH::Shape> shape = new JPH::BoxShape(vec(half_extents));
-    return create_body(world, shape.GetPtr(), transform, dynamic);
+    return create_body(world, shape.GetPtr(), transform, dynamic, error);
 }
 
-RFBody *rf_body_create_sphere(RFWorld *world, float radius, RFTransform transform, int dynamic) {
+RFBody *rf_body_create_sphere(RFWorld *world, float radius, RFTransform transform, int dynamic, RFError *error) {
     if (radius <= 0.0f) {
-        set_error("Sphere radius must be positive");
+        set_error(error, "Sphere radius must be positive");
         return nullptr;
     }
     JPH::RefConst<JPH::Shape> shape = new JPH::SphereShape(radius);
-    return create_body(world, shape.GetPtr(), transform, dynamic);
+    return create_body(world, shape.GetPtr(), transform, dynamic, error);
 }
 
 void rf_body_destroy(RFBody *body) {
@@ -294,6 +391,10 @@ void rf_body_destroy(RFBody *body) {
     interface.DestroyBody(body->id);
     forget(body->world->bodies, body);
     delete body;
+}
+
+uint32_t rf_body_get_id(const RFBody *body) {
+    return body == nullptr ? JPH::BodyID().GetIndexAndSequenceNumber() : body->id.GetIndexAndSequenceNumber();
 }
 
 RFTransform rf_body_get_transform(const RFBody *body) {
@@ -335,20 +436,21 @@ int rf_body_is_active(const RFBody *body) {
     return body != nullptr && body->world->system.GetBodyInterface().IsActive(body->id) ? 1 : 0;
 }
 
-RFCharacter *rf_character_create(RFWorld *world, RFVec3 position, float half_height, float radius, float max_slope_radians) {
-    if (world == nullptr || half_height <= 0.0f || radius <= 0.0f) {
-        set_error("Invalid character parameters");
+RFCharacter *rf_character_create(RFWorld *world, RFCharacterDesc desc, RFError *error) {
+    if (world == nullptr || desc.half_height <= 0.0f || desc.radius <= 0.0f || desc.max_strength < 0.0f) {
+        set_error(error, "Invalid character parameters");
         return nullptr;
     }
-    JPH::RefConst<JPH::Shape> shape = new JPH::CapsuleShape(half_height, radius);
+    JPH::RefConst<JPH::Shape> shape = new JPH::CapsuleShape(desc.half_height, desc.radius);
     JPH::Ref<JPH::CharacterVirtualSettings> settings = new JPH::CharacterVirtualSettings();
     settings->mShape = shape;
-    settings->mMaxSlopeAngle = max_slope_radians;
-    settings->mSupportingVolume = JPH::Plane(JPH::Vec3::sAxisY(), -radius);
+    settings->mMaxSlopeAngle = desc.max_slope_radians;
+    settings->mMaxStrength = desc.max_strength;
+    settings->mSupportingVolume = JPH::Plane(JPH::Vec3::sAxisY(), -desc.radius);
     settings->mEnhancedInternalEdgeRemoval = true;
-    settings->mInnerBodyLayer = layer_moving;
+    settings->mInnerBodyLayer = RF_LAYER_CHARACTER;
     JPH::CharacterVirtual *character = new JPH::CharacterVirtual(
-        settings, rvec(position), JPH::Quat::sIdentity(), 0, &world->system);
+        settings, rvec(desc.position), JPH::Quat::sIdentity(), 0, &world->system);
     RFCharacter *result = new RFCharacter{world, character};
     world->characters.push_back(result);
     return result;
@@ -373,11 +475,47 @@ void rf_character_update(RFCharacter *character, float delta_time) {
         delta_time,
         world->system.GetGravity(),
         settings,
-        world->system.GetDefaultBroadPhaseLayerFilter(layer_moving),
-        world->system.GetDefaultLayerFilter(layer_moving),
+        world->system.GetDefaultBroadPhaseLayerFilter(RF_LAYER_CHARACTER),
+        world->system.GetDefaultLayerFilter(RF_LAYER_CHARACTER),
         {},
         {},
         world->temp_allocator);
+}
+
+void rf_character_refresh_contacts(RFCharacter *character) {
+    if (character == nullptr) {
+        return;
+    }
+    RFWorld *world = character->world;
+    character->value->RefreshContacts(
+        world->system.GetDefaultBroadPhaseLayerFilter(RF_LAYER_CHARACTER),
+        world->system.GetDefaultLayerFilter(RF_LAYER_CHARACTER),
+        {},
+        {},
+        world->temp_allocator);
+}
+
+size_t rf_character_save_state(const RFCharacter *character, uint8_t *buffer, size_t capacity) {
+    if (character == nullptr) {
+        return 0;
+    }
+    JPH::StateRecorderImpl recorder;
+    character->value->SaveState(recorder);
+    const std::string state = recorder.GetData();
+    if (buffer != nullptr && state.size() <= capacity) {
+        std::memcpy(buffer, state.data(), state.size());
+    }
+    return state.size();
+}
+
+int rf_character_restore_state(RFCharacter *character, const uint8_t *state, size_t size) {
+    if (character == nullptr || state == nullptr || size == 0) {
+        return 0;
+    }
+    JPH::StateRecorderImpl recorder;
+    recorder.WriteBytes(state, size);
+    character->value->RestoreState(recorder);
+    return recorder.IsFailed() ? 0 : 1;
 }
 
 RFVec3 rf_character_get_position(const RFCharacter *character) {
@@ -410,9 +548,9 @@ int rf_character_is_grounded(const RFCharacter *character) {
     return character != nullptr && character->value->GetGroundState() == JPH::CharacterVirtual::EGroundState::OnGround ? 1 : 0;
 }
 
-RFRagdoll *rf_ragdoll_create(RFWorld *world, const RFRagdollPart *parts, size_t count, RFVec3 linear_velocity, RFVec3 root_impulse) {
+RFRagdoll *rf_ragdoll_create(RFWorld *world, const RFRagdollPart *parts, size_t count, RFVec3 linear_velocity, RFVec3 root_impulse, RFError *error) {
     if (world == nullptr || parts == nullptr || count == 0) {
-        set_error("Invalid ragdoll parameters");
+        set_error(error, "Invalid ragdoll parameters");
         return nullptr;
     }
     RFRagdoll *ragdoll = new RFRagdoll{world, {}, {}};
@@ -422,7 +560,7 @@ RFRagdoll *rf_ragdoll_create(RFWorld *world, const RFRagdollPart *parts, size_t 
     JPH::Ref<JPH::GroupFilterTable> filter = new JPH::GroupFilterTable(static_cast<JPH::uint>(count));
     for (size_t i = 0; i < count; ++i) {
         if (parts[i].parent >= static_cast<int32_t>(i) || parts[i].parent < -1) {
-            set_error("Ragdoll parents must precede their children");
+            set_error(error, "Ragdoll parents must precede their children");
             delete ragdoll;
             return nullptr;
         }
@@ -446,13 +584,13 @@ RFRagdoll *rf_ragdoll_create(RFWorld *world, const RFRagdollPart *parts, size_t 
             shape = new JPH::SphereShape(part.size.x);
             break;
         default:
-            set_error("Unknown ragdoll shape");
+            set_error(error, "Unknown ragdoll shape");
             rf_ragdoll_destroy(ragdoll);
             return nullptr;
         }
         JPH::BodyCreationSettings settings(
             shape.GetPtr(), rvec(part.transform.position), quat(part.transform.rotation),
-            JPH::EMotionType::Dynamic, layer_cosmetic);
+            JPH::EMotionType::Dynamic, RF_LAYER_COSMETIC);
         settings.mCollisionGroup = JPH::CollisionGroup(
             filter, world->next_group, static_cast<JPH::CollisionGroup::SubGroupID>(i));
         settings.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
@@ -463,7 +601,7 @@ RFRagdoll *rf_ragdoll_create(RFWorld *world, const RFRagdollPart *parts, size_t 
         settings.mLinearVelocity = vec(linear_velocity);
         JPH::Body *body = interface.CreateBody(settings);
         if (body == nullptr) {
-            set_error("Jolt could not create a ragdoll body");
+            set_error(error, "Jolt could not create a ragdoll body");
             rf_ragdoll_destroy(ragdoll);
             return nullptr;
         }
@@ -516,12 +654,12 @@ RFRagdoll *rf_ragdoll_create(RFWorld *world, const RFRagdollPart *parts, size_t 
             settings.mTwistMaxAngle = 0.5f * part.joint_limit;
             constraint = settings.Create(parent, child);
         } else {
-            set_error("Unknown ragdoll joint");
+            set_error(error, "Unknown ragdoll joint");
             rf_ragdoll_destroy(ragdoll);
             return nullptr;
         }
         if (constraint == nullptr) {
-            set_error("Jolt could not create a ragdoll constraint");
+            set_error(error, "Jolt could not create a ragdoll constraint");
             rf_ragdoll_destroy(ragdoll);
             return nullptr;
         }

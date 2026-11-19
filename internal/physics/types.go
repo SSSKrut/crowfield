@@ -64,7 +64,14 @@ type SphereDesc struct {
 	Dynamic   bool
 }
 
+type Ray struct {
+	Origin    Vec3
+	Direction Vec3
+	Distance  float32
+}
+
 type RayHit struct {
+	Hit      bool
 	Position Vec3
 	Fraction float32
 	BodyID   uint32

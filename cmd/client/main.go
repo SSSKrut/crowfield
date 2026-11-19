@@ -18,6 +18,7 @@ func main() {
 	flag.BoolVar(&settings.Movement, "movement", false, "run and jump toward the ramp automatically")
 	flag.IntVar(&settings.Cycles, "cycles", 1, "number of automatic ragdoll cycles")
 	flag.BoolVar(&settings.Debug, "debug", false, "show physics shapes")
+	flag.StringVar(&settings.Tuning, "tuning", "", "JSON file overriding movement tuning")
 	flag.Parse()
 	if err := client.Run(settings); err != nil {
 		log.Fatal(err)
