@@ -229,6 +229,7 @@ func (s *Server) step() error {
 	if err := s.resolveShots(); err != nil {
 		return err
 	}
+	s.killDummies()
 	s.profile.lap(systemShots)
 	if err := s.world.Step(game.TickDelta); err != nil {
 		return err

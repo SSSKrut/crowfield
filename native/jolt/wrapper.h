@@ -12,6 +12,7 @@ typedef struct RFWorld RFWorld;
 typedef struct RFBody RFBody;
 typedef struct RFCharacter RFCharacter;
 typedef struct RFRagdoll RFRagdoll;
+typedef struct RFRagdollSettings RFRagdollSettings;
 
 /* Functions that can fail write the reason here. The caller owns the buffer, so
    the message cannot be lost when the calling goroutine changes OS threads. */
@@ -140,11 +141,24 @@ RFVec3 rf_character_get_linear_velocity(const RFCharacter *character);
 void rf_character_set_linear_velocity(RFCharacter *character, RFVec3 velocity);
 int rf_character_is_grounded(const RFCharacter *character);
 
-RFRagdoll *rf_ragdoll_create(RFWorld *world, const RFRagdollPart *parts, size_t count, RFVec3 linear_velocity, RFVec3 root_impulse, RFError *error);
+/* Ragdoll settings describe the parts of a skeleton once, in a reference pose
+   whose transforms place the joints: parents precede their children. */
+RFRagdollSettings *rf_ragdoll_settings_create(const RFRagdollPart *parts, size_t count, RFError *error);
+/* Ragdolls made from settings keep the shapes alive after this. */
+void rf_ragdoll_settings_destroy(RFRagdollSettings *settings);
+/* A ragdoll is made once and reused: its bodies and joints are created in the
+   reference pose, outside the simulation until it starts. */
+RFRagdoll *rf_ragdoll_create(RFWorld *world, const RFRagdollSettings *settings, RFError *error);
 void rf_ragdoll_destroy(RFRagdoll *ragdoll);
+/* Start puts the bodies at the transforms, one per part, with a velocity, adds
+   them to the simulation and strikes the part with an impulse at a point;
+   a negative part strikes nothing. */
+int rf_ragdoll_start(RFRagdoll *ragdoll, const RFTransform *transforms, size_t count, RFVec3 linear_velocity,
+                     int32_t part, RFVec3 point, RFVec3 impulse, RFError *error);
+/* Stop takes the bodies out of the simulation; the ragdoll can start again. */
+void rf_ragdoll_stop(RFRagdoll *ragdoll);
 void rf_ragdoll_get_transforms(const RFRagdoll *ragdoll, RFTransform *out_transforms, size_t count);
 int rf_ragdoll_is_active(const RFRagdoll *ragdoll);
-void rf_ragdoll_add_impulse(RFRagdoll *ragdoll, RFVec3 impulse);
 
 #ifdef __cplusplus
 }

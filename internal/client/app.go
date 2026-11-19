@@ -6,6 +6,7 @@ import (
 	"log"
 	"math"
 	"path/filepath"
+	"runtime"
 	"sync/atomic"
 	"time"
 
@@ -35,6 +36,7 @@ type app struct {
 	effects   *effects
 	sounds    *sounds
 	feedback  feedback
+	ragdolls  *animation.RagdollPool
 	alpha     float32
 	camera    rl.Camera3D
 	yaw       float32
@@ -68,6 +70,8 @@ type app struct {
 	netBytes  int64
 	netRate   float32
 	frames    frameStats
+	// report counts the frames since the last line of -stats.
+	report frameStats
 	// reconnect is the restoring of a lost connection to a remote server.
 	reconnect *reconnecting
 	// knockdowns counts the automatic knockdowns done.
@@ -134,7 +138,13 @@ func Run(settings config.Client) error {
 	}
 	defer a.self.Close()
 	defer a.bodies.close()
-	a.soldiers.world, a.soldiers.bodies = world, &a.bodies
+	ragdolls := asset.NewRagdollPool(world, maxRagdolls)
+	defer ragdolls.Close()
+	if err := ragdolls.Fill(); err != nil {
+		return err
+	}
+	a.ragdolls = ragdolls
+	a.soldiers.world, a.soldiers.ragdolls, a.soldiers.bodies = world, ragdolls, &a.bodies
 	a.soldiers.weapons, a.soldiers.effects, a.soldiers.sounds, a.soldiers.rules = a.view, a.effects, a.sounds, rules
 	defer a.view.close()
 	defer a.sounds.close()
@@ -270,13 +280,14 @@ func (a *app) run() error {
 			a.knockdowns++
 		}
 		if rl.IsKeyPressed(rl.KeyL) || knock {
-			if err := a.soldiers.knockDown(a.world, &a.bodies, a.eye()); err != nil {
+			if err := a.soldiers.knockDown(a.eye()); err != nil {
 				return err
 			}
 		}
 
 		deltaTime := rl.GetFrameTime()
 		a.frames.add(deltaTime)
+		a.logStats(deltaTime)
 		if deltaTime > 0.1 {
 			deltaTime = 0.1
 		}
@@ -784,17 +795,25 @@ func (a *app) drawRay() {
 // stage 2 on; until then the soldier only stands still on the server.
 // die drops the own soldier as a ragdoll where it stands: when the server
 // says it died, or by the debug key, which the server knows nothing of.
-// The debug key throws the soldier forward; a shot one knocks it back.
+// The debug key throws the soldier forward; a shot strikes it where the
+// bullet hit.
 func (a *app) die(feet, velocity physics.Vec3) error {
 	if a.ragdoll {
 		return nil
 	}
-	forward := game.ViewDirection(a.yaw, 0)
-	impulse := forward.Mul(35).Add(physics.V(0, 20, 0))
-	if a.fallen != 0 {
-		impulse = forward.Mul(-25).Add(physics.V(0, 10, 0))
+	blow := animation.Strike{
+		Part: animation.RagdollHips, Point: feet.Add(physics.V(0, 0.55, 0)),
+		Impulse: game.ViewDirection(a.yaw, 0).Mul(35).Add(physics.V(0, 20, 0)),
 	}
-	if err := a.self.CreateRagdoll(a.world, feet, facing(a.yaw), velocity, impulse); err != nil {
+	if own := a.session.localSoldier(); a.fallen != 0 && own != nil {
+		struck := *own
+		struck.Position, struck.Yaw = feet, a.yaw
+		blow = strike(&struck)
+	}
+	if err := a.bodies.makeRoom(a.ragdolls, a.eye()); err != nil {
+		return err
+	}
+	if err := a.self.Fall(a.ragdolls, feet, facing(a.yaw), velocity, blow); err != nil {
 		return err
 	}
 	a.ragdoll = true
@@ -835,6 +854,23 @@ func (a *app) reset() error {
 		return err
 	}
 	return a.session.respawn()
+}
+
+// logStats writes a line of frame rate, memory and ragdolls every -stats.
+func (a *app) logStats(deltaTime float32) {
+	if a.settings.Stats <= 0 {
+		return
+	}
+	a.report.skipped = 1
+	a.report.add(deltaTime)
+	if a.report.total < float32(a.settings.Stats.Seconds()) {
+		return
+	}
+	var memory runtime.MemStats
+	runtime.ReadMemStats(&memory)
+	log.Printf("client: %s heap=%.1fMB ragdolls=%d (made %d) bodies=%d drawn=%d deaths_seen=%d",
+		&a.report, float64(memory.HeapInuse)/(1<<20), a.ragdolls.Lent(), a.ragdolls.Made(), len(a.bodies.all), a.soldiers.drawn, a.soldiers.falls)
+	a.report = frameStats{}
 }
 
 // frameStats measures frame times after the first second, which loads and

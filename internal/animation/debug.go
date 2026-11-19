@@ -11,5 +11,5 @@ func (c *Character) RagdollDebug() ([]physics.RagdollPart, []physics.Transform, 
 	if err != nil {
 		return nil, nil, false
 	}
-	return c.ragdoll.parts, transforms, true
+	return c.ragdoll.rig.parts, transforms, true
 }

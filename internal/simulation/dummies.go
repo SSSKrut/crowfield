@@ -36,6 +36,8 @@ type dummies struct {
 	moves  []physics.Vec3
 	// moving lists the dummies alive this tick, whose rays are cast.
 	moving []int
+	// deaths is the share of a death owed to DummyDeaths.
+	deaths float64
 }
 
 func (s *Server) spawnDummies(count int) error {
@@ -71,6 +73,25 @@ func (s *Server) spawnDummy(i int, team game.Team) error {
 	}
 	s.dummies.all[i] = dummy{soldier: id, target: s.dummies.openPoint(s.scene.Spawn)}
 	return nil
+}
+
+// killDummies kills dummies at the rate of the settings, each by a random
+// hit, as if shot, so that clients have deaths to show.
+func (s *Server) killDummies() {
+	d := &s.dummies
+	if s.settings.DummyDeaths <= 0 || len(d.all) == 0 {
+		return
+	}
+	for d.deaths += s.settings.DummyDeaths / game.TickRate; d.deaths >= 1; d.deaths-- {
+		soldier := s.soldiers.Get(d.all[d.random.IntN(len(d.all))].soldier)
+		if !soldier.Alive {
+			continue
+		}
+		soldier.LastHit = game.HitMark{
+			Count: soldier.LastHit.Count + 1, Box: uint8(d.random.IntN(game.HitboxCount)), Yaw: d.random.Float32() * 2 * math.Pi,
+		}
+		s.damage(soldier, game.MaxHealth)
+	}
 }
 
 // floorPoint picks a random spawn point for a dummy on the open floor: not

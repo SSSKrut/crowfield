@@ -34,6 +34,7 @@ func startLocalServer(rules game.Rules, client config.Client) (*localServer, err
 	settings.MaxPlayers = 1
 	settings.StatsInterval = 0
 	settings.Dummies = client.Dummies
+	settings.DummyDeaths, settings.RespawnDelay = client.DummyDeaths, client.RespawnDelay
 	local := &localServer{memory: transport.NewMemoryListener(), done: make(chan error, 1)}
 	listeners := []transport.Listener{local.memory}
 	if host != "" {

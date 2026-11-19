@@ -234,10 +234,21 @@ struct RFCharacter {
     JPH::Ref<JPH::CharacterVirtual> value;
 };
 
+// A ragdoll keeps its bodies and joints for its whole life; it is in the
+// simulation only while running.
 struct RFRagdoll {
     RFWorld *world;
     std::vector<JPH::BodyID> bodies;
     std::vector<JPH::Ref<JPH::Constraint>> constraints;
+    bool running;
+};
+
+// Ragdoll settings are the parts of a skeleton in a reference pose and their
+// shapes, shared by every ragdoll made from them.
+struct RFRagdollSettings {
+    std::vector<RFRagdollPart> parts;
+    std::vector<JPH::RefConst<JPH::Shape>> shapes;
+    JPH::Ref<JPH::GroupFilterTable> filter;
 };
 
 int rf_initialize(RFError *error) {
@@ -549,71 +560,91 @@ int rf_character_is_grounded(const RFCharacter *character) {
     return character != nullptr && character->value->GetGroundState() == JPH::CharacterVirtual::EGroundState::OnGround ? 1 : 0;
 }
 
-RFRagdoll *rf_ragdoll_create(RFWorld *world, const RFRagdollPart *parts, size_t count, RFVec3 linear_velocity, RFVec3 root_impulse, RFError *error) {
-    if (world == nullptr || parts == nullptr || count == 0) {
+RFRagdollSettings *rf_ragdoll_settings_create(const RFRagdollPart *parts, size_t count, RFError *error) {
+    if (parts == nullptr || count == 0) {
         set_error(error, "Invalid ragdoll parameters");
         return nullptr;
     }
-    RFRagdoll *ragdoll = new RFRagdoll{world, {}, {}};
-    ragdoll->bodies.reserve(count);
-    std::vector<JPH::Body *> created;
-    created.reserve(count);
-    JPH::Ref<JPH::GroupFilterTable> filter = new JPH::GroupFilterTable(static_cast<JPH::uint>(count));
+    RFRagdollSettings *settings = new RFRagdollSettings;
+    settings->parts.assign(parts, parts + count);
+    settings->filter = new JPH::GroupFilterTable(static_cast<JPH::uint>(count));
     for (size_t i = 0; i < count; ++i) {
-        if (parts[i].parent >= static_cast<int32_t>(i) || parts[i].parent < -1) {
+        const RFRagdollPart &part = parts[i];
+        if (part.parent >= static_cast<int32_t>(i) || part.parent < -1) {
             set_error(error, "Ragdoll parents must precede their children");
-            delete ragdoll;
+            delete settings;
+            return nullptr;
+        }
+        if (part.parent >= 0 && part.joint != RF_JOINT_NONE && part.joint != RF_JOINT_POINT &&
+            part.joint != RF_JOINT_HINGE && part.joint != RF_JOINT_SWING_TWIST) {
+            set_error(error, "Unknown ragdoll joint");
+            delete settings;
             return nullptr;
         }
         for (size_t j = i + 1; j < count; ++j) {
-            filter->DisableCollision(static_cast<JPH::uint>(i), static_cast<JPH::uint>(j));
+            settings->filter->DisableCollision(static_cast<JPH::uint>(i), static_cast<JPH::uint>(j));
         }
-    }
-
-    JPH::BodyInterface &interface = world->system.GetBodyInterface();
-    for (size_t i = 0; i < count; ++i) {
-        const RFRagdollPart &part = parts[i];
-        JPH::RefConst<JPH::Shape> shape;
         switch (part.shape) {
         case RF_SHAPE_BOX:
-            shape = new JPH::BoxShape(vec(part.size));
+            settings->shapes.emplace_back(new JPH::BoxShape(vec(part.size)));
             break;
         case RF_SHAPE_CAPSULE:
-            shape = new JPH::CapsuleShape(part.size.x, part.size.y);
+            settings->shapes.emplace_back(new JPH::CapsuleShape(part.size.x, part.size.y));
             break;
         case RF_SHAPE_SPHERE:
-            shape = new JPH::SphereShape(part.size.x);
+            settings->shapes.emplace_back(new JPH::SphereShape(part.size.x));
             break;
         default:
             set_error(error, "Unknown ragdoll shape");
-            rf_ragdoll_destroy(ragdoll);
+            delete settings;
             return nullptr;
         }
-        JPH::BodyCreationSettings settings(
-            shape.GetPtr(), rvec(part.transform.position), quat(part.transform.rotation),
+    }
+    return settings;
+}
+
+void rf_ragdoll_settings_destroy(RFRagdollSettings *settings) {
+    delete settings;
+}
+
+RFRagdoll *rf_ragdoll_create(RFWorld *world, const RFRagdollSettings *settings, RFError *error) {
+    if (world == nullptr || settings == nullptr) {
+        set_error(error, "Invalid ragdoll parameters");
+        return nullptr;
+    }
+    const size_t count = settings->parts.size();
+    RFRagdoll *ragdoll = new RFRagdoll{world, {}, {}, false};
+    ragdoll->bodies.reserve(count);
+    std::vector<JPH::Body *> created;
+    created.reserve(count);
+    JPH::BodyInterface &interface = world->system.GetBodyInterface();
+    for (size_t i = 0; i < count; ++i) {
+        const RFRagdollPart &part = settings->parts[i];
+        JPH::BodyCreationSettings body_settings(
+            settings->shapes[i].GetPtr(), rvec(part.transform.position), quat(part.transform.rotation),
             JPH::EMotionType::Dynamic, RF_LAYER_COSMETIC);
-        settings.mCollisionGroup = JPH::CollisionGroup(
-            filter, world->next_group, static_cast<JPH::CollisionGroup::SubGroupID>(i));
-        settings.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
-        settings.mMassPropertiesOverride.mMass = std::max(0.1f, part.mass);
-        settings.mFriction = 0.8f;
-        settings.mLinearDamping = 0.08f;
-        settings.mAngularDamping = 0.15f;
-        settings.mLinearVelocity = vec(linear_velocity);
-        JPH::Body *body = interface.CreateBody(settings);
+        body_settings.mCollisionGroup = JPH::CollisionGroup(
+            settings->filter, world->next_group, static_cast<JPH::CollisionGroup::SubGroupID>(i));
+        body_settings.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
+        body_settings.mMassPropertiesOverride.mMass = std::max(0.1f, part.mass);
+        body_settings.mFriction = 0.8f;
+        body_settings.mLinearDamping = 0.08f;
+        body_settings.mAngularDamping = 0.15f;
+        JPH::Body *body = interface.CreateBody(body_settings);
         if (body == nullptr) {
             set_error(error, "Jolt could not create a ragdoll body");
             rf_ragdoll_destroy(ragdoll);
             return nullptr;
         }
-        interface.AddBody(body->GetID(), JPH::EActivation::Activate);
         created.push_back(body);
         ragdoll->bodies.push_back(body->GetID());
     }
     ++world->next_group;
 
+    // The joints are made between the bodies in the reference pose; Jolt
+    // keeps them in the space of each body, so they hold in any later pose.
     for (size_t i = 0; i < count; ++i) {
-        const RFRagdollPart &part = parts[i];
+        const RFRagdollPart &part = settings->parts[i];
         if (part.parent < 0 || part.joint == RF_JOINT_NONE) {
             continue;
         }
@@ -623,69 +654,105 @@ RFRagdoll *rf_ragdoll_create(RFWorld *world, const RFRagdollPart *parts, size_t 
         const JPH::Vec3 axis = vec(part.joint_axis).NormalizedOr(JPH::Vec3::sAxisY());
         const JPH::Vec3 normal = perpendicular(axis);
         if (part.joint == RF_JOINT_POINT) {
-            JPH::PointConstraintSettings settings;
-            settings.mSpace = JPH::EConstraintSpace::WorldSpace;
-            settings.mPoint1 = rvec(part.joint_pivot);
-            settings.mPoint2 = rvec(part.joint_pivot);
-            constraint = settings.Create(parent, child);
+            JPH::PointConstraintSettings joint;
+            joint.mSpace = JPH::EConstraintSpace::WorldSpace;
+            joint.mPoint1 = rvec(part.joint_pivot);
+            joint.mPoint2 = rvec(part.joint_pivot);
+            constraint = joint.Create(parent, child);
         } else if (part.joint == RF_JOINT_HINGE) {
-            JPH::HingeConstraintSettings settings;
-            settings.mSpace = JPH::EConstraintSpace::WorldSpace;
-            settings.mPoint1 = rvec(part.joint_pivot);
-            settings.mPoint2 = rvec(part.joint_pivot);
-            settings.mHingeAxis1 = axis;
-            settings.mHingeAxis2 = axis;
-            settings.mNormalAxis1 = normal;
-            settings.mNormalAxis2 = normal;
-            settings.mLimitsMin = -part.joint_limit;
-            settings.mLimitsMax = part.joint_limit;
-            constraint = settings.Create(parent, child);
-        } else if (part.joint == RF_JOINT_SWING_TWIST) {
-            JPH::SwingTwistConstraintSettings settings;
-            settings.mSpace = JPH::EConstraintSpace::WorldSpace;
-            settings.mPosition1 = rvec(part.joint_pivot);
-            settings.mPosition2 = rvec(part.joint_pivot);
-            settings.mTwistAxis1 = axis;
-            settings.mTwistAxis2 = axis;
-            settings.mPlaneAxis1 = normal;
-            settings.mPlaneAxis2 = normal;
-            settings.mNormalHalfConeAngle = part.joint_limit;
-            settings.mPlaneHalfConeAngle = part.joint_limit;
-            settings.mTwistMinAngle = -0.5f * part.joint_limit;
-            settings.mTwistMaxAngle = 0.5f * part.joint_limit;
-            constraint = settings.Create(parent, child);
+            JPH::HingeConstraintSettings joint;
+            joint.mSpace = JPH::EConstraintSpace::WorldSpace;
+            joint.mPoint1 = rvec(part.joint_pivot);
+            joint.mPoint2 = rvec(part.joint_pivot);
+            joint.mHingeAxis1 = axis;
+            joint.mHingeAxis2 = axis;
+            joint.mNormalAxis1 = normal;
+            joint.mNormalAxis2 = normal;
+            joint.mLimitsMin = -part.joint_limit;
+            joint.mLimitsMax = part.joint_limit;
+            constraint = joint.Create(parent, child);
         } else {
-            set_error(error, "Unknown ragdoll joint");
-            rf_ragdoll_destroy(ragdoll);
-            return nullptr;
+            JPH::SwingTwistConstraintSettings joint;
+            joint.mSpace = JPH::EConstraintSpace::WorldSpace;
+            joint.mPosition1 = rvec(part.joint_pivot);
+            joint.mPosition2 = rvec(part.joint_pivot);
+            joint.mTwistAxis1 = axis;
+            joint.mTwistAxis2 = axis;
+            joint.mPlaneAxis1 = normal;
+            joint.mPlaneAxis2 = normal;
+            joint.mNormalHalfConeAngle = part.joint_limit;
+            joint.mPlaneHalfConeAngle = part.joint_limit;
+            joint.mTwistMinAngle = -0.5f * part.joint_limit;
+            joint.mTwistMaxAngle = 0.5f * part.joint_limit;
+            constraint = joint.Create(parent, child);
         }
         if (constraint == nullptr) {
             set_error(error, "Jolt could not create a ragdoll constraint");
             rf_ragdoll_destroy(ragdoll);
             return nullptr;
         }
-        world->system.AddConstraint(constraint);
         ragdoll->constraints.emplace_back(constraint);
-    }
-    if (!ragdoll->bodies.empty()) {
-        interface.AddImpulse(ragdoll->bodies.front(), vec(root_impulse));
     }
     world->ragdolls.push_back(ragdoll);
     return ragdoll;
 }
 
-void rf_ragdoll_destroy(RFRagdoll *ragdoll) {
-    if (ragdoll == nullptr) {
+int rf_ragdoll_start(RFRagdoll *ragdoll, const RFTransform *transforms, size_t count, RFVec3 linear_velocity,
+                     int32_t part, RFVec3 point, RFVec3 impulse, RFError *error) {
+    if (ragdoll == nullptr || transforms == nullptr || count != ragdoll->bodies.size()) {
+        set_error(error, "Invalid ragdoll pose");
+        return 0;
+    }
+    if (ragdoll->running) {
+        set_error(error, "The ragdoll is already simulated");
+        return 0;
+    }
+    RFWorld *world = ragdoll->world;
+    JPH::BodyInterface &interface = world->system.GetBodyInterface();
+    for (size_t i = 0; i < count; ++i) {
+        interface.SetPositionAndRotation(
+            ragdoll->bodies[i], rvec(transforms[i].position), quat(transforms[i].rotation), JPH::EActivation::DontActivate);
+    }
+    // Velocities and impulses need the bodies in the simulation.
+    for (JPH::BodyID id : ragdoll->bodies) {
+        interface.AddBody(id, JPH::EActivation::Activate);
+        interface.SetLinearAndAngularVelocity(id, vec(linear_velocity), JPH::Vec3::sZero());
+    }
+    for (const JPH::Ref<JPH::Constraint> &constraint : ragdoll->constraints) {
+        constraint->ResetWarmStart();
+        world->system.AddConstraint(constraint.GetPtr());
+    }
+    if (part >= 0 && static_cast<size_t>(part) < count) {
+        interface.AddImpulse(ragdoll->bodies[part], vec(impulse), rvec(point));
+    }
+    ragdoll->running = true;
+    return 1;
+}
+
+void rf_ragdoll_stop(RFRagdoll *ragdoll) {
+    if (ragdoll == nullptr || !ragdoll->running) {
         return;
     }
     RFWorld *world = ragdoll->world;
     for (const JPH::Ref<JPH::Constraint> &constraint : ragdoll->constraints) {
         world->system.RemoveConstraint(constraint.GetPtr());
     }
-    ragdoll->constraints.clear();
     JPH::BodyInterface &interface = world->system.GetBodyInterface();
     for (JPH::BodyID id : ragdoll->bodies) {
         interface.RemoveBody(id);
+    }
+    ragdoll->running = false;
+}
+
+void rf_ragdoll_destroy(RFRagdoll *ragdoll) {
+    if (ragdoll == nullptr) {
+        return;
+    }
+    rf_ragdoll_stop(ragdoll);
+    RFWorld *world = ragdoll->world;
+    ragdoll->constraints.clear();
+    JPH::BodyInterface &interface = world->system.GetBodyInterface();
+    for (JPH::BodyID id : ragdoll->bodies) {
         interface.DestroyBody(id);
     }
     ragdoll->bodies.clear();
@@ -718,8 +785,3 @@ int rf_ragdoll_is_active(const RFRagdoll *ragdoll) {
     return 0;
 }
 
-void rf_ragdoll_add_impulse(RFRagdoll *ragdoll, RFVec3 impulse) {
-    if (ragdoll != nullptr && !ragdoll->bodies.empty()) {
-        ragdoll->world->system.GetBodyInterface().AddImpulse(ragdoll->bodies.front(), vec(impulse));
-    }
-}

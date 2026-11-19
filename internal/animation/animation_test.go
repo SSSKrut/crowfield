@@ -174,10 +174,16 @@ func TestRagdollFallsAndFreezes(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	pool := asset.NewRagdollPool(world, 1)
+	defer pool.Close()
 	character := asset.NewCharacter()
 	defer character.Close()
-	if err := character.CreateRagdoll(world, physics.V(0, 0, 0), physics.IdentityQuat(), physics.Vec3{}, physics.V(0, 5, 30)); err != nil {
+	strike := Strike{Part: RagdollHips, Point: physics.V(0, 0.55, 0), Impulse: physics.V(0, 5, 30)}
+	if err := character.Fall(pool, physics.V(0, 0, 0), physics.IdentityQuat(), physics.Vec3{}, strike); err != nil {
 		t.Fatal(err)
+	}
+	if !pool.Full() || fallAnyhow(pool, asset.NewCharacter()) == nil {
+		t.Fatal("a pool of one lent a second ragdoll")
 	}
 	if !character.Fallen() || !character.RagdollActive() {
 		t.Fatal("the character is not a ragdoll")
@@ -206,9 +212,26 @@ func TestRagdollFallsAndFreezes(t *testing.T) {
 		}
 	}
 	t.Logf("froze after %.2f s with the hips at %+v", elapsed, character.FallenAt())
+	if pool.Lent() != 0 {
+		t.Error("the frozen body kept its ragdoll")
+	}
+	// The next fall reuses the ragdoll: no bodies or joints are made.
+	other := asset.NewCharacter()
+	defer other.Close()
+	if err := other.Fall(pool, physics.V(3, 0, 0), physics.IdentityQuat(), physics.Vec3{}, Strike{Part: -1}); err != nil {
+		t.Fatal(err)
+	}
+	if pool.Made() != 1 || !other.RagdollActive() || math.Abs(float64(other.FallenAt().X-3)) > 0.3 {
+		t.Errorf("the second fall: %d ragdolls made, active %t, hips at %+v", pool.Made(), other.RagdollActive(), other.FallenAt())
+	}
 	if err := character.RemoveRagdoll(); err != nil || character.Fallen() || character.matrices != nil {
 		t.Errorf("standing up again: %v", err)
 	}
+}
+
+// fallAnyhow drops a character at the origin without a strike.
+func fallAnyhow(pool *RagdollPool, character *Character) error {
+	return character.Fall(pool, physics.Vec3{}, physics.IdentityQuat(), physics.Vec3{}, Strike{Part: -1})
 }
 
 func TestWrapKeepsTimeInTheClip(t *testing.T) {
@@ -227,4 +250,90 @@ func nearMatrix(first, second rl.Matrix) bool {
 		}
 	}
 	return true
+}
+
+// A hit on the head bends the neck so the head moves along the shot; a hit
+// on a hand swings the arm along the shot too. The spring stays within its
+// limit and settles within a second.
+func TestFlinchMovesTheStruckPartAlongTheShot(t *testing.T) {
+	asset := needRobot(t)
+	for _, c := range []struct {
+		part int
+		bone string
+	}{{RagdollHead, "Head"}, {RagdollLowerArmRight, "Palm2.R"}, {RagdollTorso, "Neck"}} {
+		character := asset.NewCharacter()
+		shot := physics.V(0.6, 0, 0.8)
+		character.Flinch(c.part, shot, physics.IdentityQuat())
+		if err := character.Update(0.06, 0); err != nil {
+			t.Fatal(err)
+		}
+		character.pose()
+		character.applyFlinch()
+		bone := asset.bones[c.bone]
+		rest := asset.model.GetCurrentPose()[bone].Translation
+		moved := rl.Vector3Subtract(rl.Vector3Transform(rest, asset.deltas[bone]), rest)
+		along := moved.X*shot.X + moved.Z*shot.Z
+		if along <= 0 || character.flinch.angle > maxFlinch {
+			t.Errorf("%s moved %+v, %.3f along the shot; angle %.3f", c.bone, moved, along, character.flinch.angle)
+		}
+		for range 60 {
+			_ = character.Update(1.0/60, 0)
+		}
+		if character.Flinching() {
+			t.Errorf("a hit on part %d still flinches after a second: %.4f", c.part, character.flinch.angle)
+		}
+		_ = character.Close()
+	}
+}
+
+// A strike as hard as the client gives on any part knocks the body over
+// where it stood: a light part struck does not fling it across the map. A
+// soldier that falls on the run slides on, toppled 1.8 m tall: its hips end
+// up two or three metres on.
+func TestStrikesKnockDownWithoutFlinging(t *testing.T) {
+	asset := needRobot(t)
+	if err := physics.Init(); err != nil {
+		t.Fatal(err)
+	}
+	defer physics.Shutdown()
+	world, err := physics.NewWorld()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer world.Close()
+	if _, err := world.CreateBox(physics.BoxDesc{
+		HalfExtents: physics.V(20, 0.25, 20),
+		Transform:   physics.Transform{Position: physics.V(0, -0.25, 0), Rotation: physics.IdentityQuat()},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	pool := asset.NewRagdollPool(world, ragdollParts)
+	defer pool.Close()
+	characters := make([]*Character, ragdollParts)
+	for part := range ragdollParts {
+		characters[part] = asset.NewCharacter()
+		defer characters[part].Close()
+		root := physics.V(float32(part)*3-18, 0, 0)
+		blow := Strike{Part: part, Point: root.Add(physics.V(0, 0.9, 0)), Impulse: physics.V(0, 5, 30)}
+		if err := characters[part].Fall(pool, root, physics.IdentityQuat(), physics.V(0, 0, 5), blow); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for range 8 * 60 {
+		if err := world.Step(1.0 / 60); err != nil {
+			t.Fatal(err)
+		}
+		for _, character := range characters {
+			if err := character.Update(1.0/60, 0); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	for part, character := range characters {
+		root := physics.V(float32(part)*3-18, 0, 0)
+		hips := character.FallenAt()
+		if moved := vectorLength(hips.Sub(root)); moved > 3.5 || hips.Y < 0 || character.RagdollActive() {
+			t.Errorf("struck on part %d, the body lies %.2f m away at %+v, active %t", part, moved, hips, character.RagdollActive())
+		}
+	}
 }

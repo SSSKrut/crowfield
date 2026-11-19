@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"time"
 )
 
 type Client struct {
@@ -30,8 +31,14 @@ type Client struct {
 	// ConfigDir keeps the fingerprints of servers joined before and the
 	// certificate of a host; empty keeps nothing.
 	ConfigDir string
-	// Dummies adds roaming bot soldiers without AI to the embedded server.
-	Dummies int
+	// Dummies adds roaming bot soldiers without AI to the embedded server;
+	// DummyDeaths of them die every second, and the dead come back after
+	// RespawnDelay, zero for the server's default.
+	Dummies      int
+	DummyDeaths  float64
+	RespawnDelay time.Duration
+	// Stats logs frame rate, memory and ragdolls this often; zero never.
+	Stats time.Duration
 	// Overview watches the whole map from above, to see every soldier.
 	Overview bool
 	// NetGraph shows the network graph from the start.

@@ -48,9 +48,10 @@ type remoteView struct {
 // dropped when it is gone. A soldier that dies falls as a ragdoll into the
 // bodies of the world.
 type soldiers struct {
-	asset  *animation.CharacterAsset
-	world  *physics.World
-	bodies *bodies
+	asset    *animation.CharacterAsset
+	world    *physics.World
+	ragdolls *animation.RagdollPool
+	bodies   *bodies
 	// What the soldiers' shots and hits show with: the weapons in hand, the
 	// effects and the sounds. Without them nothing is shown, as headless.
 	weapons    *viewModel
@@ -60,8 +61,10 @@ type soldiers struct {
 	characters map[game.SoldierID]*animation.Character
 	views      []remoteView
 	frustum    render.Frustum
-	// What the last frame drew, for the overlay and the log.
+	// What the last frame drew, for the overlay and the log, and how many
+	// soldiers fell so far.
 	drawn, full, capsules int
+	falls                 int
 	// aimed is the soldier nearest to the crosshair, if any.
 	aimed *knownSoldier
 }
@@ -89,8 +92,11 @@ func (s *soldiers) update(session *session, deltaTime float32, camera rl.Camera3
 		}
 		known.remote.smooth(deltaTime)
 		soldier := known.remote.at(session.clock.renderTick)
-		s.showCombat(known, &soldier, session.clock.renderTick, camera)
 		character := s.characters[id]
+		hit := s.showCombat(known, &soldier, session.clock.renderTick, camera)
+		if hit && character != nil && soldier.Alive && distance(soldier.Position, eye) < flinchDistance {
+			character.Flinch(hitboxParts[min(int(soldier.LastHit.Box), game.HitboxCount-1)], game.ViewDirection(soldier.LastHit.Yaw, 0), facing(soldier.Yaw))
+		}
 		if !soldier.Alive {
 			if character != nil {
 				delete(s.characters, id)
@@ -130,11 +136,11 @@ const staleShots = game.TickRate / 2
 // showCombat shows the shots a soldier fired and the hit it took once the
 // interpolation reaches them: a flash at the muzzle of its weapon, a tracer
 // to where its aim meets the world, the sound, and sparks off the hitbox
-// that was struck.
-func (s *soldiers) showCombat(known *knownSoldier, soldier *game.Soldier, renderTick float64, camera rl.Camera3D) {
+// that was struck. It reports a hit shown.
+func (s *soldiers) showCombat(known *knownSoldier, soldier *game.Soldier, renderTick float64, camera rl.Camera3D) bool {
 	if s.effects == nil {
 		known.shots, known.hurt = known.shots[:0], false
-		return
+		return false
 	}
 	shown := 0
 	for ; shown < len(known.shots) && known.shots[shown] <= renderTick; shown++ {
@@ -144,13 +150,42 @@ func (s *soldiers) showCombat(known *knownSoldier, soldier *game.Soldier, render
 		s.showShot(soldier, camera)
 	}
 	known.shots = known.shots[:copy(known.shots, known.shots[shown:])]
-	if known.hurt && known.hit <= renderTick {
-		known.hurt = false
-		if box := int(soldier.LastHit.Box); box < game.HitboxCount {
-			hitbox := game.Hitboxes(soldier.Position, soldier.Yaw)[box]
-			s.effects.hit(hitbox.A.Add(hitbox.B).Mul(0.5), game.ViewDirection(soldier.LastHit.Yaw, 0))
-		}
+	if !known.hurt || known.hit > renderTick {
+		return false
 	}
+	known.hurt = false
+	s.effects.hit(struckPoint(soldier), game.ViewDirection(soldier.LastHit.Yaw, 0))
+	return true
+}
+
+const (
+	// Soldiers farther than flinchDistance do not flinch: it would not show.
+	flinchDistance = 80
+	// The bullet that kills strikes its part with strikeImpulse N·s along
+	// its flight, and a little up.
+	strikeImpulse = 30
+	strikeLift    = 5
+)
+
+// hitboxParts are the ragdoll parts the hitboxes cover (game.Hitboxes):
+// a hitbox on the soldier's left is a part on the model's left.
+var hitboxParts = [game.HitboxCount]int{
+	animation.RagdollHead, animation.RagdollTorso, animation.RagdollLowerLegLeft, animation.RagdollLowerLegRight,
+	animation.RagdollUpperArmLeft, animation.RagdollUpperArmRight, animation.RagdollLowerArmLeft, animation.RagdollLowerArmRight,
+}
+
+// struckPoint is the middle of the hitbox the last hit on a soldier struck.
+func struckPoint(soldier *game.Soldier) physics.Vec3 {
+	box := min(int(soldier.LastHit.Box), game.HitboxCount-1)
+	hitbox := game.Hitboxes(soldier.Position, soldier.Yaw)[box]
+	return hitbox.A.Add(hitbox.B).Mul(0.5)
+}
+
+// strike is the blow of the last hit on a soldier, for its fall.
+func strike(soldier *game.Soldier) animation.Strike {
+	box := min(int(soldier.LastHit.Box), game.HitboxCount-1)
+	impulse := game.ViewDirection(soldier.LastHit.Yaw, 0).Mul(strikeImpulse).Add(physics.V(0, strikeLift, 0))
+	return animation.Strike{Part: hitboxParts[box], Point: struckPoint(soldier), Impulse: impulse}
 }
 
 // showShot shows one shot of another soldier. Its spread is the server's
@@ -186,19 +221,22 @@ func (s *soldiers) showShot(soldier *game.Soldier, camera rl.Camera3D) {
 	s.sounds.shotAt(kind, away, pan)
 }
 
-// fall turns a soldier that died into a ragdoll from its pose, knocked back.
-// Far away, where it would be a capsule, it is simply gone.
+// fall turns a soldier that died into a ragdoll from its pose, struck where
+// the bullet that killed it hit. Far away, where it would be a capsule, it
+// is simply gone.
 func (s *soldiers) fall(character *animation.Character, soldier game.Soldier, eye physics.Vec3) error {
-	if s.world == nil || distance(soldier.Position, eye) > capsuleDistance {
+	if s.ragdolls == nil || distance(soldier.Position, eye) > capsuleDistance {
 		return character.Close()
 	}
-	// Knocked along the shot that killed it.
-	impulse := game.ViewDirection(soldier.LastHit.Yaw, 0).Mul(25).Add(physics.V(0, 10, 0))
-	if err := character.CreateRagdoll(s.world, soldier.Position, facing(soldier.Yaw), soldier.Velocity, impulse); err != nil {
+	if err := s.bodies.makeRoom(s.ragdolls, eye); err != nil {
+		return err
+	}
+	if err := character.Fall(s.ragdolls, soldier.Position, facing(soldier.Yaw), soldier.Velocity, strike(&soldier)); err != nil {
 		_ = character.Close()
 		return err
 	}
-	return s.bodies.add(character, s.tint(soldier.Team), eye)
+	s.falls++
+	return s.bodies.add(character, s.tint(soldier.Team))
 }
 
 // aim finds the soldier nearest to the line of sight, within a few degrees,
@@ -249,21 +287,27 @@ func (s *soldiers) tint(team game.Team) color.RGBA {
 	return s.asset.Accent()
 }
 
-// knockDown drops ragdoll copies of the nearest soldiers in view, pushed away
-// from the eye. The soldiers walk on: the server knows nothing of it. It
-// tries the ragdoll limits until soldiers can die (stage 2).
-func (s *soldiers) knockDown(world *physics.World, fallen *bodies, eye physics.Vec3) error {
+// knockDown drops ragdoll copies of the nearest soldiers in view, struck in
+// the body away from the eye. The soldiers walk on: the server knows nothing
+// of it. It loads the ragdolls.
+func (s *soldiers) knockDown(eye physics.Vec3) error {
 	for _, view := range s.views[:min(knockDown, len(s.views))] {
 		away := view.soldier.Position.Sub(eye)
 		away.Y = 0
 		length := float32(math.Hypot(float64(away.X), float64(away.Z)))
-		impulse := away.Mul(35 / max(length, 1e-3)).Add(physics.V(0, 20, 0))
+		blow := animation.Strike{
+			Part: animation.RagdollTorso, Point: view.soldier.Position.Add(physics.V(0, 0.85, 0)),
+			Impulse: away.Mul(strikeImpulse / max(length, 1e-3)).Add(physics.V(0, strikeLift, 0)),
+		}
+		if err := s.bodies.makeRoom(s.ragdolls, eye); err != nil {
+			return err
+		}
 		character := view.character.Copy()
-		if err := character.CreateRagdoll(world, view.soldier.Position, facing(view.soldier.Yaw), view.soldier.Velocity, impulse); err != nil {
+		if err := character.Fall(s.ragdolls, view.soldier.Position, facing(view.soldier.Yaw), view.soldier.Velocity, blow); err != nil {
 			_ = character.Close()
 			return err
 		}
-		if err := fallen.add(character, s.tint(view.soldier.Team), eye); err != nil {
+		if err := s.bodies.add(character, s.tint(view.soldier.Team)); err != nil {
 			return err
 		}
 	}

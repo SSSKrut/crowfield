@@ -78,7 +78,9 @@ func TestShotsAtDrawnDummiesHit(t *testing.T) {
 		}
 		hits := int(local.server.Hits())
 		t.Logf("%s: %d shots, %d with a clear line, %d hits", conditions, shots, clear, hits)
-		if shots < 20 || hits < clear*95/100 {
+		// A lost snapshot leaves the target drawn by its velocity for a moment,
+		// while it may turn: a shot now and then misses on a lossy network.
+		if shots < 20 || hits < clear*9/10 {
 			t.Errorf("%s: %d hits of %d shots with a clear line", conditions, hits, clear)
 		}
 	}

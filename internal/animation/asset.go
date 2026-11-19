@@ -67,6 +67,12 @@ type CharacterAsset struct {
 	origin physics.Vec3
 	// bounds is the box around the standing model, in metres, feet at zero.
 	bounds rl.BoundingBox
+	// ragdollRig is how the skeleton falls, built on the first fall.
+	ragdollRig *ragdollRig
+	// order lists the bones parents first; deltas is room for how each
+	// bone of a flinch moved.
+	order  []int
+	deltas []rl.Matrix
 }
 
 // LoadCharacterAsset loads a skinned glTF model. Window and graphics must be
@@ -109,6 +115,8 @@ func (a *CharacterAsset) load(path string) error {
 	for i, bone := range a.model.Skeleton.GetBones() {
 		a.bones[boneName(bone)] = i
 	}
+	a.order = boneOrder(a.model.Skeleton.GetBones())
+	a.deltas = make([]rl.Matrix, boneCount)
 	a.inverseBind = make([]rl.Matrix, boneCount)
 	for i, bind := range a.model.Skeleton.GetBindPose() {
 		a.inverseBind[i] = rl.MatrixInvert(matrixFromRaylib(bind))
@@ -296,6 +304,10 @@ func (a *CharacterAsset) mergeMeshes() error {
 
 // Close frees the model. Characters drawn with it must not be used after.
 func (a *CharacterAsset) Close() {
+	if a.ragdollRig != nil {
+		a.ragdollRig.settings.Close()
+		a.ragdollRig = nil
+	}
 	if a.poses != nil {
 		C.free(unsafe.Pointer(&a.poses[0]))
 		a.poses = nil

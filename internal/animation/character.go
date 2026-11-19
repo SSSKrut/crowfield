@@ -49,6 +49,7 @@ type Character struct {
 	// is a ragdoll or a frozen body; nil while it is animated.
 	matrices []rl.Matrix
 	ragdoll  *ragdollState
+	flinch   flinch
 }
 
 func (a *CharacterAsset) NewCharacter() *Character {
@@ -79,9 +80,7 @@ func (c *Character) Update(deltaTime, speed float32) error {
 	if c.ragdoll != nil {
 		return c.updateRagdoll(deltaTime)
 	}
-	if c.matrices != nil {
-		return nil
-	}
+	c.updateFlinch(deltaTime)
 	next := ClipIdle
 	if speed >= runSpeed {
 		next = ClipRunning
@@ -108,8 +107,12 @@ func (c *Character) Update(deltaTime, speed float32) error {
 func (c *Character) Draw(position physics.Vec3, yaw physics.Quat, tint color.RGBA, detail Detail) {
 	a := c.asset
 	switch {
-	case c.matrices != nil:
+	case c.ragdoll != nil:
 		a.draw(&c.matrices[0], c.ragdollRoot(), c.ragdollYaw(), tint)
+	case c.flinch.active:
+		c.pose()
+		c.applyFlinch()
+		a.draw(&c.matrices[0], position, yaw, tint)
 	case detail == DetailFull:
 		c.pose()
 		a.draw(a.model.BoneMatrices, position, yaw, tint)

@@ -30,6 +30,9 @@ type Server struct {
 	RespawnDelay time.Duration
 	// FriendlyFire lets shots hurt soldiers of the shooter's own team.
 	FriendlyFire bool
+	// DummyDeaths kills that many dummies a second, struck at random, to
+	// load the deaths of clients.
+	DummyDeaths float64
 	// MaxRewind bounds how far back in time lag compensation tests a shot;
 	// a player who saw further back is tested at the limit. Zero means the
 	// default.

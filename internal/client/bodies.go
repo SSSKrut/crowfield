@@ -32,20 +32,26 @@ type bodies struct {
 	peak int
 }
 
-// add takes a character that has just become a ragdoll. The eye decides which
-// ragdoll is the farthest, should there be too many.
-func (b *bodies) add(character *animation.Character, tint color.RGBA, eye physics.Vec3) error {
-	if b.ragdolls() >= maxRagdolls {
-		farthest, longest := -1, float32(-1)
-		for i := range b.all {
-			if d := distance(b.all[i].character.FallenAt(), eye); b.all[i].character.RagdollActive() && d > longest {
-				farthest, longest = i, d
-			}
-		}
-		if err := b.all[farthest].character.Freeze(); err != nil {
-			return err
+// makeRoom frees a ragdoll of the pool for a new fall, when all are in use:
+// the ragdoll farthest from the eye freezes early.
+func (b *bodies) makeRoom(pool *animation.RagdollPool, eye physics.Vec3) error {
+	if !pool.Full() {
+		return nil
+	}
+	farthest, longest := -1, float32(-1)
+	for i := range b.all {
+		if d := distance(b.all[i].character.FallenAt(), eye); b.all[i].character.RagdollActive() && d > longest {
+			farthest, longest = i, d
 		}
 	}
+	if farthest < 0 {
+		return nil
+	}
+	return b.all[farthest].character.Freeze()
+}
+
+// add takes a character that has just fallen.
+func (b *bodies) add(character *animation.Character, tint color.RGBA) error {
 	if len(b.all) >= maxBodies {
 		if err := b.remove(0); err != nil {
 			return err
