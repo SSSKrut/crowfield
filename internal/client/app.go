@@ -30,7 +30,7 @@ type app struct {
 	asset     *animation.CharacterAsset
 	self      *animation.Character
 	soldiers  *soldiers
-	fallen    bodies
+	bodies    bodies
 	view      *viewModel
 	effects   *effects
 	sounds    *sounds
@@ -51,7 +51,11 @@ type app struct {
 	shots  []game.Shot
 	events game.WeaponEvents
 	// buttons are those of the last command, for the look of the weapon.
-	buttons     game.Buttons
+	buttons game.Buttons
+	// feet is where the own soldier was drawn last; fallen is its soldier
+	// while it lies dead, until a new one comes.
+	feet        physics.Vec3
+	fallen      game.SoldierID
 	debug       bool
 	thirdPerson bool
 	ragdoll     bool
@@ -128,7 +132,8 @@ func Run(settings config.Client) error {
 		effects: newEffects(), sounds: loadSounds(settings.Volume),
 	}
 	defer a.self.Close()
-	defer a.fallen.close()
+	defer a.bodies.close()
+	a.soldiers.world, a.soldiers.bodies = world, &a.bodies
 	defer a.view.close()
 	defer a.sounds.close()
 
@@ -247,8 +252,10 @@ func (a *app) run() error {
 			a.thirdPerson = !a.thirdPerson
 		}
 		if rl.IsKeyPressed(rl.KeyK) {
-			if err := a.die(); err != nil {
-				return err
+			if soldier := a.ownSoldier(); soldier != nil {
+				if err := a.die(a.predictor.drawn(a.alpha), soldier.Velocity); err != nil {
+					return err
+				}
 			}
 		}
 		if rl.IsKeyPressed(rl.KeyBackspace) {
@@ -261,7 +268,7 @@ func (a *app) run() error {
 			a.knockdowns++
 		}
 		if rl.IsKeyPressed(rl.KeyL) || knock {
-			if err := a.soldiers.knockDown(a.world, &a.fallen, a.eye()); err != nil {
+			if err := a.soldiers.knockDown(a.world, &a.bodies, a.eye()); err != nil {
 				return err
 			}
 		}
@@ -321,6 +328,9 @@ func (a *app) run() error {
 			if a.predictor.corrections != corrections {
 				a.session.graph.correction(a.predictor.lastError)
 			}
+			if err := a.followLife(); err != nil {
+				return err
+			}
 		}
 		a.predictor.smooth(deltaTime)
 		a.session.clock.advance(deltaTime)
@@ -331,7 +341,7 @@ func (a *app) run() error {
 		}
 		soldier := a.ownSoldier()
 		if a.settings.Demo && soldier != nil && !a.ragdoll && a.elapsed >= 1.2 {
-			if err := a.die(); err != nil {
+			if err := a.die(a.predictor.drawn(a.alpha), soldier.Velocity); err != nil {
 				return err
 			}
 		}
@@ -343,20 +353,27 @@ func (a *app) run() error {
 		}
 		feet := a.spawn
 		var speed float32
-		if soldier != nil {
+		switch own := a.session.localSoldier(); {
+		case soldier != nil:
 			feet = a.predictor.drawn(a.alpha)
 			speed = horizontalSpeed(soldier.Velocity)
+		case own != nil:
+			// Dead, or not yet predicted: where the server has the soldier.
+			feet = own.Position
 		}
+		a.feet = feet
 		if err := a.self.Update(deltaTime, speed); err != nil {
 			return err
 		}
-		if err := a.fallen.update(deltaTime); err != nil {
+		if err := a.bodies.update(deltaTime); err != nil {
 			return err
 		}
 		a.updateCamera(feet)
 		a.updateWeapon(deltaTime, soldier)
 		a.effects.update(deltaTime)
-		a.soldiers.update(a.session, deltaTime, a.camera, float32(rl.GetScreenWidth())/float32(max(1, rl.GetScreenHeight())))
+		if err := a.soldiers.update(a.session, deltaTime, a.camera, float32(rl.GetScreenWidth())/float32(max(1, rl.GetScreenHeight()))); err != nil {
+			return err
+		}
 		forward := game.ViewDirection(a.yaw, a.pitch)
 		a.soldiers.aim(feet.Add(physics.V(0, a.rules.Movement.EyeHeight, 0)), forward, a.rules.Movement.CenterHeight())
 		var aimed uint16
@@ -382,7 +399,7 @@ func (a *app) run() error {
 		a.session.tick, a.session.serverTick, soldier.Position, soldier.Grounded, a.ragdoll, a.self.RagdollActive(),
 		a.self.AnimationName(), a.session.received, float32(a.session.bytes.Load())/1024/max(a.played, 1e-3),
 		a.session.resyncs, a.predictor.corrections, len(a.session.soldiers), a.session.unresolved,
-		a.soldiers.drawn, a.soldiers.full, len(a.fallen.all), a.fallen.ragdolls(), a.fallen.peak, &a.frames)
+		a.soldiers.drawn, a.soldiers.full, len(a.bodies.all), a.bodies.ragdolls(), a.bodies.peak, &a.frames)
 	return nil
 }
 
@@ -639,7 +656,7 @@ func (a *app) draw(feet physics.Vec3, spawned bool) {
 		a.self.Draw(feet, facing(a.yaw), a.soldiers.tint(team), animation.DetailFull)
 	}
 	a.soldiers.draw(a.rules.Movement, a.debug)
-	bodies := a.fallen.draw(&a.soldiers.frustum)
+	bodies := a.bodies.draw(&a.soldiers.frustum)
 	a.effects.draw()
 	if a.debug && spawned && !a.ragdoll {
 		// The server's view of the own soldier, to compare with the prediction.
@@ -657,11 +674,18 @@ func (a *app) draw(feet physics.Vec3, spawned bool) {
 	}
 	rl.EndMode3D()
 	a.drawWeapon()
+	if player := a.session.player; player.Soldier != 0 {
+		if player.Health > 0 {
+			drawHealth(player.Health)
+		} else {
+			drawDeath(player.Respawn)
+		}
+	}
 	rl.DrawText("WASD move | Space jump | Shift sprint | LMB fire | RMB aim | R reload | 1-3, wheel weapon", 18, 18, 18, rl.White)
 	rl.DrawText("K ragdoll | Backspace respawn | L knock down nearest | F1 physics | F2 network | F3 camera | Esc cursor", 18, 44, 18, rl.White)
 	rl.DrawText(fmt.Sprintf("FPS %d | XYZ %.2f %.2f %.2f | %s | drawn %d (full %d, capsules %d) | bodies %d (ragdolls %d)",
 		rl.GetFPS(), feet.X, feet.Y, feet.Z, a.self.AnimationName(), a.soldiers.drawn, a.soldiers.full, a.soldiers.capsules,
-		bodies, a.fallen.ragdolls()), 18, 70, 18, rl.White)
+		bodies, a.bodies.ragdolls()), 18, 70, 18, rl.White)
 	stats := a.session.conn.Stats()
 	rl.DrawText(fmt.Sprintf("%d Hz | tick %d server %d lead %d (clock %+.1f%%) | RTT %d ms | snapshots %.1f KB/s | jumps %d | corrections %d (last %.3f m) | soldiers %d",
 		game.TickRate, a.session.tick, a.session.serverTick, a.session.player.InputLead, 100*a.session.dilation, stats.RTT.Milliseconds(),
@@ -733,21 +757,48 @@ func (a *app) drawRay() {
 
 // die shows the cosmetic ragdoll. Death itself is decided by the server from
 // stage 2 on; until then the soldier only stands still on the server.
-func (a *app) die() error {
-	soldier := a.ownSoldier()
-	if a.ragdoll || soldier == nil {
+// die drops the own soldier as a ragdoll where it stands: when the server
+// says it died, or by the debug key, which the server knows nothing of.
+// The debug key throws the soldier forward; a shot one knocks it back.
+func (a *app) die(feet, velocity physics.Vec3) error {
+	if a.ragdoll {
 		return nil
 	}
-	forward := physics.V(float32(math.Sin(float64(a.yaw))), 0, -float32(math.Cos(float64(a.yaw))))
+	forward := game.ViewDirection(a.yaw, 0)
 	impulse := forward.Mul(35).Add(physics.V(0, 20, 0))
-	if err := a.self.CreateRagdoll(a.world, a.predictor.drawn(a.alpha), facing(a.yaw), soldier.Velocity, impulse); err != nil {
+	if a.fallen != 0 {
+		impulse = forward.Mul(-25).Add(physics.V(0, 10, 0))
+	}
+	if err := a.self.CreateRagdoll(a.world, feet, facing(a.yaw), velocity, impulse); err != nil {
 		return err
 	}
 	a.ragdoll = true
 	return nil
 }
 
+// followLife shows the death of the own soldier as soon as the server tells
+// it, and stands the player up again when a new soldier comes.
+func (a *app) followLife() error {
+	player := a.session.player
+	dead := player.Soldier != 0 && player.Health == 0
+	switch {
+	case dead && a.fallen != player.Soldier:
+		a.fallen = player.Soldier
+		if err := a.die(a.feet, physics.Vec3{}); err != nil {
+			return err
+		}
+	case !dead && a.fallen != 0 && player.Soldier != a.fallen:
+		a.fallen, a.ragdoll = 0, false
+		return a.self.RemoveRagdoll()
+	}
+	return nil
+}
+
 func (a *app) reset() error {
+	if a.fallen != 0 {
+		// The dead wait for the server.
+		return nil
+	}
 	a.yaw = 0
 	a.pitch = 0
 	a.elapsed = 0

@@ -29,7 +29,8 @@ func sampleMessages() []Message {
 		&InputPacket{HasAck: true, AckSequence: math.MaxUint16, AckBits: 0xDEADBEEF, Commands: sampleCommands(MaxCommandsPerInput, math.MaxUint32-3)},
 		sampleSnapshot(3),
 		&Snapshot{Sequence: 1, ServerTick: 2, Player: PlayerState{InputLead: -3}},
-		&Snapshot{Sequence: 3, ServerTick: 4, Player: PlayerState{Soldier: soldierID(1, 1), Arsenal: readyArsenal()}},
+		&Snapshot{Sequence: 3, ServerTick: 4, Player: PlayerState{Soldier: soldierID(1, 1), Health: game.MaxHealth, Arsenal: readyArsenal()}},
+		&Snapshot{Sequence: 5, ServerTick: 6, Player: PlayerState{Soldier: soldierID(2, 3), Respawn: 299, Arsenal: readyArsenal()}},
 	}
 }
 
@@ -70,7 +71,7 @@ func sampleSnapshot(soldiers int) *Snapshot {
 		Sequence: 777, ServerTick: 99999,
 		Player: PlayerState{
 			Processed: true, LastProcessedTick: 99990, InputLead: 2, Soldier: soldierID(3, 2),
-			Position: physics.V(1.25, 0.002, -7.75), Velocity: physics.V(0, -0.5, -8), Arsenal: busyArsenal(),
+			Position: physics.V(1.25, 0.002, -7.75), Velocity: physics.V(0, -0.5, -8), Health: 73, Arsenal: busyArsenal(),
 		},
 		Removed: []game.SoldierID{soldierID(9, 15), soldierID(4095, 1)},
 	}
@@ -287,6 +288,8 @@ func TestDecodeRejectsInvalidFields(t *testing.T) {
 		"unknown action":    arsenalCase(func(a *game.Arsenal) { a.Action = 3 }),
 		"busy without time": arsenalCase(func(a *game.Arsenal) { a.ActionTicks = 0 }),
 		"infinite kick":     arsenalCase(func(a *game.Arsenal) { a.KickYaw = float32(math.Inf(-1)) }),
+		"too healthy":       healthCase(game.MaxHealth+1, 0),
+		"dead for ever":     healthCase(0, 0),
 		"more soldiers than bytes": func(w *BitWriter) {
 			writeSnapshotHeader(w, MaxSnapshotSoldiers)
 		},
@@ -317,11 +320,34 @@ func TestDecodeRejectsInvalidFields(t *testing.T) {
 // spoil, without the checks of encoding.
 func arsenalCase(spoil func(*game.Arsenal)) func(w *BitWriter) {
 	return func(w *BitWriter) {
-		player := PlayerState{Soldier: soldierID(1, 1), Arsenal: busyArsenal()}
+		player := PlayerState{Soldier: soldierID(1, 1), Health: 1, Arsenal: busyArsenal()}
 		spoil(&player.Arsenal)
 		w.WriteBits(1, 16)
 		w.WriteBits(1, 32)
 		player.write(w)
+		w.WriteBits(0, soldierCountBits)
+		w.WriteBits(0, removedCountBits)
+	}
+}
+
+// healthCase writes a snapshot whose player has the given health and time
+// to respawn, without the checks of encoding.
+func healthCase(health uint8, respawn uint16) func(w *BitWriter) {
+	return func(w *BitWriter) {
+		w.WriteBits(1, 16)
+		w.WriteBits(1, 32)
+		w.WriteBool(false)
+		w.WriteSigned(0, 8)
+		w.WriteBits(uint32(soldierID(1, 1)), 16)
+		for range 6 {
+			w.WriteFloat32(0)
+		}
+		w.WriteBits(uint32(health), healthBits)
+		if health == 0 {
+			w.WriteBits(uint32(respawn), respawnBits)
+		}
+		arsenal := readyArsenal()
+		writeArsenal(w, &arsenal)
 		w.WriteBits(0, soldierCountBits)
 		w.WriteBits(0, removedCountBits)
 	}
@@ -391,6 +417,10 @@ func TestEncodeRejectsInvalidMessages(t *testing.T) {
 	reserve.Player.Arsenal.Ammo[0].Reserve = 1024
 	idleWithTime := sampleSnapshot(0)
 	idleWithTime.Player.Arsenal.Action = game.WeaponReady
+	aliveWaiting := sampleSnapshot(0)
+	aliveWaiting.Player.Respawn = 5
+	healthOfNobody := sampleSnapshot(0)
+	healthOfNobody.Player = PlayerState{Health: 50}
 	for name, message := range map[string]Message{
 		"long name":           &Hello{Name: strings.Repeat("я", MaxNameBytes)},
 		"bad utf-8 password":  &Hello{Password: "\xff"},
@@ -409,6 +439,8 @@ func TestEncodeRejectsInvalidMessages(t *testing.T) {
 		"ammo in empty slot":  ammoInEmptySlot,
 		"reserve too large":   reserve,
 		"idle with time left": idleWithTime,
+		"alive and waiting":   aliveWaiting,
+		"health of nobody":    healthOfNobody,
 		"too many soldiers":   &Snapshot{Soldiers: make([]SoldierRecord, MaxSnapshotSoldiers+1)},
 		"unordered soldiers":  unordered,
 		"same slot twice":     twice,

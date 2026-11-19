@@ -142,6 +142,8 @@ type testReceiver struct {
 	deltas  int
 	updates map[game.SoldierID]int
 	removed map[game.SoldierID]int
+	// private is the private part of the newest snapshot.
+	private protocol.PlayerState
 }
 
 func addReceiver(t *testing.T, server *Server, id game.PlayerID, ackDelay int, loss float64) *testReceiver {
@@ -218,6 +220,7 @@ func (r *testReceiver) receive() {
 			r.baselines.Forget(id)
 		}
 		r.observe(snapshot.Sequence)
+		r.private = snapshot.Player
 	}
 	// One input packet a tick, delivered after the delay.
 	r.acks = append(r.acks, r.ack)

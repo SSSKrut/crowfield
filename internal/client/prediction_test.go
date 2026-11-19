@@ -207,7 +207,7 @@ func TestReconcileReplaysFromTheServerState(t *testing.T) {
 		confirmed := history[tick-lag]
 		err := predictor.reconcile(protocol.PlayerState{
 			Processed: true, LastProcessedTick: tick - lag, Soldier: 0x1000,
-			Position: confirmed.Position, Velocity: confirmed.Velocity,
+			Position: confirmed.Position, Velocity: confirmed.Velocity, Health: game.MaxHealth,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -232,7 +232,9 @@ func TestJoinForgetsTheLastSession(t *testing.T) {
 	spawn := game.PrototypeScene().Spawn
 	confirm := func(tick game.Tick) {
 		t.Helper()
-		err := predictor.reconcile(protocol.PlayerState{Processed: true, LastProcessedTick: tick, Soldier: 0x1000, Position: spawn})
+		err := predictor.reconcile(protocol.PlayerState{
+			Processed: true, LastProcessedTick: tick, Soldier: 0x1000, Position: spawn, Health: game.MaxHealth,
+		})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -256,6 +258,47 @@ func TestJoinForgetsTheLastSession(t *testing.T) {
 	confirm(20)
 	if moved := math.Hypot(float64(predictor.soldier.Position.X-spawn.X), float64(predictor.soldier.Position.Z-spawn.Z)); moved > 1e-3 {
 		t.Errorf("the soldier moved %.3f m on commands of the last session", moved)
+	}
+}
+
+// The dead are not predicted: the soldier stays where the server has it
+// while commands go on, and a new soldier starts the prediction without a
+// correction.
+func TestDeathStopsThePredictionUntilANewSoldier(t *testing.T) {
+	predictor, err := newPredictor(sceneWorld(t), game.DefaultRules())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer predictor.close()
+	spawn := game.PrototypeScene().Spawn
+	state := protocol.PlayerState{Processed: true, Soldier: 0x1000, Position: spawn, Health: game.MaxHealth}
+	run := func(from, to game.Tick) {
+		t.Helper()
+		for tick := from; tick < to; tick++ {
+			if _, err := predictor.predict(game.NewInputCommand(tick, 1, 0, 0, 0, game.ButtonFire)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	run(0, 1)
+	if err := predictor.reconcile(state); err != nil {
+		t.Fatal(err)
+	}
+	run(1, 10)
+	state.LastProcessedTick, state.Health, state.Respawn, state.Position = 5, 0, 60, physics.V(1, 0, 3)
+	if err := predictor.reconcile(state); err != nil {
+		t.Fatal(err)
+	}
+	run(10, 40)
+	if predictor.started || predictor.soldier.Position != state.Position {
+		t.Errorf("the dead soldier was predicted to %+v", predictor.soldier.Position)
+	}
+	state = protocol.PlayerState{Processed: true, LastProcessedTick: 38, Soldier: 0x2000, Position: spawn, Health: game.MaxHealth}
+	if err := predictor.reconcile(state); err != nil {
+		t.Fatal(err)
+	}
+	if !predictor.started || predictor.corrections != 0 || predictor.soldier.ID != 0x2000 {
+		t.Errorf("the new soldier: started %t, %d corrections, soldier %#04x", predictor.started, predictor.corrections, predictor.soldier.ID)
 	}
 }
 

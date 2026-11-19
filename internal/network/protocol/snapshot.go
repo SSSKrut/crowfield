@@ -24,6 +24,8 @@ const (
 
 	soldierCountBits = 10
 	removedCountBits = 8
+	healthBits       = 7
+	respawnBits      = 16
 	teamBits         = 2
 	flagsBits        = 8
 	horizontalBits   = 21
@@ -230,7 +232,7 @@ const NoInput = math.MinInt8
 
 // PlayerState is the private part of a snapshot for the player who receives it.
 // Position, velocity and the arsenal keep full precision for reconciliation
-// and are only sent while the player has a soldier.
+// and are only sent while the player has a soldier, with its health.
 type PlayerState struct {
 	Processed         bool
 	LastProcessedTick game.Tick
@@ -242,7 +244,11 @@ type PlayerState struct {
 	Soldier   game.SoldierID
 	Position  physics.Vec3
 	Velocity  physics.Vec3
-	Arsenal   game.Arsenal
+	// Health is zero while the soldier is dead; Respawn is then how many
+	// ticks are left until the player comes back, at least one.
+	Health  uint8
+	Respawn uint16
+	Arsenal game.Arsenal
 }
 
 func (p *PlayerState) validate() error {
@@ -253,12 +259,27 @@ func (p *PlayerState) validate() error {
 		return ErrInvalidFloat
 	}
 	if p.Soldier == 0 {
-		if p.Arsenal != (game.Arsenal{}) {
-			return errors.New("an arsenal without a soldier")
+		if p.Arsenal != (game.Arsenal{}) || p.Health != 0 || p.Respawn != 0 {
+			return errors.New("an arsenal or health without a soldier")
 		}
 		return nil
 	}
+	if err := validateHealth(p.Health, p.Respawn); err != nil {
+		return err
+	}
 	return validateArsenal(&p.Arsenal)
+}
+
+// validateHealth accepts health up to the maximum and a time to respawn
+// only, and always, for the dead.
+func validateHealth(health uint8, respawn uint16) error {
+	switch {
+	case health > game.MaxHealth:
+		return fmt.Errorf("health %d is over %d", health, game.MaxHealth)
+	case (health == 0) != (respawn != 0):
+		return errors.New("only the dead wait to respawn")
+	}
+	return nil
 }
 
 func (p *PlayerState) bits() int {
@@ -267,7 +288,10 @@ func (p *PlayerState) bits() int {
 		bits += 32
 	}
 	if p.Soldier != 0 {
-		bits += 6*32 + arsenalBits(&p.Arsenal)
+		bits += 6*32 + healthBits + arsenalBits(&p.Arsenal)
+		if p.Health == 0 {
+			bits += respawnBits
+		}
 	}
 	return bits
 }
@@ -282,6 +306,10 @@ func (p *PlayerState) write(w *BitWriter) {
 	if p.Soldier != 0 {
 		for _, value := range [6]float32{p.Position.X, p.Position.Y, p.Position.Z, p.Velocity.X, p.Velocity.Y, p.Velocity.Z} {
 			w.WriteFloat32(value)
+		}
+		w.WriteBits(uint32(p.Health), healthBits)
+		if p.Health == 0 {
+			w.WriteBits(uint32(p.Respawn), respawnBits)
 		}
 		writeArsenal(w, &p.Arsenal)
 	}
@@ -302,6 +330,15 @@ func (p *PlayerState) read(r *BitReader) {
 	}
 	p.Position = physics.V(r.ReadFloat32(), r.ReadFloat32(), r.ReadFloat32())
 	p.Velocity = physics.V(r.ReadFloat32(), r.ReadFloat32(), r.ReadFloat32())
+	p.Health = uint8(r.ReadBits(healthBits))
+	if p.Health == 0 {
+		p.Respawn = uint16(r.ReadBits(respawnBits))
+	}
+	if r.Err() == nil {
+		if err := validateHealth(p.Health, p.Respawn); err != nil {
+			r.Fail(err)
+		}
+	}
 	readArsenal(r, &p.Arsenal)
 }
 

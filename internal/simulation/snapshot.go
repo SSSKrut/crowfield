@@ -131,6 +131,10 @@ func (s *Server) sendSnapshot(p *player) {
 	}
 	if soldier := s.soldiers.Get(p.soldier); soldier != nil {
 		private.Position, private.Velocity, private.Arsenal = soldier.Position, soldier.Velocity, soldier.Arsenal
+		private.Health = soldier.Health
+		if !soldier.Alive {
+			private.Respawn = uint16(max(1, min(math.MaxUint16, int32(p.respawnAt-s.tick))))
+		}
 	}
 	s.prioritize(p)
 	p.removals = slices.DeleteFunc(p.removals, func(r pendingRemoval) bool { return p.removalDelivered(&r) })

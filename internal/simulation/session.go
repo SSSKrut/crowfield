@@ -43,6 +43,8 @@ type player struct {
 	ready      bool
 	soldier    game.SoldierID
 	controller *game.CharacterController
+	// respawnAt is when a dead soldier of the player comes back.
+	respawnAt game.Tick
 
 	inputs        inputBuffer
 	lastInput     time.Time
@@ -314,25 +316,27 @@ func (s *Server) ready(sess *session) {
 	}
 }
 
-// spawn gives a player a soldier, in the team it played for before.
+// spawn gives a player a soldier at the spawn of its team, the team it
+// played for before.
 func (s *Server) spawn(p *player) error {
 	if p.team == game.TeamNone {
 		p.team = s.smallerTeam()
 	}
+	spawn := s.scene.SpawnOf(p.team)
 	id, err := s.soldiers.Add(game.Soldier{
-		Team: p.team, Controller: game.PlayerController(p.id), Alive: true, Position: s.scene.Spawn,
-		Arsenal: game.NewArsenal(game.DefaultLoadout(), &s.rules.Weapons),
+		Team: p.team, Controller: game.PlayerController(p.id), Alive: true, Position: spawn,
+		Health: game.MaxHealth, Arsenal: game.NewArsenal(game.DefaultLoadout(), &s.rules.Weapons),
 	})
 	if err != nil {
 		return err
 	}
-	controller, err := game.NewCharacterController(s.world, s.rules.Movement, s.scene.Spawn)
+	controller, err := game.NewCharacterController(s.world, s.rules.Movement, spawn)
 	if err != nil {
 		s.soldiers.Remove(id)
 		return err
 	}
 	p.soldier, p.controller = id, controller
-	return controller.Teleport(s.soldiers.Get(id), s.scene.Spawn)
+	return controller.Teleport(s.soldiers.Get(id), spawn)
 }
 
 func (s *Server) smallerTeam() game.Team {
@@ -346,14 +350,16 @@ func (s *Server) smallerTeam() game.Team {
 	return game.TeamBlue
 }
 
+// respawn puts a living soldier back at its spawn with full health and
+// magazines; the dead wait for their time.
 func (s *Server) respawn(sess *session) {
 	p := sess.player
-	if p == nil || p.soldier == 0 {
+	if p == nil || p.soldier == 0 || !s.soldiers.Get(p.soldier).Alive {
 		return
 	}
 	soldier := s.soldiers.Get(p.soldier)
-	soldier.Arsenal = game.NewArsenal(game.DefaultLoadout(), &s.rules.Weapons)
-	if err := p.controller.Teleport(soldier, s.scene.Spawn); err != nil {
+	soldier.Health, soldier.Arsenal = game.MaxHealth, game.NewArsenal(game.DefaultLoadout(), &s.rules.Weapons)
+	if err := p.controller.Teleport(soldier, s.scene.SpawnOf(soldier.Team)); err != nil {
 		log.Printf("player %d could not respawn: %v", p.id, err)
 	}
 }
@@ -368,6 +374,8 @@ func (s *Server) leave(sess *session, reason error) {
 	if p.soldier != 0 {
 		// Every other player's view of the slot notices the soldier is gone.
 		s.soldiers.Remove(p.soldier)
+	}
+	if p.controller != nil {
 		_ = p.controller.Close()
 	}
 	s.players[p.id] = nil

@@ -26,6 +26,10 @@ type Server struct {
 	// defaults.
 	InputTimeout    time.Duration
 	ReconnectWindow time.Duration
+	// A dead soldier comes back after RespawnDelay; zero means the default.
+	RespawnDelay time.Duration
+	// FriendlyFire lets shots hurt soldiers of the shooter's own team.
+	FriendlyFire bool
 	// ClientBandwidth is the snapshot budget of each client in bytes per
 	// second, transport overhead included; zero means the default.
 	ClientBandwidth int
@@ -37,6 +41,7 @@ const DefaultClientBandwidth = 32 * 1024
 const (
 	DefaultInputTimeout    = 5 * time.Second
 	DefaultReconnectWindow = time.Minute
+	DefaultRespawnDelay    = 5 * time.Second
 )
 
 func DefaultServer() Server {

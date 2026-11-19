@@ -130,6 +130,13 @@ func (p *predictor) reconcile(server protocol.PlayerState) error {
 	if !server.Processed || server.Soldier == 0 {
 		return nil
 	}
+	if server.Health == 0 {
+		// The dead are not predicted: the soldier lies where the server
+		// says, and a new one starts the prediction again.
+		p.started, p.offset = false, physics.Vec3{}
+		p.soldier = game.Soldier{ID: server.Soldier, Position: server.Position, Arsenal: server.Arsenal}
+		return nil
+	}
 	tick := server.LastProcessedTick
 	slot := &p.ticks[tick%predictionHistory]
 	known := p.started && slot.tick == tick && slot.stepped
@@ -140,7 +147,8 @@ func (p *predictor) reconcile(server protocol.PlayerState) error {
 	}
 	before := p.soldier.Position
 	confirmed := game.Soldier{
-		ID: server.Soldier, Alive: true, Position: server.Position, Velocity: server.Velocity, Arsenal: server.Arsenal,
+		ID: server.Soldier, Alive: true, Position: server.Position, Velocity: server.Velocity,
+		Health: server.Health, Arsenal: server.Arsenal,
 	}
 	var err error
 	if known && distance(slot.soldier.Position, server.Position) < teleportDistance {

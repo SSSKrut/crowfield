@@ -12,7 +12,7 @@ import (
 	"fmt"
 )
 
-const ProtocolVersion = 7
+const ProtocolVersion = 8
 
 type MessageType uint8
 

@@ -12,6 +12,7 @@ const (
 	systemEvents system = iota
 	systemPlayers
 	systemDummies
+	systemShots
 	systemPhysics
 	systemGrid
 	systemHistory
@@ -19,7 +20,7 @@ const (
 	systemCount
 )
 
-var systemNames = [systemCount]string{"events", "players", "dummies", "physics", "grid", "history", "snapshots"}
+var systemNames = [systemCount]string{"events", "players", "dummies", "shots", "physics", "grid", "history", "snapshots"}
 
 // tickProfile measures where tick time goes, per system, between two log lines.
 type tickProfile struct {
@@ -27,7 +28,9 @@ type tickProfile struct {
 	total, longest time.Duration
 	systems        [systemCount]time.Duration
 	missedCommands uint64
-	shots          uint64
+	// shots counts the shots fired, hits those that struck a soldier, and
+	// kills the soldiers that died.
+	shots, hits, kills uint64
 	// snapshotBytes counts what snapshots cost on the wire, with the estimated
 	// overhead of every datagram.
 	snapshotBytes uint64

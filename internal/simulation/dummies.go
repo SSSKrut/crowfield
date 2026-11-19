@@ -22,6 +22,8 @@ const (
 type dummy struct {
 	soldier game.SoldierID
 	target  physics.Vec3
+	// respawnAt is when a dead dummy comes back.
+	respawnAt game.Tick
 }
 
 type dummies struct {
@@ -32,6 +34,8 @@ type dummies struct {
 	rays   []physics.Ray
 	hits   []physics.RayHit
 	moves  []physics.Vec3
+	// moving lists the dummies alive this tick, whose rays are cast.
+	moving []int
 }
 
 func (s *Server) spawnDummies(count int) error {
@@ -39,24 +43,33 @@ func (s *Server) spawnDummies(count int) error {
 		random: rand.New(rand.NewPCG(s.matchSeed, s.matchSeed^0xD0D0)),
 		speed:  s.rules.Movement.WalkSpeed, area: s.scene.PlayArea,
 	}
+	s.dummies.all = make([]dummy, count)
 	for i := range count {
 		team := game.TeamBlue
 		if i%2 == 1 {
 			team = game.TeamRed
 		}
-		position, err := s.floorPoint()
-		if err != nil {
+		if err := s.spawnDummy(i, team); err != nil {
 			return err
 		}
-		id, err := s.soldiers.Add(game.Soldier{
-			Team: team, Controller: game.BotController(game.BotID(i)), Alive: true, Grounded: true,
-			Position: position, Arsenal: game.NewArsenal(game.DefaultLoadout(), &s.rules.Weapons),
-		})
-		if err != nil {
-			return err
-		}
-		s.dummies.all = append(s.dummies.all, dummy{soldier: id, target: s.dummies.openPoint(s.scene.Spawn)})
 	}
+	return nil
+}
+
+// spawnDummy puts dummy i on the map as a new soldier of the team.
+func (s *Server) spawnDummy(i int, team game.Team) error {
+	position, err := s.floorPoint()
+	if err != nil {
+		return err
+	}
+	id, err := s.soldiers.Add(game.Soldier{
+		Team: team, Controller: game.BotController(game.BotID(i)), Alive: true, Grounded: true,
+		Position: position, Health: game.MaxHealth, Arsenal: game.NewArsenal(game.DefaultLoadout(), &s.rules.Weapons),
+	})
+	if err != nil {
+		return err
+	}
+	s.dummies.all[i] = dummy{soldier: id, target: s.dummies.openPoint(s.scene.Spawn)}
 	return nil
 }
 
@@ -89,15 +102,19 @@ func (d *dummies) openPoint(spawn physics.Vec3) physics.Vec3 {
 	}
 }
 
-// moveDummies walks every dummy towards its target and away from its
+// moveDummies walks every living dummy towards its target and away from its
 // neighbours, then casts all ground rays in one batch. A ray that starts inside
 // geometry means a wall, and no ground within the drop means a ledge: either
 // way the dummy stays and picks another target.
 func (s *Server) moveDummies() error {
 	d := &s.dummies
-	d.rays, d.moves = d.rays[:0], d.moves[:0]
+	d.rays, d.moves, d.moving = d.rays[:0], d.moves[:0], d.moving[:0]
 	for i := range d.all {
 		soldier := s.soldiers.Get(d.all[i].soldier)
+		if !soldier.Alive {
+			continue
+		}
+		d.moving = append(d.moving, i)
 		toTarget := d.all[i].target.Sub(soldier.Position)
 		toTarget.Y = 0
 		if length := horizontalLength(toTarget); length < 0.5 {
@@ -131,15 +148,15 @@ func (s *Server) moveDummies() error {
 	if err := s.world.RayCastBatch(d.rays, physics.Mask(physics.LayerStatic), d.hits); err != nil {
 		return err
 	}
-	for i := range d.all {
+	for k, i := range d.moving {
 		soldier := s.soldiers.Get(d.all[i].soldier)
-		hit := d.hits[i]
+		hit := d.hits[k]
 		if !hit.Hit || hit.Fraction == 0 {
 			soldier.Velocity = physics.Vec3{}
 			d.all[i].target = d.openPoint(s.scene.Spawn)
 			continue
 		}
-		next := d.moves[i]
+		next := d.moves[k]
 		next.Y = hit.Position.Y
 		soldier.Velocity = next.Sub(soldier.Position).Mul(game.TickRate)
 		soldier.Position = next

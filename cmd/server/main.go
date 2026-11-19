@@ -29,6 +29,8 @@ func main() {
 	flag.Uint64Var(&settings.Seed, "seed", 0, "match seed for repeatable runs; 0 picks a random one")
 	flag.DurationVar(&settings.InputTimeout, "input-timeout", config.DefaultInputTimeout, "disconnect a player who sends no input this long")
 	flag.DurationVar(&settings.ReconnectWindow, "reconnect-window", config.DefaultReconnectWindow, "keep the place of a lost player this long")
+	flag.DurationVar(&settings.RespawnDelay, "respawn-delay", config.DefaultRespawnDelay, "how long the dead wait to come back")
+	flag.BoolVar(&settings.FriendlyFire, "friendly-fire", false, "let shots hurt the shooter's own team")
 	bandwidth := flag.Int("client-bandwidth", settings.ClientBandwidth/1024, "snapshot budget of each client, KB/s")
 	flag.Parse()
 	settings.ClientBandwidth = *bandwidth * 1024

@@ -47,6 +47,9 @@ type Server struct {
 	dummies          dummies
 	grid             *game.SoldierGrid
 	history          *poseHistory
+	// shots are the shots of the current tick, resolved after every
+	// soldier acted.
+	shots []pendingShot
 
 	// states are the soldiers of the current snapshot by slot, quantized once
 	// for every player; a zero ID marks an empty slot.
@@ -72,6 +75,9 @@ func NewServer(settings config.Server, rules game.Rules) (*Server, error) {
 	}
 	if settings.ReconnectWindow <= 0 {
 		settings.ReconnectWindow = config.DefaultReconnectWindow
+	}
+	if settings.RespawnDelay <= 0 {
+		settings.RespawnDelay = config.DefaultRespawnDelay
 	}
 	if settings.ClientBandwidth < 0 {
 		return nil, fmt.Errorf("client bandwidth %d is negative", settings.ClientBandwidth)
@@ -173,8 +179,9 @@ func (s *Server) run(ctx context.Context) error {
 			players := s.playerCount()
 			var memory runtime.MemStats
 			runtime.ReadMemStats(&memory)
-			log.Printf("server running: tick=%d rate=%.1f players=%d soldiers=%d missed_commands=%d shots=%d snapshots=%.1fKB/s/player heap=%.1fMB goroutines=%d %s",
-				s.tick, float64(s.profile.ticks)/since.Seconds(), players, s.soldiers.Len(), s.profile.missedCommands, s.profile.shots,
+			log.Printf("server running: tick=%d rate=%.1f players=%d soldiers=%d missed_commands=%d shots=%d hits=%d kills=%d snapshots=%.1fKB/s/player heap=%.1fMB goroutines=%d %s",
+				s.tick, float64(s.profile.ticks)/since.Seconds(), players, s.soldiers.Len(), s.profile.missedCommands,
+				s.profile.shots, s.profile.hits, s.profile.kills,
 				float64(s.profile.snapshotBytes)/1024/since.Seconds()/float64(max(1, players)),
 				float64(memory.HeapInuse)/(1<<20), runtime.NumGoroutine(), &s.profile)
 			lastStats = time.Now()
@@ -188,12 +195,16 @@ func (s *Server) run(ctx context.Context) error {
 	}
 }
 
-// step runs one tick. Commands for this tick move the soldiers, then the world
-// steps, then the snapshot describes the state at the end of the tick.
+// step runs one tick. The dead whose time has come return, commands for this
+// tick move the soldiers and fire their weapons, the shots hit, then the
+// world steps, and the snapshot describes the state at the end of the tick.
 func (s *Server) step() error {
 	s.profile.start()
 	s.handleEvents()
 	s.dropSilentSessions()
+	if err := s.respawnDead(); err != nil {
+		return err
+	}
 	s.profile.lap(systemEvents)
 	for _, p := range s.players {
 		if p != nil && p.soldier != 0 {
@@ -207,6 +218,10 @@ func (s *Server) step() error {
 		return err
 	}
 	s.profile.lap(systemDummies)
+	if err := s.resolveShots(); err != nil {
+		return err
+	}
+	s.profile.lap(systemShots)
 	if err := s.world.Step(game.TickDelta); err != nil {
 		return err
 	}
@@ -245,20 +260,22 @@ func (s *Server) movePlayer(p *player) error {
 	}
 	command.Sanitize()
 	p.last = command
+	p.processed, p.lastProcessed = true, s.tick
 	soldier := s.soldiers.Get(p.soldier)
+	if !soldier.Alive {
+		// The dead do not move or shoot; the commands still keep the clock.
+		return nil
+	}
 	step, err := game.RunCommand(p.controller, &s.rules.Weapons, soldier, command, s.matchSeed)
 	if err != nil {
 		return err
 	}
 	if step.Events.Has(game.EventFired) {
-		// Shots hit nothing yet: hit tests come with step 2.2.
+		s.shots = append(s.shots, pendingShot{shooter: soldier.ID, team: soldier.Team, shot: step.Shot})
 		s.profile.shots++
 	}
 	if soldier.Position.Y < fallLimit {
-		if err := p.controller.Teleport(soldier, s.scene.Spawn); err != nil {
-			return err
-		}
+		return p.controller.Teleport(soldier, s.scene.SpawnOf(soldier.Team))
 	}
-	p.processed, p.lastProcessed = true, s.tick
 	return nil
 }

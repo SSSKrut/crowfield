@@ -43,9 +43,12 @@ type remoteView struct {
 
 // soldiers draws every other soldier with the shared character asset. Each
 // has its own animation state, made when the soldier is first seen and
-// dropped when it is gone.
+// dropped when it is gone. A soldier that dies falls as a ragdoll into the
+// bodies of the world.
 type soldiers struct {
 	asset      *animation.CharacterAsset
+	world      *physics.World
+	bodies     *bodies
 	characters map[game.SoldierID]*animation.Character
 	views      []remoteView
 	frustum    render.Frustum
@@ -60,8 +63,9 @@ func newSoldiers(asset *animation.CharacterAsset) *soldiers {
 }
 
 // update places every other soldier at the interpolation time, advances its
-// animation and chooses how to draw it from the camera.
-func (s *soldiers) update(session *session, deltaTime float32, camera rl.Camera3D, aspect float32) {
+// animation and chooses how to draw it from the camera. A soldier that is
+// dead at that time falls.
+func (s *soldiers) update(session *session, deltaTime float32, camera rl.Camera3D, aspect float32) error {
 	s.frustum = render.NewFrustum(camera, aspect)
 	eye := physics.V(camera.Position.X, camera.Position.Y, camera.Position.Z)
 	s.views = s.views[:0]
@@ -78,6 +82,15 @@ func (s *soldiers) update(session *session, deltaTime float32, camera rl.Camera3
 		known.remote.smooth(deltaTime)
 		soldier := known.remote.at(session.clock.renderTick)
 		character := s.characters[id]
+		if !soldier.Alive {
+			if character != nil {
+				delete(s.characters, id)
+				if err := s.fall(character, soldier, eye); err != nil {
+					return err
+				}
+			}
+			continue
+		}
 		if character == nil {
 			character = s.asset.NewCharacter()
 			s.characters[id] = character
@@ -98,6 +111,21 @@ func (s *soldiers) update(session *session, deltaTime float32, camera rl.Camera3
 			s.views[i].detail = animation.DetailFull
 		}
 	}
+	return nil
+}
+
+// fall turns a soldier that died into a ragdoll from its pose, knocked back.
+// Far away, where it would be a capsule, it is simply gone.
+func (s *soldiers) fall(character *animation.Character, soldier game.Soldier, eye physics.Vec3) error {
+	if s.world == nil || distance(soldier.Position, eye) > capsuleDistance {
+		return character.Close()
+	}
+	impulse := game.ViewDirection(soldier.Yaw, 0).Mul(-25).Add(physics.V(0, 10, 0))
+	if err := character.CreateRagdoll(s.world, soldier.Position, facing(soldier.Yaw), soldier.Velocity, impulse); err != nil {
+		_ = character.Close()
+		return err
+	}
+	return s.bodies.add(character, s.tint(soldier.Team), eye)
 }
 
 // aim finds the soldier nearest to the line of sight, within a few degrees,
@@ -133,8 +161,7 @@ func (s *soldiers) draw(tuning game.MovementTuning, debug bool) {
 			}
 		}
 		if debug {
-			center := view.soldier.Position.Add(physics.V(0, tuning.CenterHeight(), 0))
-			render.DrawCharacterCapsule(center, tuning.CapsuleHalfHeight, tuning.CapsuleRadius)
+			drawHitboxes(view.soldier)
 		}
 	}
 }
@@ -165,6 +192,15 @@ func (s *soldiers) knockDown(world *physics.World, fallen *bodies, eye physics.V
 		}
 	}
 	return nil
+}
+
+var zoneColors = [...]color.RGBA{game.ZoneHead: rl.Red, game.ZoneTorso: rl.Yellow, game.ZoneLimb: rl.Green}
+
+// drawHitboxes shows where the server tests shots against a soldier.
+func drawHitboxes(soldier game.Soldier) {
+	for _, box := range game.Hitboxes(soldier.Position, soldier.Yaw) {
+		rl.DrawCapsuleWires(render.Vector(box.A), render.Vector(box.B), box.Radius, 6, 4, zoneColors[box.Zone])
+	}
 }
 
 func drawCapsule(tuning game.MovementTuning, soldier game.Soldier, tint color.RGBA) {

@@ -8,10 +8,20 @@ const PrototypeMap = "prototype"
 type Scene struct {
 	Boxes   []physics.BoxDesc
 	Spheres []physics.SphereDesc
-	Spawn   physics.Vec3
+	// Spawn is where the blue team appears, RedSpawn the red team.
+	Spawn    physics.Vec3
+	RedSpawn physics.Vec3
 	// PlayArea is the half size of the square around the origin that soldiers
 	// may roam.
 	PlayArea float32
+}
+
+// SpawnOf is where soldiers of a team appear.
+func (s Scene) SpawnOf(team Team) physics.Vec3 {
+	if team == TeamRed {
+		return s.RedSpawn
+	}
+	return s.Spawn
 }
 
 func PrototypeScene() Scene {
@@ -23,6 +33,7 @@ func PrototypeScene() Scene {
 	}
 	return Scene{
 		Spawn:    physics.V(0, 0.2, 7),
+		RedSpawn: physics.V(0, 0.2, -11),
 		PlayArea: 14,
 		Boxes: []physics.BoxDesc{
 			{HalfExtents: physics.V(15, 0.25, 15), Transform: identity(physics.V(0, -0.25, 0))},

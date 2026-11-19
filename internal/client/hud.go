@@ -99,3 +99,31 @@ func drawArsenal(arsenal *game.Arsenal, weapons *game.WeaponSet) {
 		rl.DrawText(text, x, bottom-16, 16, tint)
 	}
 }
+
+// drawHealth shows the health of the own soldier in the bottom left corner.
+func drawHealth(health uint8) {
+	height := int32(rl.GetScreenHeight())
+	left, bottom := int32(24), height-24
+	share := float32(health) / game.MaxHealth
+	tint := rl.NewColor(110, 220, 120, 255)
+	if share <= 0.25 {
+		tint = rl.Red
+	} else if share <= 0.5 {
+		tint = rl.Orange
+	}
+	rl.DrawRectangle(left-6, bottom-64, 232, 70, rl.NewColor(0, 0, 0, 110))
+	rl.DrawText(fmt.Sprint(health), left, bottom-48, 48, tint)
+	rl.DrawText("HEALTH", left+rl.MeasureText(fmt.Sprint(health), 48)+10, bottom-26, 20, rl.LightGray)
+	rl.DrawRectangle(left, bottom-4, 220, 4, rl.NewColor(255, 255, 255, 50))
+	rl.DrawRectangle(left, bottom-4, int32(220*share), 4, tint)
+}
+
+// drawDeath tells the dead player when it comes back.
+func drawDeath(respawn uint16) {
+	width, height := int32(rl.GetScreenWidth()), int32(rl.GetScreenHeight())
+	rl.DrawRectangle(0, height/2-60, width, 120, rl.NewColor(0, 0, 0, 120))
+	title := "KILLED"
+	rl.DrawText(title, (width-rl.MeasureText(title, 48))/2, height/2-46, 48, rl.Red)
+	back := fmt.Sprintf("Back in the fight in %.1f s", float32(respawn)/game.TickRate)
+	rl.DrawText(back, (width-rl.MeasureText(back, 22))/2, height/2+14, 22, rl.White)
+}
