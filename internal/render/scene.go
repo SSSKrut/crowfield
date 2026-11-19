@@ -51,6 +51,9 @@ func NewScene(world *physics.World, description game.Scene) (*Scene, error) {
 		})
 	}
 	for i, description := range description.Spheres {
+		// The props are decoration on the client: the server does not simulate
+		// them, so the predicted soldier must not bump into them either.
+		description.Cosmetic = true
 		body, err := world.CreateSphere(description)
 		if err != nil {
 			_ = scene.Close()

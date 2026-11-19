@@ -9,3 +9,5 @@
 *.o
 *.log
 .DS_Store
+/server.crt
+/server.key

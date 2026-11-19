@@ -41,6 +41,8 @@ type session struct {
 	serverTick game.Tick
 	player     protocol.PlayerState
 	soldiers   map[game.SoldierID]*game.Soldier
+	remotes    map[game.SoldierID]*remoteSoldier
+	clock      interpolationClock
 
 	snapshots chan *protocol.Snapshot
 	cancel    context.CancelFunc
@@ -81,14 +83,18 @@ func connect(conn transport.Conn, name string, tuning game.MovementTuning) (*ses
 	if welcome.TuningHash != tuning.Hash() {
 		return nil, errors.New("server uses different movement tuning; prediction would not match")
 	}
+	if welcome.Map != game.PrototypeMap {
+		return nil, fmt.Errorf("server plays map %q, the client only has %q", welcome.Map, game.PrototypeMap)
+	}
 	if err := send(conn, &protocol.Ready{}); err != nil {
 		return nil, err
 	}
 	readCtx, stop := context.WithCancel(context.Background())
 	s := &session{
 		conn: conn, welcome: welcome, history: make([]game.InputCommand, 0, protocol.MaxCommandsPerInput),
-		soldiers: make(map[game.SoldierID]*game.Soldier), snapshots: make(chan *protocol.Snapshot, 64), cancel: stop,
-		failed: make(chan struct{}),
+		soldiers: make(map[game.SoldierID]*game.Soldier), remotes: make(map[game.SoldierID]*remoteSoldier),
+		clock: newInterpolationClock(int(welcome.SnapshotRate)), snapshots: make(chan *protocol.Snapshot, 64),
+		cancel: stop, failed: make(chan struct{}),
 	}
 	s.setClock(welcome.ServerTick, handshakeRTT)
 	go s.readSnapshots(readCtx)
@@ -97,10 +103,11 @@ func connect(conn transport.Conn, name string, tuning game.MovementTuning) (*ses
 }
 
 // sendCommand sends the command for the current client tick together with the
-// previous ones, so that a lost datagram is covered by the next.
-func (s *session) sendCommand(command game.InputCommand) error {
+// previous ones, so that a lost datagram is covered by the next. It returns the
+// command with its tick, for the prediction.
+func (s *session) sendCommand(command game.InputCommand) (game.InputCommand, error) {
 	if err := s.err(); err != nil {
-		return err
+		return command, err
 	}
 	command.Tick = s.tick
 	if len(s.history) == cap(s.history) {
@@ -111,34 +118,36 @@ func (s *session) sendCommand(command game.InputCommand) error {
 	packet := protocol.InputPacket{HasAck: s.acks.has, AckSequence: s.acks.latest, AckBits: s.acks.bits, Commands: s.history}
 	data, err := packet.Encode(s.buffer[:0])
 	if err != nil {
-		return err
+		return command, err
 	}
 	s.buffer = data
 	s.tick++
-	return s.conn.SendUnreliable(data)
+	return command, s.conn.SendUnreliable(data)
 }
 
 func (s *session) respawn() error {
 	return send(s.conn, &protocol.Respawn{})
 }
 
-// poll applies the snapshots received since the last frame.
-func (s *session) poll() error {
+// poll applies the snapshots received since the last frame. It reports
+// whether the player's own state changed, which calls for reconciliation.
+func (s *session) poll() (bool, error) {
+	updated := false
 	for {
 		select {
 		case snapshot := <-s.snapshots:
-			s.apply(snapshot)
+			updated = s.apply(snapshot) || updated
 		default:
-			return s.err()
+			return updated, s.err()
 		}
 	}
 }
 
-func (s *session) apply(snapshot *protocol.Snapshot) {
+func (s *session) apply(snapshot *protocol.Snapshot) bool {
 	s.acks.observe(snapshot.Sequence)
 	s.received++
 	if s.received > 1 && snapshot.ServerTick < s.serverTick {
-		return
+		return false
 	}
 	s.serverTick, s.player = snapshot.ServerTick, snapshot.Player
 	for _, state := range snapshot.Soldiers {
@@ -148,10 +157,20 @@ func (s *session) apply(snapshot *protocol.Snapshot) {
 			s.soldiers[state.ID] = soldier
 		}
 		state.Apply(soldier)
+		if state.ID != s.player.Soldier {
+			remote := s.remotes[state.ID]
+			if remote == nil {
+				remote = &remoteSoldier{}
+				s.remotes[state.ID] = remote
+			}
+			remote.add(snapshot.ServerTick, *soldier)
+		}
 	}
 	for _, id := range snapshot.Removed {
 		delete(s.soldiers, id)
+		delete(s.remotes, id)
 	}
+	s.clock.observe(snapshot.ServerTick)
 	if own := s.soldiers[s.player.Soldier]; own != nil {
 		own.Position, own.Velocity = s.player.Position, s.player.Velocity
 	}
@@ -159,6 +178,7 @@ func (s *session) apply(snapshot *protocol.Snapshot) {
 		(s.player.BufferedCommands < 0 || s.player.BufferedCommands > maxBuffered) {
 		s.resync()
 	}
+	return true
 }
 
 // resync jumps the client tick back to its lead when the server reports that

@@ -2,6 +2,9 @@ package game
 
 import "ravenfield/internal/physics"
 
+// PrototypeMap names the prototype scene in Welcome; it is the only map yet.
+const PrototypeMap = "prototype"
+
 type Scene struct {
 	Boxes   []physics.BoxDesc
 	Spheres []physics.SphereDesc

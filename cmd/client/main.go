@@ -21,6 +21,9 @@ func main() {
 	flag.StringVar(&settings.Tuning, "tuning", "", "JSON file overriding movement tuning")
 	flag.StringVar(&settings.Name, "name", settings.Name, "player name")
 	flag.StringVar(&settings.Netsim, "netsim", "", "simulate network conditions, e.g. delay=50ms,jitter=10ms,loss=2%")
+	flag.StringVar(&settings.Host, "host", "", "let other players join on this UDP address, e.g. :7777")
+	flag.StringVar(&settings.Connect, "connect", "", "join the server at this address instead of playing solo")
+	flag.StringVar(&settings.Fingerprint, "fingerprint", "", "certificate fingerprint the -connect server must have")
 	flag.Parse()
 	if err := client.Run(settings); err != nil {
 		log.Fatal(err)

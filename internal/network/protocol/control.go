@@ -60,6 +60,9 @@ type Welcome struct {
 	Player       game.PlayerID
 	SessionToken [16]byte
 	TickRate     uint8
+	// SnapshotRate tells the client how far apart snapshots are, which sets
+	// its interpolation delay.
+	SnapshotRate uint8
 	ServerTick   game.Tick
 	Map          string
 	MapHash      uint64
@@ -80,6 +83,7 @@ func (m *Welcome) Encode(dst []byte) ([]byte, error) {
 	w.WriteBits(uint32(m.Player), playerBits)
 	w.WriteBytes(m.SessionToken[:])
 	w.WriteBits(uint32(m.TickRate), 8)
+	w.WriteBits(uint32(m.SnapshotRate), 8)
 	w.WriteBits(uint32(m.ServerTick), 32)
 	w.WriteString(m.Map, mapLengthBits)
 	w.WriteUint64(m.MapHash)
@@ -93,6 +97,7 @@ func (m *Welcome) Decode(data []byte) error {
 	m.Player = game.PlayerID(r.ReadBits(playerBits))
 	r.ReadBytes(m.SessionToken[:])
 	m.TickRate = uint8(r.ReadBits(8))
+	m.SnapshotRate = uint8(r.ReadBits(8))
 	m.ServerTick = game.Tick(r.ReadBits(32))
 	m.Map = r.ReadString(mapLengthBits, MaxMapBytes)
 	m.MapHash = r.ReadUint64()

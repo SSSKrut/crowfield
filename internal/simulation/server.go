@@ -20,7 +20,6 @@ import (
 )
 
 const (
-	mapName = "prototype"
 	// A soldier that falls this far below the map goes back to the spawn.
 	fallLimit = -10
 )

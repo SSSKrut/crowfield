@@ -1,6 +1,7 @@
 package client
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"math"
@@ -22,7 +23,10 @@ type app struct {
 	spawn       physics.Vec3
 	tuning      game.MovementTuning
 	session     *session
+	predictor   *predictor
 	model       *animation.CharacterModel
+	remotes     map[game.SoldierID]*animation.CharacterModel
+	alpha       float32
 	camera      rl.Camera3D
 	yaw         float32
 	pitch       float32
@@ -34,8 +38,9 @@ type app struct {
 	demoCycle   int
 }
 
-// Run starts the embedded server, connects to it and plays. The client world
-// only holds cosmetic physics: ragdolls and the props of the prototype scene.
+// Run connects to a server and plays: to the embedded one in solo play and
+// when hosting, or to the one given by -connect. The client world holds the
+// static map for prediction and cosmetic physics: ragdolls and props.
 func Run(settings config.Client) error {
 	tuning := game.DefaultMovementTuning()
 	if settings.Tuning != "" {
@@ -72,19 +77,11 @@ func Run(settings config.Client) error {
 	}
 	defer scene.Close()
 
-	local, err := startLocalServer(tuning)
+	conn, stop, err := open(settings, tuning)
 	if err != nil {
 		return err
 	}
-	defer func() {
-		if err := local.stop(); err != nil {
-			log.Printf("local server: %v", err)
-		}
-	}()
-	conn, err := local.dial()
-	if err != nil {
-		return err
-	}
+	defer stop()
 	if conditions != (transport.NetworkConditions{}) {
 		log.Printf("simulating network: %s", conditions)
 		conn = transport.Simulate(conn, conditions)
@@ -95,8 +92,13 @@ func Run(settings config.Client) error {
 		return err
 	}
 	defer session.close()
+	predictor, err := newPredictor(world, tuning)
+	if err != nil {
+		return err
+	}
+	defer predictor.close()
 
-	model, err := animation.LoadCharacterModel("assets/prototype/RobotExpressive.glb")
+	model, err := animation.LoadCharacterModel(characterModelPath)
 	if err != nil {
 		return err
 	}
@@ -104,12 +106,56 @@ func Run(settings config.Client) error {
 
 	a := &app{
 		settings: settings, world: world, scene: scene, spawn: description.Spawn, tuning: tuning, session: session,
-		model: model, captured: settings.FrameLimit == 0, debug: settings.Debug, thirdPerson: true,
+		predictor: predictor, model: model, remotes: make(map[game.SoldierID]*animation.CharacterModel),
+		captured: settings.FrameLimit == 0, debug: settings.Debug, thirdPerson: true,
 	}
+	defer a.closeRemotes()
 	if a.captured {
 		rl.DisableCursor()
 	}
 	return a.run()
+}
+
+const characterModelPath = "assets/prototype/RobotExpressive.glb"
+
+// open returns a connection to the server the settings ask for and a function
+// that releases what open started.
+func open(settings config.Client, tuning game.MovementTuning) (transport.Conn, func(), error) {
+	if settings.Connect != "" {
+		var pinned *transport.Fingerprint
+		if settings.Fingerprint != "" {
+			fingerprint, err := transport.ParseFingerprint(settings.Fingerprint)
+			if err != nil {
+				return nil, nil, err
+			}
+			pinned = &fingerprint
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), connectTimeout)
+		defer cancel()
+		conn, err := transport.DialQUIC(ctx, settings.Connect, transport.ClientTLSConfig(pinned), transport.QUICOptions{})
+		if err != nil {
+			return nil, nil, fmt.Errorf("connect to %s: %w", settings.Connect, err)
+		}
+		if seen, ok := transport.PeerFingerprint(conn); ok && pinned == nil {
+			log.Printf("connected to %s, certificate fingerprint %s (pass -fingerprint to pin it)", settings.Connect, seen)
+		}
+		return conn, func() {}, nil
+	}
+	local, err := startLocalServer(tuning, settings.Host)
+	if err != nil {
+		return nil, nil, err
+	}
+	stop := func() {
+		if err := local.stop(); err != nil {
+			log.Printf("local server: %v", err)
+		}
+	}
+	conn, err := local.dial()
+	if err != nil {
+		stop()
+		return nil, nil, err
+	}
+	return conn, stop, nil
 }
 
 func (a *app) run() error {
@@ -149,18 +195,31 @@ func (a *app) run() error {
 		a.elapsed += deltaTime
 		accumulator += deltaTime
 		for accumulator >= game.TickDelta {
-			if err := a.session.sendCommand(a.command()); err != nil {
+			command, err := a.session.sendCommand(a.command())
+			if err != nil {
 				return fmt.Errorf("disconnected: %w", err)
+			}
+			if err := a.predictor.predict(command); err != nil {
+				return err
 			}
 			if err := a.world.Step(game.TickDelta); err != nil {
 				return err
 			}
 			accumulator -= game.TickDelta
 		}
-		if err := a.session.poll(); err != nil {
+		a.alpha = accumulator / game.TickDelta
+		updated, err := a.session.poll()
+		if err != nil {
 			return fmt.Errorf("disconnected: %w", err)
 		}
-		soldier := a.session.localSoldier()
+		if updated {
+			if err := a.predictor.reconcile(a.session.player); err != nil {
+				return err
+			}
+		}
+		a.predictor.smooth(deltaTime)
+		a.session.clock.advance(deltaTime)
+		soldier := a.ownSoldier()
 		if a.settings.Demo && soldier != nil && !a.ragdoll && a.elapsed >= 1.2 {
 			if err := a.die(); err != nil {
 				return err
@@ -175,12 +234,13 @@ func (a *app) run() error {
 		feet := a.spawn
 		var speed float32
 		if soldier != nil {
-			feet = soldier.Position
-			speed = float32(math.Hypot(float64(soldier.Velocity.X), float64(soldier.Velocity.Z)))
+			feet = a.predictor.drawn(a.alpha)
+			speed = horizontalSpeed(soldier.Velocity)
 		}
 		if err := a.model.Update(deltaTime, speed); err != nil {
 			return err
 		}
+		a.updateRemotes(deltaTime)
 		a.updateCamera(feet)
 		a.draw(feet, soldier != nil)
 		frames++
@@ -195,10 +255,59 @@ func (a *app) run() error {
 	if own := a.session.localSoldier(); own != nil {
 		soldier = *own
 	}
-	log.Printf("prototype finished: tick=%d server_tick=%d feet=%+v grounded=%t ragdoll=%t active=%t animation=%s snapshots=%d resyncs=%d",
+	log.Printf("prototype finished: tick=%d server_tick=%d feet=%+v grounded=%t ragdoll=%t active=%t animation=%s snapshots=%d resyncs=%d corrections=%d soldiers=%d",
 		a.session.tick, a.session.serverTick, soldier.Position, soldier.Grounded, a.ragdoll, a.model.RagdollActive(),
-		a.model.AnimationName(), a.session.received, a.session.resyncs)
+		a.model.AnimationName(), a.session.received, a.session.resyncs, a.predictor.corrections, len(a.session.soldiers))
 	return nil
+}
+
+// ownSoldier is the predicted soldier, or nil before the first snapshot of it.
+func (a *app) ownSoldier() *game.Soldier {
+	if !a.predictor.started {
+		return nil
+	}
+	return &a.predictor.soldier
+}
+
+// updateRemotes animates every other soldier with its own model; models of
+// soldiers that left are freed. One model per soldier is fine for 16 players;
+// shared models come with step 1.8.
+func (a *app) updateRemotes(deltaTime float32) {
+	for id, model := range a.remotes {
+		if a.session.remotes[id] == nil {
+			_ = model.Close()
+			delete(a.remotes, id)
+		}
+	}
+	for id, remote := range a.session.remotes {
+		model := a.remotes[id]
+		if model == nil {
+			loaded, err := animation.LoadCharacterModel(characterModelPath)
+			if err != nil {
+				log.Printf("model for soldier %#04x: %v", id, err)
+				continue
+			}
+			model = loaded
+			a.remotes[id] = model
+		}
+		_ = model.Update(deltaTime, horizontalSpeed(remote.at(a.session.clock.renderTick).Velocity))
+	}
+}
+
+func (a *app) closeRemotes() {
+	for _, model := range a.remotes {
+		_ = model.Close()
+	}
+}
+
+// facing turns the character model, which looks along +Z, towards where a
+// soldier with this yaw moves: (sin yaw, 0, -cos yaw).
+func facing(yaw float32) physics.Quat {
+	return physics.QuatFromAxisAngle(physics.V(0, 1, 0), math.Pi-yaw)
+}
+
+func horizontalSpeed(velocity physics.Vec3) float32 {
+	return float32(math.Hypot(float64(velocity.X), float64(velocity.Z)))
 }
 
 func (a *app) handleMouse() {
@@ -279,12 +388,22 @@ func (a *app) draw(feet physics.Vec3, spawned bool) {
 	rl.BeginMode3D(a.camera)
 	a.scene.Draw(a.debug)
 	if spawned && (a.thirdPerson || a.ragdoll) {
-		a.model.Draw(feet, physics.QuatFromAxisAngle(physics.V(0, 1, 0), a.yaw))
+		a.model.Draw(feet, facing(a.yaw))
 	}
-	// Other soldiers are capsules until the client renders several models (step 1.8).
-	for id, soldier := range a.session.soldiers {
-		if id != a.session.player.Soldier || (a.debug && !a.ragdoll) {
+	for id, remote := range a.session.remotes {
+		soldier := remote.at(a.session.clock.renderTick)
+		if model := a.remotes[id]; model != nil {
+			model.Draw(soldier.Position, facing(soldier.Yaw))
+		}
+		if a.debug {
 			center := soldier.Position.Add(physics.V(0, a.tuning.CenterHeight(), 0))
+			render.DrawCharacterCapsule(center, a.tuning.CapsuleHalfHeight, a.tuning.CapsuleRadius)
+		}
+	}
+	if a.debug && spawned && !a.ragdoll {
+		// The server's view of the own soldier, to compare with the prediction.
+		if server := a.session.localSoldier(); server != nil {
+			center := server.Position.Add(physics.V(0, a.tuning.CenterHeight(), 0))
 			render.DrawCharacterCapsule(center, a.tuning.CapsuleHalfHeight, a.tuning.CapsuleRadius)
 		}
 	}
@@ -302,9 +421,9 @@ func (a *app) draw(feet physics.Vec3, spawned bool) {
 	rl.DrawText("F1 physics | F3 camera | Esc cursor", 18, 44, 18, rl.White)
 	rl.DrawText(fmt.Sprintf("FPS %d | XYZ %.2f %.2f %.2f | %s", rl.GetFPS(), feet.X, feet.Y, feet.Z, a.model.AnimationName()), 18, 70, 18, rl.White)
 	stats := a.session.conn.Stats()
-	rl.DrawText(fmt.Sprintf("%d Hz | tick %d server %d buffered %d | RTT %d ms | resyncs %d | ragdoll %t",
-		game.TickRate, a.session.tick, a.session.serverTick, a.session.player.BufferedCommands,
-		stats.RTT.Milliseconds(), a.session.resyncs, a.ragdoll), 18, 96, 18, rl.White)
+	rl.DrawText(fmt.Sprintf("%d Hz | tick %d server %d buffered %d | RTT %d ms | resyncs %d | corrections %d (last %.3f m) | players %d",
+		game.TickRate, a.session.tick, a.session.serverTick, a.session.player.BufferedCommands, stats.RTT.Milliseconds(),
+		a.session.resyncs, a.predictor.corrections, a.predictor.lastError, len(a.session.soldiers)), 18, 96, 18, rl.White)
 	if !a.captured && a.settings.FrameLimit == 0 {
 		rl.DrawText("Press Esc to capture the mouse", 18, 132, 22, rl.Yellow)
 	}
@@ -328,13 +447,13 @@ func (a *app) drawRay() {
 // die shows the cosmetic ragdoll. Death itself is decided by the server from
 // stage 2 on; until then the soldier only stands still on the server.
 func (a *app) die() error {
-	soldier := a.session.localSoldier()
+	soldier := a.ownSoldier()
 	if a.ragdoll || soldier == nil {
 		return nil
 	}
-	yaw := physics.QuatFromAxisAngle(physics.V(0, 1, 0), a.yaw)
-	impulse := physics.QuatRotate(yaw, physics.V(0, 20, -35))
-	if err := a.model.CreateRagdoll(a.world, soldier.Position, yaw, soldier.Velocity, impulse); err != nil {
+	forward := physics.V(float32(math.Sin(float64(a.yaw))), 0, -float32(math.Cos(float64(a.yaw))))
+	impulse := forward.Mul(35).Add(physics.V(0, 20, 0))
+	if err := a.model.CreateRagdoll(a.world, a.predictor.drawn(a.alpha), facing(a.yaw), soldier.Velocity, impulse); err != nil {
 		return err
 	}
 	a.ragdoll = true

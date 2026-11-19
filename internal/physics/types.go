@@ -52,16 +52,20 @@ func IdentityTransform() Transform {
 	return Transform{Rotation: IdentityQuat()}
 }
 
+// Cosmetic bodies are dynamic but sit on the cosmetic layer: they touch only
+// the world and ragdolls, never characters, vehicles or game objects.
 type BoxDesc struct {
 	HalfExtents Vec3
 	Transform   Transform
 	Dynamic     bool
+	Cosmetic    bool
 }
 
 type SphereDesc struct {
 	Radius    float32
 	Transform Transform
 	Dynamic   bool
+	Cosmetic  bool
 }
 
 type Ray struct {

@@ -344,13 +344,14 @@ void rf_world_ray_cast_batch(RFWorld *world, const RFRay *rays, size_t count, ui
     jobs->DestroyBarrier(barrier);
 }
 
-static RFBody *create_body(RFWorld *world, const JPH::Shape *shape, RFTransform transform, int dynamic, RFError *error) {
-    if (world == nullptr || shape == nullptr) {
+static RFBody *create_body(RFWorld *world, const JPH::Shape *shape, RFTransform transform, int kind, RFError *error) {
+    if (world == nullptr || shape == nullptr || kind < RF_BODY_STATIC || kind > RF_BODY_COSMETIC) {
         set_error(error, "Invalid body parameters");
         return nullptr;
     }
+    const bool dynamic = kind != RF_BODY_STATIC;
     const JPH::EMotionType motion = dynamic ? JPH::EMotionType::Dynamic : JPH::EMotionType::Static;
-    const JPH::ObjectLayer layer = dynamic ? RF_LAYER_DYNAMIC : RF_LAYER_STATIC;
+    const JPH::ObjectLayer layer = kind == RF_BODY_COSMETIC ? RF_LAYER_COSMETIC : dynamic ? RF_LAYER_DYNAMIC : RF_LAYER_STATIC;
     JPH::BodyCreationSettings settings(shape, rvec(transform.position), quat(transform.rotation), motion, layer);
     settings.mFriction = 0.7f;
     JPH::BodyInterface &interface = world->system.GetBodyInterface();
@@ -364,22 +365,22 @@ static RFBody *create_body(RFWorld *world, const JPH::Shape *shape, RFTransform 
     return body;
 }
 
-RFBody *rf_body_create_box(RFWorld *world, RFVec3 half_extents, RFTransform transform, int dynamic, RFError *error) {
+RFBody *rf_body_create_box(RFWorld *world, RFVec3 half_extents, RFTransform transform, int kind, RFError *error) {
     if (half_extents.x <= 0.0f || half_extents.y <= 0.0f || half_extents.z <= 0.0f) {
         set_error(error, "Box extents must be positive");
         return nullptr;
     }
     JPH::RefConst<JPH::Shape> shape = new JPH::BoxShape(vec(half_extents));
-    return create_body(world, shape.GetPtr(), transform, dynamic, error);
+    return create_body(world, shape.GetPtr(), transform, kind, error);
 }
 
-RFBody *rf_body_create_sphere(RFWorld *world, float radius, RFTransform transform, int dynamic, RFError *error) {
+RFBody *rf_body_create_sphere(RFWorld *world, float radius, RFTransform transform, int kind, RFError *error) {
     if (radius <= 0.0f) {
         set_error(error, "Sphere radius must be positive");
         return nullptr;
     }
     JPH::RefConst<JPH::Shape> shape = new JPH::SphereShape(radius);
-    return create_body(world, shape.GetPtr(), transform, dynamic, error);
+    return create_body(world, shape.GetPtr(), transform, kind, error);
 }
 
 void rf_body_destroy(RFBody *body) {

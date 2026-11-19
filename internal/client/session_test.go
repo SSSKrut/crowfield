@@ -8,7 +8,19 @@ import (
 
 	"ravenfield/internal/game"
 	"ravenfield/internal/network/transport"
+	"ravenfield/internal/physics"
 )
+
+// The model must look where the soldier moves.
+func TestFacingLooksAlongMovement(t *testing.T) {
+	for _, yaw := range []float32{0, 0.7, math.Pi / 2, math.Pi, -2} {
+		looks := physics.QuatRotate(facing(yaw), physics.V(0, 0, 1))
+		moves := physics.V(float32(math.Sin(float64(yaw))), 0, -float32(math.Cos(float64(yaw))))
+		if distance(looks, moves) > 1e-5 {
+			t.Errorf("yaw %.2f: the model looks along %+v but moves along %+v", yaw, looks, moves)
+		}
+	}
+}
 
 func TestAckTracker(t *testing.T) {
 	var acks ackTracker
@@ -44,7 +56,7 @@ func TestSoloSessionThroughTheEmbeddedServer(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			tuning := game.DefaultMovementTuning()
-			local, err := startLocalServer(tuning)
+			local, err := startLocalServer(tuning, "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -75,10 +87,10 @@ func TestSoloSessionThroughTheEmbeddedServer(t *testing.T) {
 				if start != nil {
 					command = game.NewInputCommand(0, 1, 0, math.Pi/2, 0, 0)
 				}
-				if err := session.sendCommand(command); err != nil {
+				if _, err := session.sendCommand(command); err != nil {
 					t.Fatal(err)
 				}
-				if err := session.poll(); err != nil {
+				if _, err := session.poll(); err != nil {
 					t.Fatal(err)
 				}
 				if soldier := session.localSoldier(); start == nil && soldier != nil && soldier.Grounded {
@@ -105,7 +117,7 @@ func TestSoloSessionThroughTheEmbeddedServer(t *testing.T) {
 }
 
 func TestConnectRefusesADifferentTuning(t *testing.T) {
-	local, err := startLocalServer(game.DefaultMovementTuning())
+	local, err := startLocalServer(game.DefaultMovementTuning(), "")
 	if err != nil {
 		t.Fatal(err)
 	}

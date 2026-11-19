@@ -8,8 +8,13 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/hex"
+	"encoding/pem"
 	"errors"
+	"fmt"
+	"io/fs"
 	"math/big"
+	"os"
 	"time"
 )
 
@@ -45,6 +50,63 @@ func GenerateCertificate() (tls.Certificate, Fingerprint, error) {
 		return tls.Certificate{}, Fingerprint{}, err
 	}
 	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}, sha256.Sum256(der), nil
+}
+
+// LoadOrCreateCertificate reads the server certificate from two PEM files, or
+// creates and stores one on the first run, so its fingerprint stays the same.
+func LoadOrCreateCertificate(certificatePath, keyPath string) (tls.Certificate, Fingerprint, error) {
+	certificate, err := tls.LoadX509KeyPair(certificatePath, keyPath)
+	if err == nil {
+		return certificate, sha256.Sum256(certificate.Certificate[0]), nil
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		return tls.Certificate{}, Fingerprint{}, err
+	}
+	certificate, fingerprint, err := GenerateCertificate()
+	if err != nil {
+		return tls.Certificate{}, Fingerprint{}, err
+	}
+	key, err := x509.MarshalPKCS8PrivateKey(certificate.PrivateKey)
+	if err != nil {
+		return tls.Certificate{}, Fingerprint{}, err
+	}
+	certificatePEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certificate.Certificate[0]})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: key})
+	if err := os.WriteFile(keyPath, keyPEM, 0o600); err != nil {
+		return tls.Certificate{}, Fingerprint{}, err
+	}
+	if err := os.WriteFile(certificatePath, certificatePEM, 0o644); err != nil {
+		return tls.Certificate{}, Fingerprint{}, err
+	}
+	return certificate, fingerprint, nil
+}
+
+func (f Fingerprint) String() string {
+	return hex.EncodeToString(f[:])
+}
+
+func ParseFingerprint(text string) (Fingerprint, error) {
+	var fingerprint Fingerprint
+	decoded, err := hex.DecodeString(text)
+	if err != nil || len(decoded) != len(fingerprint) {
+		return fingerprint, fmt.Errorf("fingerprint must be %d hex digits", 2*len(fingerprint))
+	}
+	copy(fingerprint[:], decoded)
+	return fingerprint, nil
+}
+
+// PeerFingerprint returns the fingerprint of the server a QUIC connection
+// reached, so a client can show it and pin it next time.
+func PeerFingerprint(conn Conn) (Fingerprint, bool) {
+	c, ok := conn.(*quicConn)
+	if !ok {
+		return Fingerprint{}, false
+	}
+	certificates := c.conn.ConnectionState().TLS.PeerCertificates
+	if len(certificates) == 0 {
+		return Fingerprint{}, false
+	}
+	return sha256.Sum256(certificates[0].Raw), true
 }
 
 func ServerTLSConfig(certificate tls.Certificate) *tls.Config {

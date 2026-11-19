@@ -46,6 +46,13 @@ typedef enum RFLayer {
     RF_LAYER_COUNT = 5
 } RFLayer;
 
+typedef enum RFBodyKind {
+    RF_BODY_STATIC = 0,
+    RF_BODY_DYNAMIC = 1,
+    /* Dynamic, but on the cosmetic layer: only the world and ragdolls touch it. */
+    RF_BODY_COSMETIC = 2
+} RFBodyKind;
+
 typedef struct RFRay {
     RFVec3 origin;
     RFVec3 direction;
@@ -105,8 +112,8 @@ int rf_world_ray_cast(RFWorld *world, RFRay ray, uint32_t layer_mask, RFRayHit *
 /* Casts large batches in parallel on the shared pool. The world must not be stepped meanwhile. */
 void rf_world_ray_cast_batch(RFWorld *world, const RFRay *rays, size_t count, uint32_t layer_mask, RFRayHit *out_hits);
 
-RFBody *rf_body_create_box(RFWorld *world, RFVec3 half_extents, RFTransform transform, int dynamic, RFError *error);
-RFBody *rf_body_create_sphere(RFWorld *world, float radius, RFTransform transform, int dynamic, RFError *error);
+RFBody *rf_body_create_box(RFWorld *world, RFVec3 half_extents, RFTransform transform, int kind, RFError *error);
+RFBody *rf_body_create_sphere(RFWorld *world, float radius, RFTransform transform, int kind, RFError *error);
 void rf_body_destroy(RFBody *body);
 /* Matches RFRayHit.body_id of hits on this body. */
 uint32_t rf_body_get_id(const RFBody *body);

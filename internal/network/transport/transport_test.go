@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -434,6 +435,44 @@ func TestClientPinsServerFingerprint(t *testing.T) {
 		if client != nil {
 			_ = client.Close("done")
 		}
+	}
+}
+
+func TestCertificateIsStoredAndReused(t *testing.T) {
+	directory := t.TempDir()
+	certificatePath, keyPath := directory+"/server.crt", directory+"/server.key"
+	_, first, err := LoadOrCreateCertificate(certificatePath, keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certificate, again, err := LoadOrCreateCertificate(certificatePath, keyPath)
+	if err != nil || again != first {
+		t.Fatalf("second load gave %s, %v; want %s", again, err, first)
+	}
+	if info, err := os.Stat(keyPath); err != nil || info.Mode().Perm() != 0o600 {
+		t.Errorf("key file mode %v, %v", info.Mode(), err)
+	}
+	parsed, err := ParseFingerprint(first.String())
+	if err != nil || parsed != first {
+		t.Errorf("fingerprint does not parse back: %v", err)
+	}
+	if _, err := ParseFingerprint("abc"); err == nil {
+		t.Error("short fingerprint accepted")
+	}
+	listener, err := ListenQUIC("127.0.0.1:0", ServerTLSConfig(certificate), QUICOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	client, err := DialQUIC(ctx, listener.Addr(), ClientTLSConfig(nil), QUICOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close("done")
+	if seen, ok := PeerFingerprint(client); !ok || seen != first {
+		t.Errorf("client saw fingerprint %s, want %s", seen, first)
 	}
 }
 

@@ -18,7 +18,7 @@ func sampleMessages() []Message {
 		&Hello{},
 		&Welcome{
 			Player: game.MaxPlayers - 1, SessionToken: [16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
-			TickRate: game.TickRate, ServerTick: 123456, Map: "prototype",
+			TickRate: game.TickRate, SnapshotRate: 20, ServerTick: 123456, Map: "prototype",
 			MapHash: 0xFEEDFACECAFEBEEF, TuningHash: 42, MatchSeed: math.MaxUint64,
 		},
 		&Reject{Reason: RejectFull, Message: "сервер заполнен"},

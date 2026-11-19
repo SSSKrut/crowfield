@@ -210,6 +210,37 @@ func TestCharacterMaxStrength(t *testing.T) {
 	}
 }
 
+// Cosmetic props fall and rest on the world, but a character walks through them.
+func TestCosmeticBodiesDoNotTouchCharacters(t *testing.T) {
+	world := newTestWorld(t)
+	createFloor(t, world)
+	prop, err := world.CreateSphere(SphereDesc{Radius: 0.5, Dynamic: true, Cosmetic: true, Transform: translation(V(0, 1, -2))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	character, err := world.CreateCharacter(CharacterDesc{Position: V(0, 0.9, 0), HalfHeight: 0.55, Radius: 0.35, MaxSlopeRadians: 0.87})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 120 {
+		_ = character.SetLinearVelocity(V(0, -1, -3))
+		_ = character.Update(1.0 / 60)
+		_ = world.Step(1.0 / 60)
+	}
+	resting, _ := prop.Transform()
+	// Jolt lets resting bodies sink a couple of centimetres into their support.
+	if resting.Position.Y < 0.45 || resting.Position.Y > 0.51 || !near(resting.Position.Z, -2) {
+		t.Errorf("the prop did not rest where it fell: %+v", resting.Position)
+	}
+	if position, _ := character.Position(); position.Z > -5.5 {
+		t.Errorf("the character stopped at z=%.2f; the prop blocked it", position.Z)
+	}
+	hit, _ := world.RayCast(Ray{Origin: V(0, 3, -2), Direction: V(0, -1, 0), Distance: 5}, Mask(LayerStatic, LayerDynamic))
+	if !hit.Hit || !near(hit.Position.Y, 0) {
+		t.Errorf("a query without the cosmetic layer hit %+v", hit)
+	}
+}
+
 func TestRefreshContactsUpdatesGroundState(t *testing.T) {
 	world := newTestWorld(t)
 	createFloor(t, world)

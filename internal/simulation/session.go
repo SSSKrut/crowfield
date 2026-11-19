@@ -205,7 +205,8 @@ func (s *Server) hello(sess *session, hello *protocol.Hello) {
 	p := &player{id: id, name: hello.Name, conn: sess.conn}
 	_, _ = rand.Read(p.token[:])
 	welcome := protocol.Welcome{
-		Player: id, SessionToken: p.token, TickRate: game.TickRate, ServerTick: s.tick, Map: mapName,
+		Player: id, SessionToken: p.token, TickRate: game.TickRate, SnapshotRate: uint8(s.settings.SnapshotRate),
+		ServerTick: s.tick, Map: game.PrototypeMap,
 		TuningHash: s.tuning.Hash(), MatchSeed: s.matchSeed,
 	}
 	if err := send(sess.conn, &welcome); err != nil {

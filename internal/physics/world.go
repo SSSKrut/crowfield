@@ -154,7 +154,7 @@ func (w *World) CreateBox(desc BoxDesc) (*Body, error) {
 		return nil, ErrClosed
 	}
 	var nativeErr C.RFError
-	ptr := C.rf_body_create_box(w.ptr, cVec(desc.HalfExtents), cTransform(desc.Transform), cBool(desc.Dynamic), &nativeErr)
+	ptr := C.rf_body_create_box(w.ptr, cVec(desc.HalfExtents), cTransform(desc.Transform), bodyKind(desc.Dynamic, desc.Cosmetic), &nativeErr)
 	if ptr == nil {
 		return nil, goError(&nativeErr)
 	}
@@ -168,7 +168,7 @@ func (w *World) CreateSphere(desc SphereDesc) (*Body, error) {
 		return nil, ErrClosed
 	}
 	var nativeErr C.RFError
-	ptr := C.rf_body_create_sphere(w.ptr, C.float(desc.Radius), cTransform(desc.Transform), cBool(desc.Dynamic), &nativeErr)
+	ptr := C.rf_body_create_sphere(w.ptr, C.float(desc.Radius), cTransform(desc.Transform), bodyKind(desc.Dynamic, desc.Cosmetic), &nativeErr)
 	if ptr == nil {
 		return nil, goError(&nativeErr)
 	}
@@ -279,9 +279,12 @@ func goRayHit(hit C.RFRayHit) RayHit {
 	}
 }
 
-func cBool(value bool) C.int {
-	if value {
-		return 1
+func bodyKind(dynamic, cosmetic bool) C.int {
+	switch {
+	case cosmetic:
+		return C.RF_BODY_COSMETIC
+	case dynamic:
+		return C.RF_BODY_DYNAMIC
 	}
-	return 0
+	return C.RF_BODY_STATIC
 }

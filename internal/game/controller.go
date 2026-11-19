@@ -87,11 +87,17 @@ func (c *CharacterController) Step(soldier *Soldier, command InputCommand) error
 	return err
 }
 
-// Teleport places the soldier without a movement history, for example on spawn.
+// Teleport places the soldier at rest without a movement history, for example on spawn.
 func (c *CharacterController) Teleport(soldier *Soldier, feet physics.Vec3) error {
 	soldier.Position = feet
 	soldier.Velocity = physics.Vec3{}
-	if err := c.character.SetPosition(feet.Add(physics.V(0, c.tuning.CenterHeight(), 0))); err != nil {
+	return c.Place(soldier)
+}
+
+// Place moves the capsule to the soldier's position and velocity and finds its
+// contacts anew. Use it when no saved state fits, such as a jump across the map.
+func (c *CharacterController) Place(soldier *Soldier) error {
+	if err := c.character.SetPosition(soldier.Position.Add(physics.V(0, c.tuning.CenterHeight(), 0))); err != nil {
 		return err
 	}
 	if err := c.character.SetLinearVelocity(soldier.Velocity); err != nil {
