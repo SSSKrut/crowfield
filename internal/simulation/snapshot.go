@@ -213,6 +213,12 @@ func (s *Server) prioritize(p *player) {
 			continue
 		}
 		rate, always := view.rate(soldier, p.soldier)
+		// A death or a hit goes out at once, to everyone: a soldier seen
+		// once a second would otherwise run on past where it fell.
+		if last := v.latest(); last != nil && (last.Flags&protocol.SoldierAlive != s.states[slot].Flags&protocol.SoldierAlive ||
+			last.HitCount != s.states[slot].HitCount) {
+			always = true
+		}
 		v.priority += rate * interval
 		p.candidates = append(p.candidates, newCandidate(slot, always, v.priority))
 	}
@@ -279,6 +285,15 @@ func (v *entityView) record(p *player, state protocol.SoldierState) protocol.Sol
 		}
 	}
 	return protocol.NewSoldierRecord(state, base, int(min(age, protocol.MaxBaseAge+1)))
+}
+
+// latest is the state last sent, or nil.
+func (v *entityView) latest() *protocol.SoldierState {
+	last := &v.sends[(v.next+len(v.sends)-1)%len(v.sends)]
+	if !last.sent {
+		return nil
+	}
+	return &last.state
 }
 
 func (v *entityView) sent(datagram uint64, state protocol.SoldierState) {

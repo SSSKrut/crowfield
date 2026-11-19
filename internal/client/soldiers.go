@@ -100,6 +100,7 @@ func (s *soldiers) update(session *session, deltaTime float32, camera rl.Camera3
 		if !soldier.Alive {
 			if character != nil {
 				delete(s.characters, id)
+				soldier.Velocity = momentum(known.remote.lastAlive().Velocity)
 				if err := s.fall(character, soldier, eye); err != nil {
 					return err
 				}
@@ -165,7 +166,16 @@ const (
 	// its flight, and a little up.
 	strikeImpulse = 30
 	strikeLift    = 5
+	// A soldier shot dead loses its stride: its body keeps fallMomentum of
+	// its speed along the ground, and all of it up and down. With all of it,
+	// a dummy that ran at 5 m/s slid two metres on after it fell.
+	fallMomentum = 0.3
 )
+
+// momentum is the velocity a soldier that dies at velocity falls with.
+func momentum(velocity physics.Vec3) physics.Vec3 {
+	return physics.V(velocity.X*fallMomentum, velocity.Y, velocity.Z*fallMomentum)
+}
 
 // hitboxParts are the ragdoll parts the hitboxes cover (game.Hitboxes):
 // a hitbox on the soldier's left is a part on the model's left.

@@ -84,6 +84,17 @@ func (r *remoteSoldier) at(renderTick float64) game.Soldier {
 // interpolate returns the soldier at a fractional tick: by cubic Hermite
 // interpolation of position and velocity between the two states around it, and
 // past the newest state by its velocity for a while.
+// lastAlive is the newest state in which the soldier was alive, for the
+// momentum it falls with: a dead one stands still.
+func (r *remoteSoldier) lastAlive() game.Soldier {
+	for i := r.count - 1; i >= max(0, r.count-remoteSamples); i-- {
+		if sample := r.samples[i%remoteSamples]; sample.soldier.Alive {
+			return sample.soldier
+		}
+	}
+	return r.samples[(r.count-1)%remoteSamples].soldier
+}
+
 func (r *remoteSoldier) interpolate(renderTick float64) game.Soldier {
 	oldest := max(0, r.count-remoteSamples)
 	newest := r.samples[(r.count-1)%remoteSamples]
@@ -111,6 +122,9 @@ func hermite(earlier, later remoteSample, renderTick float64) game.Soldier {
 	if u >= 0.5 {
 		soldier = later.soldier
 	}
+	// A soldier dies at the tick of its first dead state, where the server
+	// left it, not halfway there: far soldiers come a second apart.
+	soldier.Alive = earlier.soldier.Alive
 	soldier.Position = earlier.soldier.Position.Mul(2*u3 - 3*u2 + 1).
 		Add(earlier.soldier.Velocity.Mul((u3 - 2*u2 + u) * span)).
 		Add(later.soldier.Position.Mul(-2*u3 + 3*u2)).

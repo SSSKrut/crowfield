@@ -264,3 +264,51 @@ func TestCandidatesSortAlwaysThenPriorityThenSlot(t *testing.T) {
 		t.Errorf("sent in the order %v, want %v", slots, want)
 	}
 }
+
+// With a quarter of the budget the far dummies come once a second or less,
+// but a death of one the client knows goes out in the very next snapshot,
+// and so does a hit.
+func TestDeathsAndHitsGoOutAtOnce(t *testing.T) {
+	server := newTestServer(t, config.Server{MaxPlayers: 1, SnapshotRate: 20, Dummies: 256, ClientBandwidth: 8 * 1024, Seed: 1})
+	receiver := addReceiver(t, server, 0, 6, 0)
+	for range game.TickRate {
+		if err := server.step(); err != nil {
+			t.Fatal(err)
+		}
+		receiver.receive()
+	}
+	from := server.soldiers.Get(receiver.player.soldier).Position
+	far := make([]game.SoldierID, 0, 10)
+	for _, d := range server.dummies.all {
+		// Soldiers the client never heard of have no death to show.
+		if len(far) < cap(far) && distance(server.soldiers.Get(d.soldier).Position, from) > 15 && receiver.updates[d.soldier] > 0 {
+			far = append(far, d.soldier)
+		}
+	}
+	if len(far) < cap(far) {
+		t.Fatalf("only %d far dummies known", len(far))
+	}
+	for i, id := range far {
+		// The next snapshot is at the start of a tick a multiple of the interval.
+		for server.tick%server.snapshotInterval != 0 {
+			if err := server.step(); err != nil {
+				t.Fatal(err)
+			}
+			receiver.receive()
+		}
+		soldier := server.soldiers.Get(id)
+		if i%2 == 0 {
+			server.damage(soldier, game.MaxHealth)
+		} else {
+			soldier.LastHit.Count++
+		}
+		before := receiver.updates[id]
+		if err := server.step(); err != nil {
+			t.Fatal(err)
+		}
+		receiver.receive()
+		if receiver.updates[id] == before {
+			t.Errorf("dummy %#04x was %s but not in the next snapshot", id, map[bool]string{true: "killed", false: "hit"}[i%2 == 0])
+		}
+	}
+}

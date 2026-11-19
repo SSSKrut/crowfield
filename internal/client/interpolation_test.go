@@ -81,3 +81,23 @@ func TestInterpolationClockFollowsSnapshots(t *testing.T) {
 		t.Errorf("a big jump was smoothed instead of taken: %.2f", clock.renderTick)
 	}
 }
+
+// A soldier seen a second apart, running and then dead: it is drawn alive
+// along the way and dies where the server has it dead, at the tick of that
+// state, with the momentum it ran with.
+func TestRemoteSoldierDiesWhereItDied(t *testing.T) {
+	var remote remoteSoldier
+	run := physics.V(5, 0, 0)
+	remote.add(100, game.Soldier{Alive: true, Position: physics.V(0, 0, 0), Velocity: run})
+	remote.add(160, game.Soldier{Alive: false, Position: physics.V(4, 0, 0)})
+	if soldier := remote.at(150); !soldier.Alive {
+		t.Errorf("dead at tick 150 at x=%.2f, before the tick of its death", soldier.Position.X)
+	}
+	soldier := remote.at(160)
+	if soldier.Alive || distance(soldier.Position, physics.V(4, 0, 0)) > 1e-4 {
+		t.Errorf("at the tick of its death: alive %t at %+v", soldier.Alive, soldier.Position)
+	}
+	if fell := remote.lastAlive(); fell.Velocity != run {
+		t.Errorf("falls with velocity %+v, it ran at %+v", fell.Velocity, run)
+	}
+}

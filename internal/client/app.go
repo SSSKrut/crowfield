@@ -57,8 +57,10 @@ type app struct {
 	buttons game.Buttons
 	// feet is where the own soldier was drawn last; fallen is its soldier
 	// while it lies dead, until a new one comes.
-	feet        physics.Vec3
-	fallen      game.SoldierID
+	feet   physics.Vec3
+	fallen game.SoldierID
+	// momentum is the velocity the own soldier was last predicted with.
+	momentum    physics.Vec3
 	debug       bool
 	thirdPerson bool
 	ragdoll     bool
@@ -372,6 +374,7 @@ func (a *app) run() error {
 		case soldier != nil:
 			feet = a.predictor.drawn(a.alpha)
 			speed = horizontalSpeed(soldier.Velocity)
+			a.momentum = soldier.Velocity
 		case own != nil:
 			// Dead, or not yet predicted: where the server has the soldier.
 			feet = own.Position
@@ -827,8 +830,15 @@ func (a *app) followLife() error {
 	dead := player.Soldier != 0 && player.Health == 0
 	switch {
 	case dead && a.fallen != player.Soldier:
+		// The body falls where the server has it dead, which everyone else
+		// sees, not where the prediction ran on to, with the momentum the
+		// soldier had.
 		a.fallen = player.Soldier
-		if err := a.die(a.feet, physics.Vec3{}); err != nil {
+		feet, velocity := a.feet, momentum(a.momentum)
+		if own := a.session.localSoldier(); own != nil {
+			feet = own.Position
+		}
+		if err := a.die(feet, velocity); err != nil {
 			return err
 		}
 	case !dead && a.fallen != 0 && player.Soldier != a.fallen:
