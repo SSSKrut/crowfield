@@ -127,7 +127,7 @@ func (s *Server) sendSnapshots() {
 // the first carries the removals.
 func (s *Server) sendSnapshot(p *player) {
 	private := protocol.PlayerState{
-		Processed: p.processed, LastProcessedTick: p.lastProcessed, BufferedCommands: p.buffered, Soldier: p.soldier,
+		Processed: p.processed, LastProcessedTick: p.lastProcessed, InputLead: p.lead, Soldier: p.soldier,
 	}
 	if soldier := s.soldiers.Get(p.soldier); soldier != nil {
 		private.Position, private.Velocity = soldier.Position, soldier.Velocity

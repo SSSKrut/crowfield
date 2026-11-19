@@ -34,6 +34,7 @@ var teamColors = map[game.Team]color.RGBA{
 // remoteView is another soldier as it is drawn this frame.
 type remoteView struct {
 	soldier   game.Soldier
+	known     *knownSoldier
 	character *animation.Character
 	distance  float32
 	detail    animation.Detail
@@ -50,6 +51,8 @@ type soldiers struct {
 	frustum    render.Frustum
 	// What the last frame drew, for the overlay and the log.
 	drawn, full, capsules int
+	// aimed is the soldier nearest to the crosshair, if any.
+	aimed *knownSoldier
 }
 
 func newSoldiers(asset *animation.CharacterAsset) *soldiers {
@@ -83,7 +86,9 @@ func (s *soldiers) update(session *session, deltaTime float32, camera rl.Camera3
 		if !s.frustum.Sees(soldier.Position.Add(physics.V(0, soldierRadius, 0)), soldierRadius) {
 			continue
 		}
-		view := remoteView{soldier: soldier, character: character, distance: distance(soldier.Position, eye), detail: animation.DetailCached}
+		view := remoteView{
+			soldier: soldier, known: known, character: character, distance: distance(soldier.Position, eye), detail: animation.DetailCached,
+		}
 		view.capsule = view.distance > capsuleDistance
 		s.views = append(s.views, view)
 	}
@@ -93,6 +98,24 @@ func (s *soldiers) update(session *session, deltaTime float32, camera rl.Camera3
 			s.views[i].detail = animation.DetailFull
 		}
 	}
+}
+
+// aim finds the soldier nearest to the line of sight, within a few degrees,
+// as the server does for its priorities: from the soldier's eye along the
+// command's direction, whatever the camera, to the middle of the body.
+func (s *soldiers) aim(eye, forward physics.Vec3, center float32) {
+	const limit = 3 * math.Pi / 180
+	var aimed *knownSoldier
+	best := float64(limit)
+	for _, view := range s.views {
+		to := view.soldier.Position.Add(physics.V(0, center, 0)).Sub(eye)
+		length := distance(to, physics.Vec3{})
+		angle := math.Acos(float64(max(-1, min(1, forward.Dot(to)/length)))) - math.Atan(0.5/float64(length))
+		if angle < best {
+			aimed, best = view.known, angle
+		}
+	}
+	s.aimed = aimed
 }
 
 func (s *soldiers) draw(tuning game.MovementTuning, debug bool) {

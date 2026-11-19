@@ -36,7 +36,12 @@ type player struct {
 	last          game.InputCommand
 	processed     bool
 	lastProcessed game.Tick
-	buffered      int8
+	// newest is the tick of the last command the client sent, as of the
+	// latest input packet, if hasInput. After the client's clock jumps back
+	// it is the new clock, not the largest tick ever sent.
+	newest   game.Tick
+	hasInput bool
+	lead     int8
 
 	// views is what the player was told about each soldier slot.
 	views      []entityView
@@ -180,9 +185,14 @@ func (s *Server) handleEvent(e event) {
 		}
 	case eventInput:
 		if sess.player != nil {
-			sess.player.acknowledge(e.input)
+			p := sess.player
+			p.acknowledge(e.input)
 			for _, command := range e.input.Commands {
-				sess.player.inputs.put(command, s.tick)
+				p.inputs.put(command, s.tick)
+			}
+			// Late commands count too: they tell how late the client is.
+			if count := len(e.input.Commands); count > 0 && int32(e.input.Commands[count-1].Tick-s.tick) < inputWindow {
+				p.newest, p.hasInput = e.input.Commands[count-1].Tick, true
 			}
 		}
 	case eventClosed:

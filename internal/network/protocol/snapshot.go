@@ -220,18 +220,23 @@ func (s *SoldierState) readAngles(r *BitReader) {
 	s.Pitch = int16(r.ReadSigned(pitchBits))
 }
 
+// NoInput is the InputLead of a player whose commands have not arrived yet.
+const NoInput = math.MinInt8
+
 // PlayerState is the private part of a snapshot for the player who receives it.
 // Position and velocity keep full precision for reconciliation and are only
 // sent while the player has a soldier.
 type PlayerState struct {
 	Processed         bool
 	LastProcessedTick game.Tick
-	// BufferedCommands is how many of the player's commands waited in the server
-	// queue when the tick ran; the client speeds up or slows down to keep it at 2.
-	BufferedCommands int8
-	Soldier          game.SoldierID
-	Position         physics.Vec3
-	Velocity         physics.Vec3
+	// InputLead is how many ticks the newest command the server had from the
+	// player was ahead of the tick when it ran; negative when commands come
+	// late, NoInput before the first. The client speeds its ticks up or slows
+	// them down to keep it at 2.
+	InputLead int8
+	Soldier   game.SoldierID
+	Position  physics.Vec3
+	Velocity  physics.Vec3
 }
 
 func (p *PlayerState) validate() error {
@@ -260,7 +265,7 @@ func (p *PlayerState) write(w *BitWriter) {
 	if p.Processed {
 		w.WriteBits(uint32(p.LastProcessedTick), 32)
 	}
-	w.WriteSigned(int32(p.BufferedCommands), 8)
+	w.WriteSigned(int32(p.InputLead), 8)
 	w.WriteBits(uint32(p.Soldier), 16)
 	if p.Soldier != 0 {
 		for _, value := range [6]float32{p.Position.X, p.Position.Y, p.Position.Z, p.Velocity.X, p.Velocity.Y, p.Velocity.Z} {
@@ -274,7 +279,7 @@ func (p *PlayerState) read(r *BitReader) {
 	if p.Processed {
 		p.LastProcessedTick = game.Tick(r.ReadBits(32))
 	}
-	p.BufferedCommands = int8(r.ReadSigned(8))
+	p.InputLead = int8(r.ReadSigned(8))
 	p.Soldier = game.SoldierID(r.ReadBits(16))
 	if p.Soldier == 0 {
 		return

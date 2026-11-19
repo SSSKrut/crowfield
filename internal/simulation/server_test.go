@@ -28,9 +28,6 @@ func TestInputBuffer(t *testing.T) {
 			t.Errorf("put tick %d at 100: %t", c.tick, ok)
 		}
 	}
-	if waiting := buffer.waiting(100); waiting != 3 {
-		t.Errorf("%d commands waiting after 100, want 3", waiting)
-	}
 	if got, ok := buffer.take(100); !ok || got != command(100) {
 		t.Errorf("take 100: %+v %t", got, ok)
 	}
@@ -78,7 +75,7 @@ func TestServerMovesSoldierExactlyLikeTheController(t *testing.T) {
 			sent++
 			client.send(t, route(sent))
 		}
-		if snapshot.ServerTick >= start && snapshot.ServerTick <= last && snapshot.Player.BufferedCommands < 0 {
+		if snapshot.ServerTick >= start && snapshot.ServerTick <= last && snapshot.Player.InputLead < 0 {
 			t.Fatalf("tick %d ran without its command", snapshot.ServerTick)
 		}
 		// A snapshot may be skipped; after the route the commands are idle anyway.

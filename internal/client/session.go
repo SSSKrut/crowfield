@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -16,12 +17,18 @@ import (
 
 const (
 	connectTimeout = 5 * time.Second
-	// commandLead is how many ticks the client runs ahead of the server, so
-	// that a command arrives before the server needs it.
+	// commandLead is how many ticks ahead of the server's tick the client's
+	// commands should arrive, a margin for jitter.
 	commandLead = 2
-	// A server queue outside [0, maxBuffered] means the client clock drifted;
-	// it then jumps back to the lead. Smooth adjustment comes in step 1.9.
-	maxBuffered = commandLead + 8
+	// The client keeps the lead by making its ticks longer or shorter, by at
+	// most maxDilation and by dilationGain per tick of error in the lead, which
+	// it estimates from the snapshots with weight leadSmoothing each.
+	maxDilation   = 0.05
+	dilationGain  = 0.01
+	leadSmoothing = 0.1
+	// A lead further than maxLeadError (250 ms) from the target is not worth
+	// correcting gently: the clock jumps.
+	maxLeadError = game.TickRate / 4
 	// A removed soldier's late records are ignored for this long.
 	buryTicks = 5 * game.TickRate
 )
@@ -40,10 +47,18 @@ type session struct {
 	// sent under the current clock; earlier ones were already on their way.
 	settleUntil game.Tick
 	history     []game.InputCommand
-	acks        ackTracker
-	buffer      []byte
-	resyncs     int
-	received    int
+	// lead is the running estimate of the input lead; dilation stretches the
+	// client's ticks to bring it to the target.
+	lead     float64
+	hasLead  bool
+	leadTick game.Tick
+	dilation float64
+	// late counts the snapshots that reported commands arriving late.
+	late     int
+	acks     ackTracker
+	buffer   []byte
+	resyncs  int
+	received int
 
 	serverTick game.Tick
 	player     protocol.PlayerState
@@ -59,7 +74,8 @@ type session struct {
 	// bytes counts the snapshot datagrams received, payload only.
 	bytes atomic.Int64
 
-	snapshots chan *protocol.Snapshot
+	snapshots chan received
+	graph     netGraph
 	cancel    context.CancelFunc
 	failOnce  sync.Once
 	failed    chan struct{}
@@ -108,7 +124,7 @@ func connect(conn transport.Conn, name string, tuning game.MovementTuning) (*ses
 	s := &session{
 		conn: conn, welcome: welcome, history: make([]game.InputCommand, 0, protocol.MaxCommandsPerInput),
 		soldiers: make(map[int]*knownSoldier), baselines: protocol.NewBaselines(), buried: make(map[game.SoldierID]game.Tick),
-		clock: newInterpolationClock(int(welcome.SnapshotRate)), snapshots: make(chan *protocol.Snapshot, 64),
+		clock: newInterpolationClock(int(welcome.SnapshotRate)), snapshots: make(chan received, 64),
 		cancel: stop, failed: make(chan struct{}),
 	}
 	s.setClock(welcome.ServerTick, handshakeRTT)
@@ -150,21 +166,30 @@ func (s *session) poll() (bool, error) {
 	updated := false
 	for {
 		select {
-		case snapshot := <-s.snapshots:
-			updated = s.apply(snapshot) || updated
+		case datagram := <-s.snapshots:
+			s.graph.datagram(datagram.size, datagram.snapshot)
+			updated = s.apply(datagram.snapshot) || updated
 		default:
 			return updated, s.err()
 		}
 	}
 }
 
+// received is a decoded snapshot datagram and its size.
+type received struct {
+	snapshot *protocol.Snapshot
+	size     int
+}
+
 // knownSoldier is a soldier as the client last heard of it, and its recent
 // states for drawing it in the past.
 type knownSoldier struct {
 	soldier game.Soldier
-	// tick is the server tick of the state in soldier.
-	tick   game.Tick
-	remote remoteSoldier
+	// tick is the server tick of the state in soldier; updates counts the
+	// states received.
+	tick    game.Tick
+	updates int
+	remote  remoteSoldier
 }
 
 // apply takes in one snapshot datagram. Its soldiers are applied even when it
@@ -209,11 +234,37 @@ func (s *session) apply(snapshot *protocol.Snapshot) bool {
 	if own := s.localSoldier(); own != nil {
 		own.Position, own.Velocity = s.player.Position, s.player.Velocity
 	}
-	if s.player.Processed && snapshot.ServerTick >= s.judgeFrom && s.tick >= s.settleUntil &&
-		(s.player.BufferedCommands < 0 || s.player.BufferedCommands > maxBuffered) {
-		s.resync()
-	}
+	s.keepLead(snapshot.ServerTick)
 	return true
+}
+
+// keepLead adjusts the client's clock from the input lead the server reports:
+// gently by the length of its ticks, or at once when it is far off. Only
+// snapshots of ticks whose commands were sent under the current clock count.
+func (s *session) keepLead(serverTick game.Tick) {
+	if !s.player.Processed || s.player.InputLead == protocol.NoInput || serverTick < s.judgeFrom ||
+		s.tick < s.settleUntil || (s.hasLead && serverTick == s.leadTick) {
+		return
+	}
+	sample := float64(s.player.InputLead)
+	if sample < 0 {
+		s.late++
+	}
+	if math.Abs(sample-commandLead) > maxLeadError {
+		s.jump(commandLead - int(s.player.InputLead))
+		return
+	}
+	if !s.hasLead {
+		s.lead, s.hasLead = sample, true
+	}
+	s.lead += (sample - s.lead) * leadSmoothing
+	s.leadTick = serverTick
+	s.dilation = max(-maxDilation, min(maxDilation, (s.lead-commandLead)*dilationGain))
+}
+
+// tickDuration is how long a client tick takes in real time now.
+func (s *session) tickDuration() float32 {
+	return game.TickDelta * float32(1+s.dilation)
 }
 
 // update applies a soldier's state from a snapshot of the given server tick.
@@ -233,6 +284,7 @@ func (s *session) update(state protocol.SoldierState, tick game.Tick, own game.S
 		state.Apply(&known.soldier)
 		known.tick = tick
 	}
+	known.updates++
 	if state.ID == own {
 		return
 	}
@@ -272,15 +324,18 @@ func (s *session) isBuried(id game.SoldierID, tick game.Tick) bool {
 	return ok
 }
 
-// resync jumps the client tick back to its lead when the server reports that
-// commands arrive late or too early.
-func (s *session) resync() {
+// jump moves the client's clock by the given number of ticks, when the lead
+// is too far off to correct gently: after a stall, or a change of route.
+func (s *session) jump(ticks int) {
 	before := s.tick
-	s.setClock(s.serverTick, s.conn.Stats().RTT)
+	s.tick += game.Tick(ticks)
+	ahead := game.Tick(max(0, s.conn.Stats().RTT/game.TickDuration))
+	s.judgeFrom, s.settleUntil = s.tick, s.tick+ahead+commandLead+2
 	s.history = s.history[:0]
+	s.hasLead, s.dilation = false, 0
 	s.resyncs++
-	log.Printf("clock resync: the server had %d of our commands queued at tick %d; client tick %d -> %d",
-		s.player.BufferedCommands, s.serverTick, before, s.tick)
+	log.Printf("clock jump: our commands were %d ticks ahead of server tick %d; client tick %d -> %d",
+		s.player.InputLead, s.serverTick, before, s.tick)
 }
 
 // setClock sets the client tick from a server tick the client just learned.
@@ -323,7 +378,7 @@ func (s *session) readSnapshots(ctx context.Context) {
 		// Keep the newest snapshots when the frame loop falls behind.
 		for {
 			select {
-			case s.snapshots <- snapshot:
+			case s.snapshots <- received{snapshot: snapshot, size: len(data)}:
 			default:
 				select {
 				case <-s.snapshots:

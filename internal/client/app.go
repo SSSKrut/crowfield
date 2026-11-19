@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"path/filepath"
 
 	"ravenfield/internal/animation"
 	"ravenfield/internal/config"
@@ -134,24 +135,8 @@ const characterModelPath = "assets/prototype/RobotExpressive.glb"
 // that releases what open started.
 func open(settings config.Client, tuning game.MovementTuning) (transport.Conn, func(), error) {
 	if settings.Connect != "" {
-		var pinned *transport.Fingerprint
-		if settings.Fingerprint != "" {
-			fingerprint, err := transport.ParseFingerprint(settings.Fingerprint)
-			if err != nil {
-				return nil, nil, err
-			}
-			pinned = &fingerprint
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), connectTimeout)
-		defer cancel()
-		conn, err := transport.DialQUIC(ctx, settings.Connect, transport.ClientTLSConfig(pinned), transport.QUICOptions{})
-		if err != nil {
-			return nil, nil, fmt.Errorf("connect to %s: %w", settings.Connect, err)
-		}
-		if seen, ok := transport.PeerFingerprint(conn); ok && pinned == nil {
-			log.Printf("connected to %s, certificate fingerprint %s (pass -fingerprint to pin it)", settings.Connect, seen)
-		}
-		return conn, func() {}, nil
+		conn, err := dial(settings)
+		return conn, func() {}, err
 	}
 	local, err := startLocalServer(tuning, settings)
 	if err != nil {
@@ -170,6 +155,48 @@ func open(settings config.Client, tuning game.MovementTuning) (transport.Conn, f
 	return conn, stop, nil
 }
 
+// dial joins the server of -connect. The certificate is checked before
+// anything is sent: against -fingerprint, or against the fingerprint
+// remembered on the first connection to that address.
+func dial(settings config.Client) (transport.Conn, error) {
+	address := withDefaultPort(settings.Connect)
+	var given *transport.Fingerprint
+	if settings.Fingerprint != "" {
+		fingerprint, err := transport.ParseFingerprint(settings.Fingerprint)
+		if err != nil {
+			return nil, err
+		}
+		given = &fingerprint
+	}
+	var known *knownServers
+	if settings.ConfigDir != "" {
+		var err error
+		if known, err = loadKnownServers(filepath.Join(settings.ConfigDir, "known_servers")); err != nil {
+			return nil, err
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), connectTimeout)
+	defer cancel()
+	conn, err := transport.DialQUIC(ctx, address, transport.ClientTLSConfig(nil), transport.QUICOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("connect to %s: %w", address, err)
+	}
+	seen, ok := transport.PeerFingerprint(conn)
+	if !ok {
+		_ = conn.Close("no certificate")
+		return nil, fmt.Errorf("the server at %s showed no certificate", address)
+	}
+	message, err := checkServer(known, address, given, seen)
+	if err != nil {
+		_ = conn.Close("untrusted certificate")
+		return nil, err
+	}
+	if message != "" {
+		log.Print(message)
+	}
+	return conn, nil
+}
+
 func (a *app) run() error {
 	accumulator := float32(0)
 	frames := 0
@@ -185,6 +212,9 @@ func (a *app) run() error {
 		}
 		if rl.IsKeyPressed(rl.KeyF1) {
 			a.debug = !a.debug
+		}
+		if rl.IsKeyPressed(rl.KeyF2) {
+			a.settings.NetGraph = !a.settings.NetGraph
 		}
 		if rl.IsKeyPressed(rl.KeyF3) {
 			a.thirdPerson = !a.thirdPerson
@@ -217,7 +247,10 @@ func (a *app) run() error {
 		a.elapsed += deltaTime
 		a.played += deltaTime
 		accumulator += deltaTime
-		for accumulator >= game.TickDelta {
+		// Ticks last a little more or less than TickDelta while the session
+		// brings its commands to the right lead.
+		for accumulator >= a.session.tickDuration() {
+			accumulator -= a.session.tickDuration()
 			command, err := a.session.sendCommand(a.command())
 			if err != nil {
 				return fmt.Errorf("disconnected: %w", err)
@@ -228,16 +261,19 @@ func (a *app) run() error {
 			if err := a.world.Step(game.TickDelta); err != nil {
 				return err
 			}
-			accumulator -= game.TickDelta
 		}
-		a.alpha = accumulator / game.TickDelta
+		a.alpha = accumulator / a.session.tickDuration()
 		updated, err := a.session.poll()
 		if err != nil {
 			return fmt.Errorf("disconnected: %w", err)
 		}
 		if updated {
+			corrections := a.predictor.corrections
 			if err := a.predictor.reconcile(a.session.player); err != nil {
 				return err
+			}
+			if a.predictor.corrections != corrections {
+				a.session.graph.correction(a.predictor.lastError)
 			}
 		}
 		a.predictor.smooth(deltaTime)
@@ -273,6 +309,15 @@ func (a *app) run() error {
 		}
 		a.updateCamera(feet)
 		a.soldiers.update(a.session, deltaTime, a.camera, float32(rl.GetScreenWidth())/float32(max(1, rl.GetScreenHeight())))
+		cosPitch := float32(math.Cos(float64(a.pitch)))
+		forward := physics.V(float32(math.Sin(float64(a.yaw)))*cosPitch, float32(math.Sin(float64(a.pitch))), -float32(math.Cos(float64(a.yaw)))*cosPitch)
+		a.soldiers.aim(feet.Add(physics.V(0, a.tuning.EyeHeight, 0)), forward, a.tuning.CenterHeight())
+		var aimed uint16
+		var aimedUpdates int
+		if known := a.soldiers.aimed; known != nil {
+			aimed, aimedUpdates = uint16(known.soldier.ID), known.updates
+		}
+		a.session.graph.frame(deltaTime, a.session.conn.Stats().RTT, a.session.dilation, aimed, aimedUpdates)
 		a.draw(feet, soldier != nil)
 		frames++
 		if a.settings.Screenshot != "" && frames == a.settings.FrameLimit {
@@ -421,14 +466,17 @@ func (a *app) draw(feet physics.Vec3, spawned bool) {
 	rl.DrawLine(int32(rl.GetScreenWidth()/2-7), int32(rl.GetScreenHeight()/2), int32(rl.GetScreenWidth()/2+7), int32(rl.GetScreenHeight()/2), rl.White)
 	rl.DrawLine(int32(rl.GetScreenWidth()/2), int32(rl.GetScreenHeight()/2-7), int32(rl.GetScreenWidth()/2), int32(rl.GetScreenHeight()/2+7), rl.White)
 	rl.DrawText("WASD move | Space jump | Shift sprint | K ragdoll | R respawn | L knock down nearest", 18, 18, 18, rl.White)
-	rl.DrawText("F1 physics | F3 camera | Esc cursor", 18, 44, 18, rl.White)
+	rl.DrawText("F1 physics | F2 network | F3 camera | Esc cursor", 18, 44, 18, rl.White)
 	rl.DrawText(fmt.Sprintf("FPS %d | XYZ %.2f %.2f %.2f | %s | drawn %d (full %d, capsules %d) | bodies %d (ragdolls %d)",
 		rl.GetFPS(), feet.X, feet.Y, feet.Z, a.self.AnimationName(), a.soldiers.drawn, a.soldiers.full, a.soldiers.capsules,
 		bodies, a.fallen.ragdolls()), 18, 70, 18, rl.White)
 	stats := a.session.conn.Stats()
-	rl.DrawText(fmt.Sprintf("%d Hz | tick %d server %d buffered %d | RTT %d ms | snapshots %.1f KB/s | resyncs %d | corrections %d (last %.3f m) | soldiers %d",
-		game.TickRate, a.session.tick, a.session.serverTick, a.session.player.BufferedCommands, stats.RTT.Milliseconds(),
+	rl.DrawText(fmt.Sprintf("%d Hz | tick %d server %d lead %d (clock %+.1f%%) | RTT %d ms | snapshots %.1f KB/s | jumps %d | corrections %d (last %.3f m) | soldiers %d",
+		game.TickRate, a.session.tick, a.session.serverTick, a.session.player.InputLead, 100*a.session.dilation, stats.RTT.Milliseconds(),
 		a.netRate, a.session.resyncs, a.predictor.corrections, a.predictor.lastError, len(a.session.soldiers)), 18, 96, 18, rl.White)
+	if a.settings.NetGraph {
+		a.session.graph.draw(a.session.resyncs)
+	}
 	if !a.captured && a.settings.FrameLimit == 0 {
 		rl.DrawText("Press Esc to capture the mouse", 18, 132, 22, rl.Yellow)
 	}

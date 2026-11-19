@@ -2,6 +2,7 @@ package client
 
 import (
 	"math"
+	"math/rand/v2"
 	"strings"
 	"testing"
 	"time"
@@ -112,8 +113,8 @@ func TestSoloSessionThroughTheEmbeddedServer(t *testing.T) {
 			if session.resyncs > 0 {
 				t.Errorf("%d clock resyncs", session.resyncs)
 			}
-			t.Logf("moved %.2f m, %d snapshots, %d resyncs, buffered %d", moved, session.received, session.resyncs,
-				session.player.BufferedCommands)
+			t.Logf("moved %.2f m, %d snapshots, %d jumps, lead %d", moved, session.received, session.resyncs,
+				session.player.InputLead)
 		})
 	}
 }
@@ -218,37 +219,125 @@ func remotes(s *session) int {
 // Snapshots that were on their way when the clock jumped still report late
 // commands. One stalled frame may apply a burst of them before the client sends
 // anything under the new clock; that burst must not make the clock jump again.
-func TestStaleSnapshotsDoNotResyncAgain(t *testing.T) {
-	conn, peer := transport.NewMemoryPair()
-	defer conn.Close("done")
-	defer peer.Close("done")
-	s := &session{
-		conn: conn, soldiers: map[int]*knownSoldier{}, baselines: protocol.NewBaselines(),
-		buried: map[game.SoldierID]game.Tick{}, clock: newInterpolationClock(20),
-	}
-	snapshot := func(tick game.Tick, buffered int8) *protocol.Snapshot {
+func TestStaleSnapshotsDoNotJumpAgain(t *testing.T) {
+	s := newTestSession(t)
+	snapshot := func(tick game.Tick, lead int8) *protocol.Snapshot {
 		return &protocol.Snapshot{ServerTick: tick, Player: protocol.PlayerState{
-			Processed: true, LastProcessedTick: tick, BufferedCommands: buffered, Soldier: 0x1000,
+			Processed: true, LastProcessedTick: tick, InputLead: lead, Soldier: 0x1000,
 		}}
 	}
 	s.setClock(100, 0)
 	s.tick = 110
-	s.apply(snapshot(105, -1))
+	s.apply(snapshot(105, -40))
+	if s.resyncs != 1 || s.tick != 152 {
+		t.Fatalf("%d jumps to tick %d for commands 40 ticks late, want 1 to 152", s.resyncs, s.tick)
+	}
+	for tick := game.Tick(108); tick <= 150; tick += 3 {
+		s.apply(snapshot(tick, -40))
+	}
 	if s.resyncs != 1 {
-		t.Fatalf("%d resyncs for a late command, want 1", s.resyncs)
+		t.Errorf("%d jumps after a burst of stale snapshots, want still 1", s.resyncs)
 	}
-	for tick := game.Tick(108); tick <= 120; tick += 3 {
-		s.apply(snapshot(tick, -1))
-	}
-	if s.resyncs != 1 {
-		t.Errorf("%d resyncs after a burst of stale snapshots, want still 1", s.resyncs)
-	}
-	for tick := game.Tick(123); tick <= 160; tick += 3 {
+	for tick := game.Tick(153); tick <= 190; tick += 3 {
 		s.tick += 3
 		s.apply(snapshot(tick, 2))
 	}
-	if s.resyncs != 1 {
-		t.Errorf("%d resyncs once commands arrive in time", s.resyncs)
+	if s.resyncs != 1 || s.dilation != 0 {
+		t.Errorf("%d jumps and dilation %.3f once commands arrive in time", s.resyncs, s.dilation)
+	}
+}
+
+// The client keeps its commands arriving two ticks before the server needs
+// them by stretching its ticks, over a network with 40 ms of delay and up to
+// 10 ms of jitter. Started early or late it settles without a jump; far off it
+// jumps once. Once settled, no command comes late.
+func TestClockKeepsTheLead(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		offset int
+		jumps  int
+	}{{"early", 8, 0}, {"late", -6, 0}, {"far off", 40, 1}} {
+		t.Run(c.name, func(t *testing.T) {
+			s := newTestSession(t)
+			random := rand.New(rand.NewPCG(3, uint64(c.offset+100)))
+			oneWay := func() time.Duration {
+				return 40*time.Millisecond + time.Duration(random.Int64N(int64(10*time.Millisecond)))
+			}
+			type sent struct {
+				tick    game.Tick
+				arrives time.Duration
+			}
+			type delivery struct {
+				arrives  time.Duration
+				snapshot protocol.Snapshot
+			}
+			var commands []sent
+			var snapshots []delivery
+			const start, duration = game.Tick(1000), 20 * time.Second
+			s.setClock(start, 80*time.Millisecond)
+			s.tick += game.Tick(c.offset)
+			serverTick, newest, hasInput, late := start, game.Tick(0), false, 0
+			accumulator, settled := float32(0), time.Duration(0)
+			for now := time.Duration(0); now < duration; now += time.Millisecond {
+				for accumulator += 0.001; accumulator >= s.tickDuration(); {
+					accumulator -= s.tickDuration()
+					commands = append(commands, sent{tick: s.tick, arrives: now + oneWay()})
+					s.tick++
+				}
+				for time.Duration(serverTick-start)*game.TickDuration <= now {
+					// The lead counts from the command that arrived last.
+					kept, latest := commands[:0], time.Duration(-1)
+					for _, command := range commands {
+						if command.arrives > now {
+							kept = append(kept, command)
+						} else if command.arrives > latest {
+							newest, hasInput, latest = command.tick, true, command.arrives
+						}
+					}
+					commands = kept
+					lead := int8(protocol.NoInput)
+					if hasInput {
+						lead = int8(max(-127, min(127, int32(newest-serverTick))))
+					}
+					if lead < 0 && now > duration/2 {
+						late++
+					}
+					if serverTick%3 == 0 {
+						snapshots = append(snapshots, delivery{arrives: now + oneWay(), snapshot: protocol.Snapshot{
+							ServerTick: serverTick,
+							Player:     protocol.PlayerState{Processed: true, LastProcessedTick: serverTick, InputLead: lead, Soldier: 0x1000},
+						}})
+					}
+					serverTick++
+				}
+				kept := snapshots[:0]
+				for _, d := range snapshots {
+					if d.arrives > now {
+						kept = append(kept, d)
+					} else {
+						s.apply(&d.snapshot)
+					}
+				}
+				snapshots = kept
+				if math.Abs(s.lead-commandLead) > 0.5 || !s.hasLead {
+					settled = now
+				}
+			}
+			if s.resyncs != c.jumps || late > 0 || math.Abs(s.lead-commandLead) > 1 {
+				t.Errorf("%d jumps, %d late commands in the second half, lead %.2f; want %d jumps, none late, lead near %d",
+					s.resyncs, late, s.lead, c.jumps, commandLead)
+			}
+			t.Logf("lead %.2f within half a tick after %.1f s, dilation %+.2f%%, %d jumps", s.lead, settled.Seconds(), 100*s.dilation, s.resyncs)
+		})
+	}
+}
+
+func newTestSession(t *testing.T) *session {
+	conn, peer := transport.NewMemoryPair()
+	t.Cleanup(func() { _ = conn.Close("done"); _ = peer.Close("done") })
+	return &session{
+		conn: conn, soldiers: map[int]*knownSoldier{}, baselines: protocol.NewBaselines(),
+		buried: map[game.SoldierID]game.Tick{}, clock: newInterpolationClock(20),
 	}
 }
 

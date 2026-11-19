@@ -31,15 +31,3 @@ func (b *inputBuffer) take(tick game.Tick) (game.InputCommand, bool) {
 	b.present[slot] = false
 	return command, ok
 }
-
-// waiting counts the commands for ticks after the given one. The client keeps
-// this near its target lead; the server reports it in every snapshot.
-func (b *inputBuffer) waiting(after game.Tick) int {
-	count := 0
-	for slot, present := range b.present {
-		if ahead := b.commands[slot].Tick - after; present && ahead >= 1 && ahead < inputWindow {
-			count++
-		}
-	}
-	return count
-}

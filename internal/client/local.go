@@ -2,7 +2,10 @@ package client
 
 import (
 	"context"
+	"crypto/tls"
 	"log"
+	"os"
+	"path/filepath"
 
 	"ravenfield/internal/config"
 	"ravenfield/internal/game"
@@ -22,8 +25,9 @@ type localServer struct {
 }
 
 // startLocalServer starts a solo server, or a hosted one when the client
-// settings name a host address. A host makes a fresh certificate every run and
-// prints its fingerprint.
+// settings name a host address. A host keeps its certificate in the config
+// directory, so that the players who joined it once trust it again; without
+// one it makes a fresh certificate every run. It prints the fingerprint.
 func startLocalServer(tuning game.MovementTuning, client config.Client) (*localServer, error) {
 	host := client.Host
 	settings := config.DefaultServer()
@@ -34,7 +38,7 @@ func startLocalServer(tuning game.MovementTuning, client config.Client) (*localS
 	listeners := []transport.Listener{local.memory}
 	if host != "" {
 		settings.MaxPlayers = game.MaxPlayers
-		certificate, fingerprint, err := transport.GenerateCertificate()
+		certificate, fingerprint, err := hostCertificate(client.ConfigDir)
 		if err != nil {
 			return nil, err
 		}
@@ -56,6 +60,16 @@ func startLocalServer(tuning game.MovementTuning, client config.Client) (*localS
 	local.cancel = cancel
 	go func() { local.done <- server.Serve(ctx, listeners...) }()
 	return local, nil
+}
+
+func hostCertificate(dir string) (tls.Certificate, transport.Fingerprint, error) {
+	if dir == "" {
+		return transport.GenerateCertificate()
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return tls.Certificate{}, transport.Fingerprint{}, err
+	}
+	return transport.LoadOrCreateCertificate(filepath.Join(dir, "host.crt"), filepath.Join(dir, "host.key"))
 }
 
 func (l *localServer) dial() (transport.Conn, error) {

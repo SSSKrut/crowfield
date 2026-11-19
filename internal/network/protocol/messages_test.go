@@ -27,7 +27,7 @@ func sampleMessages() []Message {
 		&InputPacket{},
 		&InputPacket{HasAck: true, AckSequence: math.MaxUint16, AckBits: 0xDEADBEEF, Commands: sampleCommands(MaxCommandsPerInput, math.MaxUint32-3)},
 		sampleSnapshot(3),
-		&Snapshot{Sequence: 1, ServerTick: 2, Player: PlayerState{BufferedCommands: -3}},
+		&Snapshot{Sequence: 1, ServerTick: 2, Player: PlayerState{InputLead: -3}},
 	}
 }
 
@@ -52,7 +52,7 @@ func sampleSnapshot(soldiers int) *Snapshot {
 	snapshot := &Snapshot{
 		Sequence: 777, ServerTick: 99999,
 		Player: PlayerState{
-			Processed: true, LastProcessedTick: 99990, BufferedCommands: 2, Soldier: soldierID(3, 2),
+			Processed: true, LastProcessedTick: 99990, InputLead: 2, Soldier: soldierID(3, 2),
 			Position: physics.V(1.25, 0.002, -7.75), Velocity: physics.V(0, -0.5, -8),
 		},
 		Removed: []game.SoldierID{soldierID(9, 15), soldierID(4095, 1)},

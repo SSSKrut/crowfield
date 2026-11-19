@@ -1,5 +1,10 @@
 package config
 
+import (
+	"os"
+	"path/filepath"
+)
+
 type Client struct {
 	Width      int
 	Height     int
@@ -18,10 +23,15 @@ type Client struct {
 	Connect string
 	// Fingerprint pins the certificate of the server given by Connect.
 	Fingerprint string
+	// ConfigDir keeps the fingerprints of servers joined before and the
+	// certificate of a host; empty keeps nothing.
+	ConfigDir string
 	// Dummies adds roaming bot soldiers without AI to the embedded server.
 	Dummies int
 	// Overview watches the whole map from above, to see every soldier.
 	Overview bool
+	// NetGraph shows the network graph from the start.
+	NetGraph bool
 	// MaxFPS caps the frame rate; zero leaves it free, to measure.
 	MaxFPS int
 	// Knockdowns knocks down the nearest soldiers this many times, half a
@@ -32,7 +42,12 @@ type Client struct {
 }
 
 func DefaultClient() Client {
+	dir, err := os.UserConfigDir()
+	if err == nil {
+		dir = filepath.Join(dir, "ravenfield")
+	}
 	return Client{
-		Width: 1280, Height: 720, MouseSensitivity: 0.0025, FieldOfView: 75, Name: "Player", MaxFPS: 144,
+		ConfigDir: dir,
+		Width:     1280, Height: 720, MouseSensitivity: 0.0025, FieldOfView: 75, Name: "Player", MaxFPS: 144,
 	}
 }

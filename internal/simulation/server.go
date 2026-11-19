@@ -9,6 +9,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"log"
+	"math"
+	"runtime"
 	"sync"
 	"time"
 
@@ -162,9 +164,12 @@ func (s *Server) run(ctx context.Context) error {
 		next = next.Add(game.TickDuration)
 		if since := time.Since(lastStats); s.settings.StatsInterval > 0 && since >= s.settings.StatsInterval {
 			players := s.playerCount()
-			log.Printf("server running: tick=%d rate=%.1f players=%d soldiers=%d missed_commands=%d snapshots=%.1fKB/s/player %s",
+			var memory runtime.MemStats
+			runtime.ReadMemStats(&memory)
+			log.Printf("server running: tick=%d rate=%.1f players=%d soldiers=%d missed_commands=%d snapshots=%.1fKB/s/player heap=%.1fMB goroutines=%d %s",
 				s.tick, float64(s.profile.ticks)/since.Seconds(), players, s.soldiers.Len(), s.profile.missedCommands,
-				float64(s.profile.snapshotBytes)/1024/since.Seconds()/float64(max(1, players)), &s.profile)
+				float64(s.profile.snapshotBytes)/1024/since.Seconds()/float64(max(1, players)),
+				float64(memory.HeapInuse)/(1<<20), runtime.NumGoroutine(), &s.profile)
 			lastStats = time.Now()
 			s.profile = tickProfile{}
 		}
@@ -223,12 +228,13 @@ func (s *Server) playerCount() int {
 
 func (s *Server) movePlayer(p *player) error {
 	command, ok := p.inputs.take(s.tick)
-	if ok {
-		p.buffered = int8(min(127, p.inputs.waiting(s.tick)))
-	} else {
+	if !ok {
 		command = p.last.Repeated(s.tick)
-		p.buffered = -1
 		s.profile.missedCommands++
+	}
+	p.lead = protocol.NoInput
+	if p.hasInput {
+		p.lead = int8(max(protocol.NoInput+1, min(math.MaxInt8, int32(p.newest-s.tick))))
 	}
 	command.Sanitize()
 	p.last = command
