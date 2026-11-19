@@ -19,6 +19,11 @@ type Server struct {
 	// Seed fixes the match seed, which places the dummies, for runs that
 	// repeat; zero picks a random one.
 	Seed uint64
+	// A player who sends no input for InputTimeout is disconnected; one whose
+	// connection was lost keeps its place for ReconnectWindow. Zero means the
+	// defaults.
+	InputTimeout    time.Duration
+	ReconnectWindow time.Duration
 	// ClientBandwidth is the snapshot budget of each client in bytes per
 	// second, transport overhead included; zero means the default.
 	ClientBandwidth int
@@ -26,6 +31,11 @@ type Server struct {
 
 // DefaultClientBandwidth is 32 KB/s (ARCHITECTURE.md, 6.6).
 const DefaultClientBandwidth = 32 * 1024
+
+const (
+	DefaultInputTimeout    = 5 * time.Second
+	DefaultReconnectWindow = time.Minute
+)
 
 func DefaultServer() Server {
 	return Server{

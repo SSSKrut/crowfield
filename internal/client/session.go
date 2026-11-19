@@ -31,12 +31,15 @@ const (
 	maxLeadError = game.TickRate / 4
 	// A removed soldier's late records are ignored for this long.
 	buryTicks = 5 * game.TickRate
+	// A server that sends no snapshot for this long is taken for lost.
+	serverTimeout = 5 * time.Second
 )
 
 // session is the client's side of a connection: it sends a command every tick
 // and applies the snapshots it receives.
 type session struct {
 	conn    transport.Conn
+	name    string
 	welcome protocol.Welcome
 
 	tick game.Tick
@@ -76,18 +79,26 @@ type session struct {
 
 	snapshots chan received
 	graph     netGraph
-	cancel    context.CancelFunc
-	failOnce  sync.Once
-	failed    chan struct{}
-	failure   error
+	// heard is when the last snapshot came; after timeout without one the
+	// server is taken for lost.
+	heard    time.Time
+	timeout  time.Duration
+	cancel   context.CancelFunc
+	failOnce sync.Once
+	failed   chan struct{}
+	failure  error
 }
 
-// connect runs the handshake: Hello, then Welcome or Reject, then Ready.
-func connect(conn transport.Conn, name string, tuning game.MovementTuning) (*session, error) {
+var errServerSilent = errors.New("the server stopped sending snapshots")
+
+// connect runs the handshake: Hello, then Welcome or Reject, then Ready. A
+// player who lost its connection gives the token of its last session to get
+// its place back; a new one gives none.
+func connect(conn transport.Conn, name string, tuning game.MovementTuning, token [16]byte) (*session, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), connectTimeout)
 	defer cancel()
 	sent := time.Now()
-	if err := send(conn, &protocol.Hello{ProtocolVersion: protocol.ProtocolVersion, Name: name}); err != nil {
+	if err := send(conn, &protocol.Hello{ProtocolVersion: protocol.ProtocolVersion, Name: name, Token: token}); err != nil {
 		return nil, err
 	}
 	_, data, err := conn.ReceiveReliable(ctx)
@@ -122,10 +133,10 @@ func connect(conn transport.Conn, name string, tuning game.MovementTuning) (*ses
 	}
 	readCtx, stop := context.WithCancel(context.Background())
 	s := &session{
-		conn: conn, welcome: welcome, history: make([]game.InputCommand, 0, protocol.MaxCommandsPerInput),
+		conn: conn, name: name, welcome: welcome, history: make([]game.InputCommand, 0, protocol.MaxCommandsPerInput),
 		soldiers: make(map[int]*knownSoldier), baselines: protocol.NewBaselines(), buried: make(map[game.SoldierID]game.Tick),
 		clock: newInterpolationClock(int(welcome.SnapshotRate)), snapshots: make(chan received, 64),
-		cancel: stop, failed: make(chan struct{}),
+		cancel: stop, failed: make(chan struct{}), timeout: serverTimeout, heard: time.Now(),
 	}
 	s.setClock(welcome.ServerTick, handshakeRTT)
 	go s.readSnapshots(readCtx)
@@ -167,12 +178,23 @@ func (s *session) poll() (bool, error) {
 	for {
 		select {
 		case datagram := <-s.snapshots:
+			s.heard = time.Now()
 			s.graph.datagram(datagram.size, datagram.snapshot)
 			updated = s.apply(datagram.snapshot) || updated
 		default:
+			if s.timeout > 0 && time.Since(s.heard) > s.timeout {
+				s.fail(errServerSilent)
+				_ = s.conn.Close(errServerSilent.Error())
+			}
 			return updated, s.err()
 		}
 	}
+}
+
+// token is what the player gives to get its place back after a lost
+// connection.
+func (s *session) token() [16]byte {
+	return s.welcome.SessionToken
 }
 
 // received is a decoded snapshot datagram and its size.
@@ -324,6 +346,12 @@ func (s *session) isBuried(id game.SoldierID, tick game.Tick) bool {
 	return ok
 }
 
+// resume connects again as the player of a lost session, which the caller
+// has abandoned.
+func resume(lost *session, conn transport.Conn, tuning game.MovementTuning) (*session, error) {
+	return connect(conn, lost.name, tuning, lost.token())
+}
+
 // jump moves the client's clock by the given number of ticks, when the lead
 // is too far off to correct gently: after a stall, or a change of route.
 func (s *session) jump(ticks int) {
@@ -358,9 +386,16 @@ func (s *session) localSoldier() *game.Soldier {
 	return nil
 }
 
+// close ends the session for good: the server frees the player's place.
 func (s *session) close() {
 	s.cancel()
-	_ = s.conn.Close("client quit")
+	_ = s.conn.Close(protocol.QuitReason)
+}
+
+// abandon lets go of a lost session; the player means to come back.
+func (s *session) abandon() {
+	s.cancel()
+	_ = s.conn.Close("connection lost")
 }
 
 func (s *session) readSnapshots(ctx context.Context) {

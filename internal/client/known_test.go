@@ -1,6 +1,7 @@
 package client
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -84,7 +85,7 @@ func TestJoiningAHostTwiceWithoutAFingerprint(t *testing.T) {
 	}
 	defer local.stop()
 	for range 2 {
-		conn, err := dial(config.Client{Connect: local.network.Addr(), ConfigDir: playerDir})
+		conn, err := dial(context.Background(), config.Client{Connect: local.network.Addr(), ConfigDir: playerDir})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -97,7 +98,7 @@ func TestJoiningAHostTwiceWithoutAFingerprint(t *testing.T) {
 	if known.servers[local.network.Addr()] != before {
 		t.Errorf("the player remembered %v, the host's certificate is %s", known.servers, before)
 	}
-	if _, err := dial(config.Client{Connect: local.network.Addr(), Fingerprint: transport.Fingerprint{9}.String(), ConfigDir: playerDir}); err == nil {
+	if _, err := dial(context.Background(), config.Client{Connect: local.network.Addr(), Fingerprint: transport.Fingerprint{9}.String(), ConfigDir: playerDir}); err == nil {
 		t.Error("a wrong fingerprint was accepted")
 	}
 }

@@ -96,7 +96,8 @@ func BenchmarkTick(b *testing.B) {
 	for id := range 16 {
 		conn, peer := transport.NewMemoryPair()
 		b.Cleanup(func() { _ = conn.Close("done"); _ = peer.Close("done") })
-		p := server.newPlayer(game.PlayerID(id), "bench", conn)
+		p := server.newPlayer(game.PlayerID(id), "bench")
+		p.conn = conn
 		p.ready = true
 		if err := server.spawn(p); err != nil {
 			b.Fatal(err)

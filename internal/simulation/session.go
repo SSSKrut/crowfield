@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"slices"
 	"time"
 
 	"ravenfield/internal/game"
@@ -23,9 +24,20 @@ type session struct {
 	player   *player
 }
 
+// reservation keeps the place of a player whose connection was lost, for
+// the reconnect window.
+type reservation struct {
+	id    game.PlayerID
+	token [16]byte
+	name  string
+	team  game.Team
+	until time.Time
+}
+
 type player struct {
 	id         game.PlayerID
 	name       string
+	team       game.Team
 	token      [16]byte
 	conn       transport.Conn
 	ready      bool
@@ -33,6 +45,7 @@ type player struct {
 	controller *game.CharacterController
 
 	inputs        inputBuffer
+	lastInput     time.Time
 	last          game.InputCommand
 	processed     bool
 	lastProcessed game.Tick
@@ -186,6 +199,7 @@ func (s *Server) handleEvent(e event) {
 	case eventInput:
 		if sess.player != nil {
 			p := sess.player
+			p.lastInput = time.Now()
 			p.acknowledge(e.input)
 			for _, command := range e.input.Commands {
 				p.inputs.put(command, s.tick)
@@ -210,12 +224,17 @@ func (s *Server) hello(sess *session, hello *protocol.Hello) {
 			fmt.Sprintf("the server speaks protocol %d, the client %d", protocol.ProtocolVersion, hello.ProtocolVersion))
 		return
 	}
-	id, ok := s.freePlayer()
-	if !ok {
-		s.reject(sess, protocol.RejectFull, "the server is full")
-		return
+	p := s.returning(hello)
+	if p == nil {
+		id, ok := s.freePlayer()
+		if !ok {
+			s.reject(sess, protocol.RejectFull, "the server is full")
+			return
+		}
+		p = s.newPlayer(id, hello.Name)
 	}
-	p := s.newPlayer(id, hello.Name, sess.conn)
+	p.conn, p.lastInput = sess.conn, time.Now()
+	id := p.id
 	welcome := protocol.Welcome{
 		Player: id, SessionToken: p.token, TickRate: game.TickRate, SnapshotRate: uint8(s.settings.SnapshotRate),
 		ServerTick: s.tick, Map: game.PrototypeMap,
@@ -227,22 +246,60 @@ func (s *Server) hello(sess *session, hello *protocol.Hello) {
 	}
 	s.players[id] = p
 	sess.player = p
-	log.Printf("player %d %q joined", id, p.name)
+	if p.team != game.TeamNone {
+		log.Printf("player %d %q returned", id, p.name)
+	} else {
+		log.Printf("player %d %q joined", id, p.name)
+	}
 }
 
-func (s *Server) newPlayer(id game.PlayerID, name string, conn transport.Conn) *player {
-	p := &player{id: id, name: name, conn: conn, views: make([]entityView, s.soldiers.Slots())}
+// returning gives a player who comes back with the token of a lost
+// connection its place, name and team again. A connection of that player that
+// is still open is closed first: two would make a phantom.
+func (s *Server) returning(hello *protocol.Hello) *player {
+	if hello.Token == [16]byte{} {
+		return nil
+	}
+	for _, sess := range s.sessions {
+		if sess.player != nil && sess.player.token == hello.Token {
+			s.drop(sess, "replaced by a new connection")
+			break
+		}
+	}
+	for i, r := range s.reservations {
+		if r.token == hello.Token {
+			s.reservations = append(s.reservations[:i], s.reservations[i+1:]...)
+			p := s.newPlayer(r.id, r.name)
+			p.token, p.team = r.token, r.team
+			return p
+		}
+	}
+	return nil
+}
+
+func (s *Server) newPlayer(id game.PlayerID, name string) *player {
+	p := &player{id: id, name: name, views: make([]entityView, s.soldiers.Slots())}
 	_, _ = rand.Read(p.token[:])
 	return p
 }
 
+// freePlayer finds a place that is neither taken nor kept for a return.
 func (s *Server) freePlayer() (game.PlayerID, bool) {
 	for id := range s.settings.MaxPlayers {
-		if s.players[id] == nil {
+		if s.players[id] == nil && !s.reserved(game.PlayerID(id)) {
 			return game.PlayerID(id), true
 		}
 	}
 	return 0, false
+}
+
+func (s *Server) reserved(id game.PlayerID) bool {
+	for _, r := range s.reservations {
+		if r.id == id {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) ready(sess *session) {
@@ -257,9 +314,13 @@ func (s *Server) ready(sess *session) {
 	}
 }
 
+// spawn gives a player a soldier, in the team it played for before.
 func (s *Server) spawn(p *player) error {
+	if p.team == game.TeamNone {
+		p.team = s.smallerTeam()
+	}
 	id, err := s.soldiers.Add(game.Soldier{
-		Team: s.smallerTeam(), Controller: game.PlayerController(p.id), Alive: true, Position: s.scene.Spawn,
+		Team: p.team, Controller: game.PlayerController(p.id), Alive: true, Position: s.scene.Spawn,
 	})
 	if err != nil {
 		return err
@@ -308,7 +369,15 @@ func (s *Server) leave(sess *session, reason error) {
 	}
 	s.players[p.id] = nil
 	var closed *transport.CloseError
-	if errors.As(reason, &closed) {
+	quit := errors.As(reason, &closed) && closed.Remote && closed.Reason == protocol.QuitReason
+	if !quit {
+		// The connection was lost, not ended: the player may come back with
+		// its token. The soldier is gone meanwhile, so no one waits for it.
+		s.reservations = append(s.reservations, reservation{
+			id: p.id, token: p.token, name: p.name, team: p.team, until: time.Now().Add(s.settings.ReconnectWindow),
+		})
+	}
+	if closed != nil {
 		log.Printf("player %d %q left: %s", p.id, p.name, closed.Reason)
 	} else {
 		log.Printf("player %d %q left: %v", p.id, p.name, reason)
@@ -327,12 +396,26 @@ func (s *Server) drop(sess *session, reason string) {
 	s.leave(sess, errors.New(reason))
 }
 
+// dropSilentSessions closes connections that send nothing: no hello in time,
+// or no input for the input timeout, which a frozen client or a broken link
+// cause before QUIC notices. It also forgets players who did not return.
 func (s *Server) dropSilentSessions() {
 	for _, sess := range s.sessions {
-		if sess.player == nil && time.Since(sess.accepted) > helloTimeout {
+		switch p := sess.player; {
+		case p == nil && time.Since(sess.accepted) > helloTimeout:
 			s.drop(sess, "no hello in time")
+		case p != nil && time.Since(p.lastInput) > s.settings.InputTimeout:
+			s.drop(sess, "no input in time")
 		}
 	}
+	now := time.Now()
+	s.reservations = slices.DeleteFunc(s.reservations, func(r reservation) bool {
+		if now.After(r.until) {
+			log.Printf("player %d %q did not return", r.id, r.name)
+			return true
+		}
+		return false
+	})
 }
 
 func send(conn transport.Conn, message protocol.Message) error {

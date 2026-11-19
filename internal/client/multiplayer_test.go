@@ -3,13 +3,16 @@ package client
 import (
 	"context"
 	"math"
+	"net"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"ravenfield/internal/config"
 	"ravenfield/internal/game"
 	"ravenfield/internal/network/transport"
+	"ravenfield/internal/simulation"
 )
 
 // Two players join a hosted server over QUIC and see each other: one walks,
@@ -33,7 +36,7 @@ func TestTwoPlayersSeeEachOtherOverQUIC(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if sessions[i], err = connect(conn, "player", tuning); err != nil {
+		if sessions[i], err = connect(conn, "player", tuning, [16]byte{}); err != nil {
 			t.Fatal(err)
 		}
 		defer sessions[i].close()
@@ -122,4 +125,161 @@ func TestHeadlessClientsPlayOverQUIC(t *testing.T) {
 		t.Logf("client %d: %d ticks, %d snapshots, %.1f KB/s, lead %.2f", i, stats.Ticks, stats.Snapshots,
 			float64(stats.Bytes)/1024/seconds, stats.Lead)
 	}
+}
+
+// The main test of disconnection: the link of one player breaks like a
+// pulled cable. The server drops the player after the input timeout and the
+// other player sees its soldier go; the client notices the silence, comes
+// back over a new connection with its token, and gets its place and team
+// again. At no moment are there two soldiers of one player.
+func TestPlayerComesBackAfterTheLinkBreaks(t *testing.T) {
+	address := startTestServer(t, config.Server{
+		MaxPlayers: 2, SnapshotRate: 20, InputTimeout: 300 * time.Millisecond, ReconnectWindow: 10 * time.Second,
+	})
+	tuning := game.DefaultMovementTuning()
+	watcher := joinHeadless(t, address, transport.QUICOptions{}, 1)
+	link := &cuttable{}
+	breaker := joinHeadless(t, address, transport.QUICOptions{WrapPacketConn: func(udp net.PacketConn) net.PacketConn {
+		link.PacketConn = udp
+		return link
+	}}, 2)
+	breaker.session.timeout = 300 * time.Millisecond
+	player := breaker.Player()
+
+	ticker := time.NewTicker(game.TickDuration)
+	defer ticker.Stop()
+	breakerPlays := true
+	// play ticks both clients until the condition holds, at most for limit.
+	play := func(what string, limit time.Duration, condition func() bool) {
+		t.Helper()
+		for deadline := time.Now().Add(limit); !condition(); {
+			if time.Now().After(deadline) {
+				t.Fatalf("%s did not happen within %s", what, limit)
+			}
+			<-ticker.C
+			if err := watcher.Tick(); err != nil {
+				t.Fatal(err)
+			}
+			if breakerPlays {
+				if err := breaker.Tick(); err != nil {
+					breakerPlays = false
+					t.Logf("the breaking client stopped: %v", err)
+				}
+			}
+		}
+	}
+	play("seeing the other player", 3*time.Second, func() bool { return len(remoteSoldiers(watcher)) == 1 })
+	before := remoteSoldiers(watcher)[0]
+
+	link.cut.Store(true)
+	play("noticing the silence", 3*time.Second, func() bool { return !breakerPlays })
+	play("removing the lost soldier", 3*time.Second, func() bool { return len(remoteSoldiers(watcher)) == 0 })
+
+	conn := dialTestServer(t, address, transport.QUICOptions{})
+	if err := breaker.Rejoin(conn, tuning); err != nil {
+		t.Fatal(err)
+	}
+	breakerPlays = true
+	if breaker.Player() != player {
+		t.Errorf("came back as player %d, was %d", breaker.Player(), player)
+	}
+	play("seeing the player back", 3*time.Second, func() bool { return len(remoteSoldiers(watcher)) == 1 })
+	start := time.Now()
+	play("a second of play", 2*time.Second, func() bool {
+		if count := len(remoteSoldiers(watcher)); count != 1 {
+			t.Fatalf("the watcher sees %d soldiers of the other player", count)
+		}
+		return time.Since(start) >= time.Second
+	})
+	after := remoteSoldiers(watcher)[0]
+	if after.ID == before.ID || after.Team != before.Team {
+		t.Errorf("back as soldier %#04x of team %d; was %#04x of team %d", after.ID, after.Team, before.ID, before.Team)
+	}
+	if others := remoteSoldiers(breaker); len(others) != 1 || breaker.Stats().Corrections != 0 {
+		t.Errorf("the returned player sees %d others and had %d corrections", len(others), breaker.Stats().Corrections)
+	}
+}
+
+// cuttable is a UDP socket whose traffic can be cut both ways at once, like
+// a pulled cable: nothing goes out, and what comes in is dropped.
+type cuttable struct {
+	net.PacketConn
+	cut atomic.Bool
+}
+
+func (c *cuttable) WriteTo(data []byte, address net.Addr) (int, error) {
+	if c.cut.Load() {
+		return len(data), nil
+	}
+	return c.PacketConn.WriteTo(data, address)
+}
+
+func (c *cuttable) ReadFrom(data []byte) (int, net.Addr, error) {
+	for {
+		n, address, err := c.PacketConn.ReadFrom(data)
+		if err != nil || !c.cut.Load() {
+			return n, address, err
+		}
+	}
+}
+
+// startTestServer runs a dedicated server over QUIC on the loopback.
+func startTestServer(t *testing.T, settings config.Server) string {
+	t.Helper()
+	certificate, _, err := transport.GenerateCertificate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := transport.ListenQUIC("127.0.0.1:0", transport.ServerTLSConfig(certificate), transport.QUICOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := simulation.NewServer(settings, game.DefaultMovementTuning())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- server.Serve(ctx, listener) }()
+	t.Cleanup(func() {
+		cancel()
+		if err := <-done; err != nil {
+			t.Error(err)
+		}
+		_ = listener.Close()
+		_ = server.Close()
+	})
+	return listener.Addr()
+}
+
+func dialTestServer(t *testing.T, address string, options transport.QUICOptions) transport.Conn {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, err := transport.DialQUIC(ctx, address, transport.ClientTLSConfig(nil), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return conn
+}
+
+func joinHeadless(t *testing.T, address string, options transport.QUICOptions, seed uint64) *Headless {
+	t.Helper()
+	player, err := NewHeadless(dialTestServer(t, address, options), "player", game.DefaultMovementTuning(), seed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(player.Close)
+	return player
+}
+
+// remoteSoldiers are the soldiers a client knows besides its own.
+func remoteSoldiers(h *Headless) []game.Soldier {
+	var others []game.Soldier
+	for _, known := range h.session.soldiers {
+		if known.soldier.ID != h.session.player.Soldier {
+			others = append(others, known.soldier)
+		}
+	}
+	return others
 }

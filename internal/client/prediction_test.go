@@ -207,7 +207,7 @@ func soloWithPrediction(t *testing.T, conditions transport.NetworkConditions) (*
 	if conditions != (transport.NetworkConditions{}) {
 		conn = transport.Simulate(conn, conditions)
 	}
-	session, err := connect(conn, "tester", tuning)
+	session, err := connect(conn, "tester", tuning, [16]byte{})
 	if err != nil {
 		t.Fatal(err)
 	}

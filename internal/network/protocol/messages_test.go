@@ -15,6 +15,7 @@ import (
 func sampleMessages() []Message {
 	return []Message{
 		&Hello{ProtocolVersion: ProtocolVersion, Build: 0x0123456789ABCDEF, Name: "Ворон", Password: "secret"},
+		&Hello{Name: "back", Token: [16]byte{0: 1, 15: 0xFF}},
 		&Hello{},
 		&Welcome{
 			Player: game.MaxPlayers - 1, SessionToken: [16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
@@ -205,6 +206,14 @@ func TestDecodeRejectsInvalidFields(t *testing.T) {
 			w.WriteBool(false)
 			w.WriteBits(MaxCommandsPerInput+1, commandCountBits)
 		},
+		"zero token": func(w *BitWriter) {
+			w.WriteBits(ProtocolVersion, 16)
+			w.WriteUint64(0)
+			w.WriteString("", nameLengthBits)
+			w.WriteString("", passwordLengthBits)
+			w.WriteBool(true)
+			w.WriteBytes(make([]byte, 16))
+		},
 		"soldier without generation": func(w *BitWriter) {
 			writeSnapshotHeader(w, 1)
 			record := full
@@ -268,8 +277,11 @@ func TestDecodeRejectsInvalidFields(t *testing.T) {
 	}
 	for name, write := range cases {
 		messageType := MessageSnapshot
-		if name == "nine commands" {
+		switch name {
+		case "nine commands":
 			messageType = MessageInput
+		case "zero token":
+			messageType = MessageHello
 		}
 		w := startWriting(nil, messageType)
 		write(&w)

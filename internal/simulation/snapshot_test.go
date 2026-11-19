@@ -148,7 +148,8 @@ func addReceiver(t *testing.T, server *Server, id game.PlayerID, ackDelay int, l
 	t.Helper()
 	conn, peer := transport.NewMemoryPair()
 	t.Cleanup(func() { _ = conn.Close("test over"); _ = peer.Close("test over") })
-	p := server.newPlayer(id, "receiver", conn)
+	p := server.newPlayer(id, "receiver")
+	p.conn = conn
 	p.ready = true
 	if err := server.spawn(p); err != nil {
 		t.Fatal(err)

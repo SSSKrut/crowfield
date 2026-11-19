@@ -22,6 +22,7 @@ type Headless struct {
 	predictor *predictor
 	world     *physics.World
 	input     wanderer
+	last      time.Time
 
 	mu    sync.Mutex
 	stats HeadlessStats
@@ -58,7 +59,7 @@ func NewHeadless(conn transport.Conn, name string, tuning game.MovementTuning, s
 		_ = world.Close()
 		return nil, err
 	}
-	session, err := connect(conn, name, tuning)
+	session, err := connect(conn, name, tuning, [16]byte{})
 	if err != nil {
 		_ = predictor.close()
 		_ = world.Close()
@@ -70,41 +71,19 @@ func NewHeadless(conn transport.Conn, name string, tuning game.MovementTuning, s
 	}, nil
 }
 
-// Run plays until ctx ends or the connection fails.
+// Run plays until ctx ends or the connection fails, a tick at a time at the
+// pace of the session's clock.
 func (h *Headless) Run(ctx context.Context) error {
 	next := time.Now()
-	last := next
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		default:
 		}
-		command, err := h.session.sendCommand(h.input.command(h.predictor))
-		if err != nil {
-			return fmt.Errorf("disconnected: %w", err)
-		}
-		if err := h.predictor.predict(command); err != nil {
+		if err := h.Tick(); err != nil {
 			return err
 		}
-		if err := h.world.Step(game.TickDelta); err != nil {
-			return err
-		}
-		updated, err := h.session.poll()
-		if err != nil {
-			return fmt.Errorf("disconnected: %w", err)
-		}
-		if updated {
-			if err := h.predictor.reconcile(h.session.player); err != nil {
-				return err
-			}
-		}
-		now := time.Now()
-		h.predictor.smooth(float32(now.Sub(last).Seconds()))
-		h.session.clock.advance(float32(now.Sub(last).Seconds()))
-		h.session.updateRemotes()
-		last = now
-		h.publish()
 		next = next.Add(time.Duration(float64(h.session.tickDuration()) * float64(time.Second)))
 		if delay := time.Until(next); delay > 0 {
 			time.Sleep(delay)
@@ -112,6 +91,40 @@ func (h *Headless) Run(ctx context.Context) error {
 			next = time.Now()
 		}
 	}
+}
+
+// Tick plays one tick: a command, its prediction, the snapshots that came and
+// the frame work on the other soldiers.
+func (h *Headless) Tick() error {
+	command, err := h.session.sendCommand(h.input.command(h.predictor))
+	if err != nil {
+		return fmt.Errorf("disconnected: %w", err)
+	}
+	if err := h.predictor.predict(command); err != nil {
+		return err
+	}
+	if err := h.world.Step(game.TickDelta); err != nil {
+		return err
+	}
+	updated, err := h.session.poll()
+	if err != nil {
+		return fmt.Errorf("disconnected: %w", err)
+	}
+	if updated {
+		if err := h.predictor.reconcile(h.session.player); err != nil {
+			return err
+		}
+	}
+	now := time.Now()
+	if h.last.IsZero() {
+		h.last = now
+	}
+	h.predictor.smooth(float32(now.Sub(h.last).Seconds()))
+	h.session.clock.advance(float32(now.Sub(h.last).Seconds()))
+	h.session.updateRemotes()
+	h.last = now
+	h.publish()
+	return nil
 }
 
 func (h *Headless) publish() {
@@ -130,6 +143,24 @@ func (h *Headless) Stats() HeadlessStats {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.stats
+}
+
+// Rejoin comes back over a new connection after Run ended with a lost one:
+// the server gives the player its place and team again.
+func (h *Headless) Rejoin(conn transport.Conn, tuning game.MovementTuning) error {
+	h.session.abandon()
+	session, err := resume(h.session, conn, tuning)
+	if err != nil {
+		return err
+	}
+	h.session = session
+	h.predictor.reset()
+	return nil
+}
+
+// Player is the player the server knows this client as.
+func (h *Headless) Player() game.PlayerID {
+	return h.session.welcome.Player
 }
 
 // Position is where the client predicts its soldier; call it after Run.

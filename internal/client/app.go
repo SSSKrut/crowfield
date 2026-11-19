@@ -6,6 +6,8 @@ import (
 	"log"
 	"math"
 	"path/filepath"
+	"sync/atomic"
+	"time"
 
 	"ravenfield/internal/animation"
 	"ravenfield/internal/config"
@@ -45,6 +47,8 @@ type app struct {
 	netBytes  int64
 	netRate   float32
 	frames    frameStats
+	// reconnect is the restoring of a lost connection to a remote server.
+	reconnect *reconnecting
 	// knockdowns counts the automatic knockdowns done.
 	knockdowns int
 }
@@ -117,12 +121,14 @@ func Run(settings config.Client) error {
 		log.Printf("simulating network: %s", conditions)
 		conn = transport.Simulate(conn, conditions)
 	}
-	a.session, err = connect(conn, settings.Name, tuning)
+	a.session, err = connect(conn, settings.Name, tuning, [16]byte{})
 	if err != nil {
 		_ = conn.Close("handshake failed")
 		return err
 	}
-	defer a.session.close()
+	// The session may be replaced by a reconnection.
+	defer func() { a.session.close() }()
+	defer a.stopReconnecting()
 	if a.captured {
 		rl.DisableCursor()
 	}
@@ -135,7 +141,7 @@ const characterModelPath = "assets/prototype/RobotExpressive.glb"
 // that releases what open started.
 func open(settings config.Client, tuning game.MovementTuning) (transport.Conn, func(), error) {
 	if settings.Connect != "" {
-		conn, err := dial(settings)
+		conn, err := dial(context.Background(), settings)
 		return conn, func() {}, err
 	}
 	local, err := startLocalServer(tuning, settings)
@@ -158,7 +164,7 @@ func open(settings config.Client, tuning game.MovementTuning) (transport.Conn, f
 // dial joins the server of -connect. The certificate is checked before
 // anything is sent: against -fingerprint, or against the fingerprint
 // remembered on the first connection to that address.
-func dial(settings config.Client) (transport.Conn, error) {
+func dial(ctx context.Context, settings config.Client) (transport.Conn, error) {
 	address := withDefaultPort(settings.Connect)
 	var given *transport.Fingerprint
 	if settings.Fingerprint != "" {
@@ -175,7 +181,7 @@ func dial(settings config.Client) (transport.Conn, error) {
 			return nil, err
 		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), connectTimeout)
+	ctx, cancel := context.WithTimeout(ctx, connectTimeout)
 	defer cancel()
 	conn, err := transport.DialQUIC(ctx, address, transport.ClientTLSConfig(nil), transport.QUICOptions{})
 	if err != nil {
@@ -247,13 +253,22 @@ func (a *app) run() error {
 		a.elapsed += deltaTime
 		a.played += deltaTime
 		accumulator += deltaTime
+		if a.reconnect != nil {
+			// The world waits while the connection comes back.
+			accumulator = 0
+			if err := a.pollReconnect(); err != nil {
+				return err
+			}
+		}
+		var lost error
 		// Ticks last a little more or less than TickDelta while the session
 		// brings its commands to the right lead.
-		for accumulator >= a.session.tickDuration() {
+		for a.reconnect == nil && accumulator >= a.session.tickDuration() {
 			accumulator -= a.session.tickDuration()
 			command, err := a.session.sendCommand(a.command())
 			if err != nil {
-				return fmt.Errorf("disconnected: %w", err)
+				lost = err
+				break
 			}
 			if err := a.predictor.predict(command); err != nil {
 				return err
@@ -263,9 +278,14 @@ func (a *app) run() error {
 			}
 		}
 		a.alpha = accumulator / a.session.tickDuration()
-		updated, err := a.session.poll()
-		if err != nil {
-			return fmt.Errorf("disconnected: %w", err)
+		updated := false
+		if lost == nil && a.reconnect == nil {
+			updated, lost = a.session.poll()
+		}
+		if lost != nil {
+			if err := a.lose(lost); err != nil {
+				return err
+			}
 		}
 		if updated {
 			corrections := a.predictor.corrections
@@ -477,6 +497,11 @@ func (a *app) draw(feet physics.Vec3, spawned bool) {
 	if a.settings.NetGraph {
 		a.session.graph.draw(a.session.resyncs)
 	}
+	if r := a.reconnect; r != nil {
+		rl.DrawText(fmt.Sprintf("Connection lost: %v", r.reason), 18, 160, 22, rl.Orange)
+		rl.DrawText(fmt.Sprintf("Reconnecting: attempt %d, %.0f s of %.0f", r.attempts.Load(), time.Since(r.since).Seconds(),
+			reconnectWindow.Seconds()), 18, 188, 22, rl.Orange)
+	}
 	if !a.captured && a.settings.FrameLimit == 0 {
 		rl.DrawText("Press Esc to capture the mouse", 18, 132, 22, rl.Yellow)
 	}
@@ -556,4 +581,85 @@ func (f *frameStats) String() string {
 		return "fps=0"
 	}
 	return fmt.Sprintf("fps=%.0f longest_frame=%.1fms", float32(f.frames)/f.total, f.longest*1000)
+}
+
+// reconnectWindow is how long the client tries to come back to a remote
+// server, the time the server keeps the player's place.
+const reconnectWindow = time.Minute
+
+// reconnecting restores a lost connection to a remote server in the
+// background, once a second, while the window keeps drawing.
+type reconnecting struct {
+	reason   error
+	since    time.Time
+	attempts atomic.Int32
+	done     chan reconnected
+	cancel   context.CancelFunc
+}
+
+type reconnected struct {
+	session *session
+	err     error
+}
+
+// lose handles a lost connection: playing solo or hosting it is the end, on
+// a remote server the client comes back with its token.
+func (a *app) lose(reason error) error {
+	if a.settings.Connect == "" {
+		return fmt.Errorf("disconnected: %w", reason)
+	}
+	log.Printf("connection lost: %v; reconnecting", reason)
+	lost := a.session
+	lost.abandon()
+	ctx, cancel := context.WithTimeout(context.Background(), reconnectWindow)
+	r := &reconnecting{reason: reason, since: time.Now(), done: make(chan reconnected, 1), cancel: cancel}
+	a.reconnect = r
+	go func() {
+		defer cancel()
+		for {
+			r.attempts.Add(1)
+			conn, err := dial(ctx, a.settings)
+			if err == nil {
+				var session *session
+				if session, err = resume(lost, conn, a.tuning); err == nil {
+					r.done <- reconnected{session: session}
+					return
+				}
+				_ = conn.Close("rejoin failed")
+			}
+			select {
+			case <-ctx.Done():
+				r.done <- reconnected{err: fmt.Errorf("could not reconnect within %s: %w", reconnectWindow, err)}
+				return
+			case <-time.After(time.Second):
+			}
+		}
+	}()
+	return nil
+}
+
+// pollReconnect takes the new session once the connection is back.
+func (a *app) pollReconnect() error {
+	select {
+	case result := <-a.reconnect.done:
+		a.reconnect = nil
+		if result.err != nil {
+			return result.err
+		}
+		a.session = result.session
+		a.predictor.reset()
+		log.Printf("reconnected as player %d", a.session.welcome.Player)
+	default:
+	}
+	return nil
+}
+
+func (a *app) stopReconnecting() {
+	if a.reconnect == nil {
+		return
+	}
+	a.reconnect.cancel()
+	if result := <-a.reconnect.done; result.session != nil {
+		result.session.close()
+	}
 }

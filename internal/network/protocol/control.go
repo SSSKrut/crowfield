@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"errors"
 	"fmt"
 	"unicode/utf8"
 
@@ -26,7 +27,14 @@ type Hello struct {
 	Build           uint64
 	Name            string
 	Password        string
+	// Token is the session token of a player returning after a lost
+	// connection; zero for a new player.
+	Token [16]byte
 }
+
+// QuitReason closes the connection of a player who leaves on purpose: the
+// server frees the place at once instead of keeping it for a return.
+const QuitReason = "player quit"
 
 func (*Hello) Type() MessageType { return MessageHello }
 
@@ -42,6 +50,10 @@ func (m *Hello) Encode(dst []byte) ([]byte, error) {
 	w.WriteUint64(m.Build)
 	w.WriteString(m.Name, nameLengthBits)
 	w.WriteString(m.Password, passwordLengthBits)
+	w.WriteBool(m.Token != [16]byte{})
+	if m.Token != [16]byte{} {
+		w.WriteBytes(m.Token[:])
+	}
 	return w.Bytes(), nil
 }
 
@@ -51,6 +63,13 @@ func (m *Hello) Decode(data []byte) error {
 	m.Build = r.ReadUint64()
 	m.Name = r.ReadString(nameLengthBits, MaxNameBytes)
 	m.Password = r.ReadString(passwordLengthBits, MaxPasswordBytes)
+	m.Token = [16]byte{}
+	if r.ReadBool() {
+		r.ReadBytes(m.Token[:])
+		if r.Err() == nil && m.Token == [16]byte{} {
+			r.Fail(errors.New("a zero token is written as none"))
+		}
+	}
 	return r.Finish()
 }
 

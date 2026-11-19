@@ -38,6 +38,7 @@ type Server struct {
 	soldiers         *game.SoldierSet
 	players          [game.MaxPlayers]*player
 	sessions         map[transport.Conn]*session
+	reservations     []reservation
 	events           chan event
 	connections      sync.WaitGroup
 	tick             game.Tick
@@ -65,6 +66,12 @@ func NewServer(settings config.Server, tuning game.MovementTuning) (*Server, err
 	}
 	if settings.ClientBandwidth == 0 {
 		settings.ClientBandwidth = config.DefaultClientBandwidth
+	}
+	if settings.InputTimeout <= 0 {
+		settings.InputTimeout = config.DefaultInputTimeout
+	}
+	if settings.ReconnectWindow <= 0 {
+		settings.ReconnectWindow = config.DefaultReconnectWindow
 	}
 	if settings.ClientBandwidth < 0 {
 		return nil, fmt.Errorf("client bandwidth %d is negative", settings.ClientBandwidth)

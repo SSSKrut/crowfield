@@ -59,6 +59,12 @@ func newPredictor(world *physics.World, tuning game.MovementTuning) (*predictor,
 	return &predictor{controller: controller}, nil
 }
 
+// reset forgets the soldier, for a new session: the next confirmed state
+// starts the prediction again.
+func (p *predictor) reset() {
+	p.started, p.offset = false, physics.Vec3{}
+}
+
 func (p *predictor) close() error {
 	return p.controller.Close()
 }

@@ -75,7 +75,7 @@ func TestSoloSessionThroughTheEmbeddedServer(t *testing.T) {
 			if conditions != (transport.NetworkConditions{}) {
 				conn = transport.Simulate(conn, conditions)
 			}
-			session, err := connect(conn, "tester", tuning)
+			session, err := connect(conn, "tester", tuning, [16]byte{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -176,7 +176,7 @@ func soloSession(t *testing.T, settings config.Client, conditions transport.Netw
 	if conditions != (transport.NetworkConditions{}) {
 		conn = transport.Simulate(conn, conditions)
 	}
-	session, err := connect(conn, "tester", tuning)
+	session, err := connect(conn, "tester", tuning, [16]byte{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -354,7 +354,7 @@ func TestConnectRefusesADifferentTuning(t *testing.T) {
 	defer conn.Close("test over")
 	other := game.DefaultMovementTuning()
 	other.SprintSpeed++
-	if _, err := connect(conn, "tester", other); err == nil || !strings.Contains(err.Error(), "tuning") {
+	if _, err := connect(conn, "tester", other, [16]byte{}); err == nil || !strings.Contains(err.Error(), "tuning") {
 		t.Errorf("connect with another tuning: %v", err)
 	}
 }

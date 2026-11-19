@@ -309,3 +309,144 @@ func expectClosed(conn transport.Conn) string {
 		}
 	}
 }
+
+// A player whose input stops — a frozen client, a broken link — is dropped
+// after the input timeout, and its soldier with it. Its place stays reserved:
+// a newcomer finds the server full, while the player returns with its token
+// to the same place and team.
+func TestLostPlayerReturnsToItsPlaceAndTeam(t *testing.T) {
+	_, listener := startServer(t, config.Server{
+		MaxPlayers: 1, SnapshotRate: game.TickRate, InputTimeout: 200 * time.Millisecond, ReconnectWindow: 5 * time.Second,
+	})
+	lost := join(t, listener, "lost")
+	soldier := lost.waitFor(t, func(s *protocol.Snapshot) bool { return s.Player.Soldier != 0 })
+	team := ownTeam(t, soldier)
+	if reason := expectClosed(lost.conn); !strings.Contains(reason, "no input") {
+		t.Fatalf("the silent player was closed with %q", reason)
+	}
+	conn, err := listener.Dial()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sendMessage(t, conn, &protocol.Hello{ProtocolVersion: protocol.ProtocolVersion, Name: "newcomer"})
+	if reason := expectClosed(conn); !strings.Contains(reason, "full") {
+		t.Errorf("a newcomer took the reserved place: %q", reason)
+	}
+	back := joinWith(t, listener, "lost", lost.welcome.SessionToken)
+	if back.welcome.Player != lost.welcome.Player || back.welcome.SessionToken != lost.welcome.SessionToken {
+		t.Errorf("returned as player %d, was %d", back.welcome.Player, lost.welcome.Player)
+	}
+	returned := back.waitFor(t, func(s *protocol.Snapshot) bool { return s.Player.Soldier != 0 })
+	if ownTeam(t, returned) != team || returned.Player.Soldier == soldier.Player.Soldier {
+		t.Errorf("returned in team %d with soldier %#04x; was team %d with %#04x",
+			ownTeam(t, returned), returned.Player.Soldier, team, soldier.Player.Soldier)
+	}
+	if len(returned.Soldiers) != 1 {
+		t.Errorf("%d soldiers after the return, want 1", len(returned.Soldiers))
+	}
+}
+
+// A player who quits on purpose frees the place at once.
+func TestQuittingPlayerFreesThePlace(t *testing.T) {
+	_, listener := startServer(t, config.Server{MaxPlayers: 1, SnapshotRate: 20})
+	quitter := join(t, listener, "quitter")
+	quitter.waitFor(t, func(s *protocol.Snapshot) bool { return s.Player.Soldier != 0 })
+	_ = quitter.conn.Close(protocol.QuitReason)
+	// The close travels while the newcomer dials; let the server see it.
+	for range 50 {
+		conn, err := listener.Dial()
+		if err != nil {
+			t.Fatal(err)
+		}
+		sendMessage(t, conn, &protocol.Hello{ProtocolVersion: protocol.ProtocolVersion, Name: "newcomer"})
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_, data, err := conn.ReceiveReliable(ctx)
+		cancel()
+		var welcome protocol.Welcome
+		if err == nil && welcome.Decode(data) == nil {
+			_ = conn.Close("test over")
+			return
+		}
+		_ = conn.Close("test over")
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Error("the place of a player who quit stayed taken")
+}
+
+// A player who comes back while its old connection still looks alive — the
+// client restarted, or its route changed — replaces it: never two soldiers.
+func TestNewConnectionReplacesTheOldOne(t *testing.T) {
+	_, listener := startServer(t, config.Server{MaxPlayers: 2, SnapshotRate: game.TickRate})
+	watcher := join(t, listener, "watcher")
+	old := join(t, listener, "twice")
+	old.waitFor(t, func(s *protocol.Snapshot) bool { return s.Player.Soldier != 0 })
+	watcher.waitFor(t, func(s *protocol.Snapshot) bool { return len(s.Soldiers) == 2 })
+	again := joinWith(t, listener, "twice", old.welcome.SessionToken)
+	if reason := expectClosed(old.conn); !strings.Contains(reason, "replaced") {
+		t.Errorf("the old connection was closed with %q", reason)
+	}
+	if again.welcome.Player != old.welcome.Player {
+		t.Errorf("came back as player %d, was %d", again.welcome.Player, old.welcome.Player)
+	}
+	soldier := again.waitFor(t, func(s *protocol.Snapshot) bool { return s.Player.Soldier != 0 }).Player.Soldier
+	// The watcher hears the old soldier removed and sees exactly two.
+	seen := map[game.SoldierID]bool{}
+	watcher.waitFor(t, func(s *protocol.Snapshot) bool {
+		for _, id := range s.Removed {
+			delete(seen, id)
+		}
+		for _, record := range s.Soldiers {
+			seen[record.State.ID] = true
+		}
+		return seen[soldier] && len(seen) == 2 && len(s.Removed) > 0
+	})
+}
+
+// Once the reconnect window passes, the place is free and the token is
+// worth nothing.
+func TestReservationsExpire(t *testing.T) {
+	_, listener := startServer(t, config.Server{
+		MaxPlayers: 1, SnapshotRate: 20, InputTimeout: 100 * time.Millisecond, ReconnectWindow: 300 * time.Millisecond,
+	})
+	lost := join(t, listener, "lost")
+	expectClosed(lost.conn)
+	time.Sleep(400 * time.Millisecond)
+	late := joinWith(t, listener, "late", lost.welcome.SessionToken)
+	if late.welcome.SessionToken == lost.welcome.SessionToken {
+		t.Error("an expired token was honoured")
+	}
+}
+
+func joinWith(t *testing.T, listener *transport.MemoryListener, name string, token [16]byte) *testClient {
+	t.Helper()
+	conn, err := listener.Dial()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close("test over") })
+	sendMessage(t, conn, &protocol.Hello{ProtocolVersion: protocol.ProtocolVersion, Name: name, Token: token})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, data, err := conn.ReceiveReliable(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &testClient{conn: conn}
+	if err := client.welcome.Decode(data); err != nil {
+		t.Fatalf("no welcome: %v", err)
+	}
+	sendMessage(t, conn, &protocol.Ready{})
+	return client
+}
+
+// ownTeam is the team of the receiving player's soldier in a snapshot.
+func ownTeam(t *testing.T, snapshot *protocol.Snapshot) game.Team {
+	t.Helper()
+	for _, record := range snapshot.Soldiers {
+		if record.State.ID == snapshot.Player.Soldier && record.Base == 0 {
+			return record.State.Team
+		}
+	}
+	t.Fatalf("the snapshot has no full record of the player's soldier")
+	return 0
+}

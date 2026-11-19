@@ -26,6 +26,8 @@ func main() {
 	flag.IntVar(&settings.SnapshotRate, "snapshot-rate", settings.SnapshotRate, "snapshots per second; must divide the tick rate")
 	flag.IntVar(&settings.Dummies, "dummies", 0, "roaming bot soldiers without AI, for load tests")
 	flag.Uint64Var(&settings.Seed, "seed", 0, "match seed for repeatable runs; 0 picks a random one")
+	flag.DurationVar(&settings.InputTimeout, "input-timeout", config.DefaultInputTimeout, "disconnect a player who sends no input this long")
+	flag.DurationVar(&settings.ReconnectWindow, "reconnect-window", config.DefaultReconnectWindow, "keep the place of a lost player this long")
 	bandwidth := flag.Int("client-bandwidth", settings.ClientBandwidth/1024, "snapshot budget of each client, KB/s")
 	flag.Parse()
 	settings.ClientBandwidth = *bandwidth * 1024
