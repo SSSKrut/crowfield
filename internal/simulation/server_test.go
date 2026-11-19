@@ -192,7 +192,7 @@ func TestLeavingPlayerIsRemovedFromSnapshots(t *testing.T) {
 }
 
 func TestRespawnReturnsTheSoldierToTheSpawn(t *testing.T) {
-	server, listener := startServer(t, config.Server{MaxPlayers: 1, SnapshotRate: game.TickRate})
+	server, listener := startServer(t, config.Server{MaxPlayers: 1, SnapshotRate: game.TickRate, AllowRespawn: true})
 	client := join(t, listener, "walker")
 	snapshot := client.waitFor(t, func(s *protocol.Snapshot) bool { return s.Player.Soldier != 0 })
 	tick := snapshot.ServerTick + 3

@@ -16,6 +16,17 @@ import (
 
 const helloTimeout = 5 * time.Second
 
+// Messages are limited per connection before they are decoded
+// (ARCHITECTURE.md, 6.8), so that one client cannot crowd the events of the
+// simulation: input datagrams to twice the tick rate, of which an honest
+// client sends one a tick, and reliable messages to a few a second, of
+// which it sends two in all. Excess datagrams are dropped; excess reliable
+// messages close the connection.
+const (
+	inputRate, inputBurst     = 2 * game.TickRate, game.TickRate / 2
+	controlRate, controlBurst = 2, 8
+)
+
 // session is a connection as the simulation sees it. It becomes a player once
 // its Hello is accepted.
 type session struct {
@@ -115,9 +126,15 @@ func (s *Server) serveConn(ctx context.Context, conn transport.Conn) {
 }
 
 func (s *Server) readControl(ctx context.Context, conn transport.Conn) error {
+	limit := newRateLimit(controlRate, controlBurst)
 	for {
 		_, data, err := conn.ReceiveReliable(ctx)
 		if err != nil {
+			return err
+		}
+		if !limit.allow(time.Now()) {
+			err := errors.New("too many messages")
+			_ = conn.Close(err.Error())
 			return err
 		}
 		messageType, err := protocol.PeekType(data)
@@ -140,12 +157,18 @@ func (s *Server) readControl(ctx context.Context, conn transport.Conn) error {
 	}
 }
 
-// readInputs ignores datagrams that do not decode: they are unreliable anyway.
+// readInputs ignores datagrams that do not decode: they are unreliable
+// anyway. Datagrams over the limit are dropped unread.
 func (s *Server) readInputs(ctx context.Context, conn transport.Conn) {
+	limit := newRateLimit(inputRate, inputBurst)
 	for {
 		data, err := conn.ReceiveUnreliable(ctx)
 		if err != nil {
 			return
+		}
+		if !limit.allow(time.Now()) {
+			s.droppedInputs.Add(1)
+			continue
 		}
 		packet := &protocol.InputPacket{}
 		if packet.Decode(data) != nil {
@@ -351,10 +374,11 @@ func (s *Server) smallerTeam() game.Team {
 }
 
 // respawn puts a living soldier back at its spawn with full health and
-// magazines; the dead wait for their time.
+// magazines; the dead wait for their time. It is a debug aid of solo play:
+// elsewhere anyone could heal and refill at will, so it is refused.
 func (s *Server) respawn(sess *session) {
 	p := sess.player
-	if p == nil || p.soldier == 0 || !s.soldiers.Get(p.soldier).Alive {
+	if p == nil || p.soldier == 0 || !s.soldiers.Get(p.soldier).Alive || !s.settings.AllowRespawn {
 		return
 	}
 	soldier := s.soldiers.Get(p.soldier)

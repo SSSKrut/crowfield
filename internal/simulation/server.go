@@ -12,6 +12,7 @@ import (
 	"math"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"ravenfield/internal/config"
@@ -52,6 +53,9 @@ type Server struct {
 	shots []pendingShot
 	// totalHits counts the hits since the start, past the profile.
 	totalHits uint64
+	// droppedInputs counts the input datagrams over the limit, which the
+	// connections' goroutines drop.
+	droppedInputs atomic.Uint64
 
 	// states are the soldiers of the current snapshot by slot, quantized once
 	// for every player; a zero ID marks an empty slot.
@@ -187,9 +191,9 @@ func (s *Server) run(ctx context.Context) error {
 			players := s.playerCount()
 			var memory runtime.MemStats
 			runtime.ReadMemStats(&memory)
-			log.Printf("server running: tick=%d rate=%.1f players=%d soldiers=%d missed_commands=%d shots=%d hits=%d kills=%d snapshots=%.1fKB/s/player heap=%.1fMB goroutines=%d %s",
+			log.Printf("server running: tick=%d rate=%.1f players=%d soldiers=%d missed_commands=%d dropped_inputs=%d shots=%d hits=%d kills=%d snapshots=%.1fKB/s/player heap=%.1fMB goroutines=%d %s",
 				s.tick, float64(s.profile.ticks)/since.Seconds(), players, s.soldiers.Len(), s.profile.missedCommands,
-				s.profile.shots, s.profile.hits, s.profile.kills,
+				s.droppedInputs.Swap(0), s.profile.shots, s.profile.hits, s.profile.kills,
 				float64(s.profile.snapshotBytes)/1024/since.Seconds()/float64(max(1, players)),
 				float64(memory.HeapInuse)/(1<<20), runtime.NumGoroutine(), &s.profile)
 			lastStats = time.Now()

@@ -35,6 +35,8 @@ func startLocalServer(rules game.Rules, client config.Client) (*localServer, err
 	settings.StatsInterval = 0
 	settings.Dummies = client.Dummies
 	settings.DummyDeaths, settings.RespawnDelay = client.DummyDeaths, client.RespawnDelay
+	// Going back to the spawn at will is for solo play only.
+	settings.AllowRespawn = host == ""
 	local := &localServer{memory: transport.NewMemoryListener(), done: make(chan error, 1)}
 	listeners := []transport.Listener{local.memory}
 	if host != "" {
