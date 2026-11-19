@@ -25,6 +25,9 @@ func main() {
 	flag.StringVar(&settings.Connect, "connect", "", "join the server at this address instead of playing solo")
 	flag.StringVar(&settings.Fingerprint, "fingerprint", "", "certificate fingerprint the -connect server must have")
 	flag.IntVar(&settings.Dummies, "dummies", 0, "roaming bot soldiers without AI on the embedded server")
+	flag.BoolVar(&settings.Overview, "overview", false, "watch the whole map from above")
+	flag.IntVar(&settings.MaxFPS, "max-fps", settings.MaxFPS, "frame rate cap; 0 leaves it free")
+	flag.IntVar(&settings.Knockdowns, "knockdowns", 0, "knock down the nearest soldiers this many times, to load ragdolls")
 	flag.Parse()
 	if err := client.Run(settings); err != nil {
 		log.Fatal(err)

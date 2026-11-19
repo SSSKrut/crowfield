@@ -19,13 +19,20 @@ type Client struct {
 	// Fingerprint pins the certificate of the server given by Connect.
 	Fingerprint string
 	// Dummies adds roaming bot soldiers without AI to the embedded server.
-	Dummies          int
+	Dummies int
+	// Overview watches the whole map from above, to see every soldier.
+	Overview bool
+	// MaxFPS caps the frame rate; zero leaves it free, to measure.
+	MaxFPS int
+	// Knockdowns knocks down the nearest soldiers this many times, half a
+	// second apart, to load the ragdolls.
+	Knockdowns       int
 	MouseSensitivity float32
 	FieldOfView      float32
 }
 
 func DefaultClient() Client {
 	return Client{
-		Width: 1280, Height: 720, MouseSensitivity: 0.0025, FieldOfView: 75, Name: "Player",
+		Width: 1280, Height: 720, MouseSensitivity: 0.0025, FieldOfView: 75, Name: "Player", MaxFPS: 144,
 	}
 }

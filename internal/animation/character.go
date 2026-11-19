@@ -1,153 +1,166 @@
 package animation
 
+/*
+#include <stdlib.h>
+*/
+import "C"
+
 import (
 	"fmt"
+	"image/color"
 	"math"
-	"strings"
+	"unsafe"
 
 	"ravenfield/internal/physics"
 
 	rl "github.com/gen2brain/raylib-go/raylib"
 )
 
-const characterModelHeight = float32(1.75)
+const (
+	// blendTime is how long a change of clip takes in full detail.
+	blendTime = 0.2
+	// A soldier walks from walkSpeed and runs from runSpeed, in m/s.
+	walkSpeed = 0.15
+	runSpeed  = 6
+)
 
-type CharacterModel struct {
-	model       rl.Model
-	animations  []rl.ModelAnimation
-	bones       map[string]int
-	current     int
-	frame       float32
-	scale       float32
-	origin      physics.Vec3
-	ragdoll     *physics.Ragdoll
-	ragdollPose []rl.Transform
-	ragdollRoot physics.Vec3
-	ragdollYaw  physics.Quat
-	parts       []physics.RagdollPart
-	partBones   []string
-	partOffsets []physics.Transform
+// Detail is how carefully a soldier's pose is computed for a frame.
+type Detail int
+
+const (
+	// DetailFull samples the clip between keyframes and blends a change of
+	// clip, for the few soldiers near the camera.
+	DetailFull Detail = iota
+	// DetailCached shows the nearest keyframe computed at load and changes
+	// clips at once: nothing is computed per soldier.
+	DetailCached
+)
+
+// Character is one soldier drawn with a shared CharacterAsset. It holds only
+// its own state: the clip, the time in it, a fading previous clip, and once it
+// falls, its ragdoll and then its frozen pose.
+type Character struct {
+	asset          *CharacterAsset
+	clip, from     Clip
+	time, fromTime float32
+	blend          float32
+
+	// matrices are the character's own bone matrices, in C memory, while it
+	// is a ragdoll or a frozen body; nil while it is animated.
+	matrices []rl.Matrix
+	ragdoll  *ragdollState
 }
 
-func LoadCharacterModel(path string) (*CharacterModel, error) {
-	model := rl.LoadModel(path)
-	if model.MeshCount == 0 || model.Skeleton.BoneCount == 0 {
-		return nil, fmt.Errorf("model %q has no mesh or skeleton", path)
-	}
-	bindPose := model.Skeleton.GetBindPose()
-	if len(bindPose) == 0 {
-		rl.UnloadModel(model)
-		return nil, fmt.Errorf("model %q has no bind pose", path)
-	}
-	minY := bindPose[0].Translation.Y
-	maxY := minY
-	for _, bone := range bindPose[1:] {
-		minY = min(minY, bone.Translation.Y)
-		maxY = max(maxY, bone.Translation.Y)
-	}
-	height := maxY - minY
-	if height <= 0 {
-		rl.UnloadModel(model)
-		return nil, fmt.Errorf("model %q has invalid skeleton bounds", path)
-	}
-	animations := rl.LoadModelAnimations(path)
-	if len(animations) == 0 {
-		rl.UnloadModel(model)
-		return nil, fmt.Errorf("model %q has no animations", path)
-	}
-	scale := characterModelHeight / height
-	character := &CharacterModel{
-		model: model, animations: animations, bones: make(map[string]int), scale: scale,
-		origin: physics.V(0, -minY*scale, 0),
-	}
-	for i, bone := range model.Skeleton.GetBones() {
-		character.bones[boneName(bone)] = i
-	}
-	if err := character.selectAnimation("Idle"); err != nil {
-		character.Close()
-		return nil, err
-	}
-	rl.UpdateModelAnimation(model, animations[character.current], 0)
-	return character, nil
+func (a *CharacterAsset) NewCharacter() *Character {
+	return &Character{asset: a, blend: 1}
 }
 
-func (c *CharacterModel) Close() error {
+// Copy returns a character in the same animation state, standing.
+func (c *Character) Copy() *Character {
+	return &Character{asset: c.asset, clip: c.clip, from: c.from, time: c.time, fromTime: c.fromTime, blend: c.blend}
+}
+
+// Close frees the character's own pose and ragdoll.
+func (c *Character) Close() error {
+	return c.RemoveRagdoll()
+}
+
+func (c *Character) Clip() Clip {
+	return c.clip
+}
+
+func (c *Character) AnimationName() string {
+	return c.clip.String()
+}
+
+// Update advances the animation of a soldier moving at speed, or the ragdoll
+// of a fallen one.
+func (c *Character) Update(deltaTime, speed float32) error {
 	if c.ragdoll != nil {
-		_ = c.ragdoll.Close()
-		c.ragdoll = nil
+		return c.updateRagdoll(deltaTime)
 	}
-	rl.UnloadModelAnimations(c.animations)
-	rl.UnloadModel(c.model)
-	c.animations = nil
-	return nil
-}
-
-func (c *CharacterModel) Update(deltaTime, speed float32) error {
-	if c.ragdoll != nil {
-		return c.updateRagdoll()
-	}
-	name := "Idle"
-	if speed >= 6 {
-		name = "Running"
-	} else if speed >= 0.15 {
-		name = "Walking"
-	}
-	if err := c.selectAnimation(name); err != nil {
-		return err
-	}
-	animation := c.animations[c.current]
-	c.frame = float32(math.Mod(float64(c.frame+deltaTime*60), float64(animation.KeyframeCount)))
-	rl.UpdateModelAnimation(c.model, animation, c.frame)
-	return nil
-}
-
-func (c *CharacterModel) Draw(position physics.Vec3, yaw physics.Quat) {
-	rl.DrawModelEx(
-		c.model, vector(position.Add(c.origin)), rl.NewVector3(0, 1, 0), yawAngle(yaw),
-		rl.NewVector3(c.scale, c.scale, c.scale), rl.White,
-	)
-}
-
-func (c *CharacterModel) IsRagdoll() bool {
-	return c.ragdoll != nil
-}
-
-func (c *CharacterModel) AnimationName() string {
-	return c.animations[c.current].GetName()
-}
-
-func (c *CharacterModel) BoneNames() []string {
-	names := make([]string, 0, len(c.bones))
-	for _, bone := range c.model.Skeleton.GetBones() {
-		names = append(names, boneName(bone))
-	}
-	return names
-}
-
-func (c *CharacterModel) Parts() []physics.RagdollPart {
-	return c.parts
-}
-
-func (c *CharacterModel) selectAnimation(name string) error {
-	if c.animations[c.current].GetName() == name {
+	if c.matrices != nil {
 		return nil
 	}
-	for i, animation := range c.animations {
-		if strings.EqualFold(animation.GetName(), name) {
-			c.current = i
-			c.frame = 0
-			return nil
-		}
+	next := ClipIdle
+	if speed >= runSpeed {
+		next = ClipRunning
+	} else if speed >= walkSpeed {
+		next = ClipWalking
 	}
-	return fmt.Errorf("animation %q not found", name)
+	if next != c.clip {
+		c.from, c.fromTime, c.blend = c.clip, c.time, 0
+		if c.clip != ClipIdle && next != ClipIdle {
+			// Walking and running are the same gait: the phase carries over.
+			c.time *= c.asset.period(next) / c.asset.period(c.clip)
+		} else {
+			c.time = 0
+		}
+		c.clip = next
+	}
+	c.time = wrap(c.time+deltaTime, c.asset.period(c.clip))
+	c.fromTime = wrap(c.fromTime+deltaTime, c.asset.period(c.from))
+	c.blend = min(1, c.blend+deltaTime/blendTime)
+	return nil
 }
 
-func (c *CharacterModel) bone(name string) (int, rl.Transform, error) {
-	index, ok := c.bones[name]
+// Draw draws the soldier standing at position, or its body where it fell.
+func (c *Character) Draw(position physics.Vec3, yaw physics.Quat, tint color.RGBA, detail Detail) {
+	a := c.asset
+	switch {
+	case c.matrices != nil:
+		a.draw(&c.matrices[0], c.ragdollRoot(), c.ragdollYaw(), tint)
+	case detail == DetailFull:
+		c.pose()
+		a.draw(a.model.BoneMatrices, position, yaw, tint)
+	default:
+		a.draw(a.cachedPose(c.clip, c.time), position, yaw, tint)
+	}
+}
+
+// pose computes the exact pose of the character into the shared model: its
+// current pose and bone matrices.
+func (c *Character) pose() {
+	a := c.asset
+	current := &a.clips[c.clip]
+	if c.blend >= 1 {
+		rl.UpdateModelAnimation(a.model, current.animation, c.time*keyframeRate)
+		return
+	}
+	from := &a.clips[c.from]
+	rl.UpdateModelAnimationEx(a.model, from.animation, c.fromTime*keyframeRate, current.animation, c.time*keyframeRate, c.blend)
+}
+
+// bone returns a bone of the pose last computed by pose.
+func (c *Character) bone(name string) (int, rl.Transform, error) {
+	index, ok := c.asset.bones[name]
 	if !ok {
 		return 0, rl.Transform{}, fmt.Errorf("bone %q not found", name)
 	}
-	return index, c.model.GetCurrentPose()[index], nil
+	return index, c.asset.model.GetCurrentPose()[index], nil
+}
+
+// ownPose gives the character its own bone matrices.
+func (c *Character) ownPose() {
+	if c.matrices == nil {
+		c.matrices = cArray[rl.Matrix](int(c.asset.model.Skeleton.BoneCount))
+	}
+}
+
+func (c *Character) freePose() {
+	if c.matrices != nil {
+		C.free(unsafe.Pointer(&c.matrices[0]))
+		c.matrices = nil
+	}
+}
+
+// period is the length of a clip in seconds.
+func (a *CharacterAsset) period(c Clip) float32 {
+	return float32(a.clips[c].frames) / keyframeRate
+}
+
+func wrap(time, period float32) float32 {
+	return float32(math.Mod(float64(time), float64(period)))
 }
 
 func boneName(bone rl.BoneInfo) string {

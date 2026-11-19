@@ -9,11 +9,46 @@ import (
 	rl "github.com/gen2brain/raylib-go/raylib"
 )
 
-func (c *CharacterModel) CreateRagdoll(world *physics.World, rootPosition physics.Vec3, yaw physics.Quat, velocity, impulse physics.Vec3) error {
+const (
+	// A ragdoll freezes once its bodies sleep, or after ragdollTime unless it
+	// is still flying, and after maxRagdollTime in any case. A frozen body
+	// keeps its pose and costs no physics.
+	ragdollTime    = 4
+	maxRagdollTime = 8
+	flyingSpeed    = 1
+)
+
+// ragdollState is a fallen character: its physics while it falls, and what
+// turns the bodies back into a pose of the skeleton.
+type ragdollState struct {
+	body    *physics.Ragdoll
+	age     float32
+	hips    physics.Vec3
+	base    []rl.Transform
+	root    physics.Vec3
+	yaw     physics.Quat
+	parts   []physics.RagdollPart
+	bones   []string
+	offsets []physics.Transform
+
+	partAtBone []int
+	oldWorld   []rl.Matrix
+	newWorld   []rl.Matrix
+	propagated []bool
+	pose       []rl.Transform
+}
+
+// CreateRagdoll knocks the character down from its current pose, standing at
+// root and turned by yaw. It falls with the given velocity and an impulse in
+// the hips.
+func (c *Character) CreateRagdoll(world *physics.World, root physics.Vec3, yaw physics.Quat, velocity, impulse physics.Vec3) error {
 	if c.ragdoll != nil {
 		return nil
 	}
-	builder := ragdollBuilder{character: c, root: rootPosition, yaw: yaw}
+	if c.matrices == nil {
+		c.pose()
+	}
+	builder := ragdollBuilder{character: c, root: root, yaw: yaw}
 	parts, partBones, err := builder.build()
 	if err != nil {
 		return err
@@ -30,44 +65,105 @@ func (c *CharacterModel) CreateRagdoll(world *physics.World, rootPosition physic
 		}
 		offsets[i] = physics.ComposeTransform(physics.InverseTransform(parts[i].Transform), boneTransform)
 	}
-	ragdoll, err := world.CreateRagdoll(parts, velocity, impulse)
+	body, err := world.CreateRagdoll(parts, velocity, impulse)
 	if err != nil {
 		return err
 	}
-	c.ragdoll = ragdoll
-	c.ragdollPose = append([]rl.Transform(nil), c.model.GetCurrentPose()...)
-	c.ragdollRoot = rootPosition
-	c.ragdollYaw = yaw
-	c.parts = parts
-	c.partBones = partBones
-	c.partOffsets = offsets
-	return nil
+	count := int(c.asset.model.Skeleton.BoneCount)
+	state := &ragdollState{
+		body: body, base: append([]rl.Transform(nil), c.asset.model.GetCurrentPose()...), root: root, yaw: yaw,
+		parts: parts, bones: partBones, offsets: offsets, hips: parts[0].Transform.Position,
+		partAtBone: make([]int, count), oldWorld: make([]rl.Matrix, count), newWorld: make([]rl.Matrix, count),
+		propagated: make([]bool, count), pose: make([]rl.Transform, count),
+	}
+	for i := range state.partAtBone {
+		state.partAtBone[i] = -1
+	}
+	for i, name := range partBones {
+		state.partAtBone[c.asset.bones[name]] = i
+	}
+	c.ragdoll = state
+	c.ownPose()
+	return c.updateRagdoll(0)
 }
 
-func (c *CharacterModel) RemoveRagdoll() error {
-	if c.ragdoll == nil {
+// RemoveRagdoll stands the character up again: it is animated as before.
+func (c *Character) RemoveRagdoll() error {
+	var err error
+	if c.ragdoll != nil {
+		err = c.ragdoll.body.Close()
+		c.ragdoll = nil
+	}
+	c.freePose()
+	return err
+}
+
+// Freeze ends the physics of a fallen character; it keeps its last pose.
+func (c *Character) Freeze() error {
+	if c.ragdoll == nil || c.ragdoll.body == nil {
 		return nil
 	}
-	if err := c.ragdoll.Close(); err != nil {
-		return err
-	}
-	c.ragdoll = nil
-	c.parts = nil
-	c.partBones = nil
-	rl.UpdateModelAnimation(c.model, c.animations[c.current], c.frame)
-	return nil
+	err := c.ragdoll.body.Close()
+	c.ragdoll.body = nil
+	return err
 }
 
-func (c *CharacterModel) updateRagdoll() error {
-	transforms, err := c.ragdoll.Transforms()
+// Fallen reports whether the character is a ragdoll or a frozen body.
+func (c *Character) Fallen() bool {
+	return c.ragdoll != nil
+}
+
+// RagdollActive reports whether the character's ragdoll is simulated now.
+func (c *Character) RagdollActive() bool {
+	return c.ragdoll != nil && c.ragdoll.body != nil
+}
+
+// FallenAt is where a fallen character lies.
+func (c *Character) FallenAt() physics.Vec3 {
+	if c.ragdoll == nil {
+		return physics.Vec3{}
+	}
+	return c.ragdoll.hips
+}
+
+func (c *Character) ragdollRoot() physics.Vec3 {
+	return c.ragdoll.root
+}
+
+func (c *Character) ragdollYaw() physics.Quat {
+	return c.ragdoll.yaw
+}
+
+func (c *Character) updateRagdoll(deltaTime float32) error {
+	r := c.ragdoll
+	if r.body == nil {
+		return nil
+	}
+	transforms, err := r.body.Transforms()
 	if err != nil {
 		return err
 	}
-	return c.applyRagdoll(transforms)
+	if err := c.applyRagdoll(transforms); err != nil {
+		return err
+	}
+	r.age += deltaTime
+	speed := float32(0)
+	if deltaTime > 0 {
+		speed = vectorLength(transforms[0].Position.Sub(r.hips)) / deltaTime
+	}
+	r.hips = transforms[0].Position
+	active, err := r.body.IsActive()
+	if err != nil {
+		return err
+	}
+	if !active || (r.age >= ragdollTime && speed < flyingSpeed) || r.age >= maxRagdollTime {
+		return c.Freeze()
+	}
+	return nil
 }
 
 type ragdollBuilder struct {
-	character *CharacterModel
+	character *Character
 	root      physics.Vec3
 	yaw       physics.Quat
 	parts     []physics.RagdollPart
@@ -125,7 +221,7 @@ func (b *ragdollBuilder) capsule(startName, endName string, radius, mass float32
 	direction := endPosition.Sub(startPosition)
 	length := vectorLength(direction)
 	if length < 0.03 {
-		return fmt.Errorf("bones %q and %q are too close: length=%f start=%+v end=%+v scale=%f", startName, endName, length, start, end, b.character.scale)
+		return fmt.Errorf("bones %q and %q are too close: length=%f start=%+v end=%+v scale=%f", startName, endName, length, start, end, b.character.asset.scale)
 	}
 	rotation := b.worldRotation(start.Rotation)
 	halfHeight := max(0.02, (length-2*radius)*0.5)
@@ -177,7 +273,8 @@ func (b *ragdollBuilder) append(part physics.RagdollPart, bone string) {
 }
 
 func (b *ragdollBuilder) worldPosition(position rl.Vector3) physics.Vec3 {
-	local := physics.V(position.X, position.Y, position.Z).Mul(b.character.scale).Add(b.character.origin)
+	asset := b.character.asset
+	local := physics.V(position.X, position.Y, position.Z).Mul(asset.scale).Add(asset.origin)
 	return b.root.Add(physics.QuatRotate(b.yaw, local))
 }
 
@@ -186,60 +283,50 @@ func (b *ragdollBuilder) worldRotation(rotation rl.Vector4) physics.Quat {
 	return physics.QuatNormalize(physics.QuatMultiply(b.yaw, local))
 }
 
-func (c *CharacterModel) applyRagdoll(transforms []physics.Transform) error {
-	if len(transforms) != len(c.partBones) {
+// applyRagdoll moves the bones with ragdoll parts to their bodies, carries
+// the bones below them along, and moves the rest with the hips. The result
+// becomes the character's own bone matrices.
+func (c *Character) applyRagdoll(transforms []physics.Transform) error {
+	r := c.ragdoll
+	if len(transforms) != len(r.bones) {
 		return fmt.Errorf("ragdoll part count changed")
 	}
-	rootPosition := c.ragdollRoot.Add(physics.QuatRotate(c.ragdollYaw, c.origin))
+	asset := c.asset
+	rootPosition := r.root.Add(physics.QuatRotate(r.yaw, asset.origin))
 	root := rl.MatrixMultiply(
-		matrixFromPhysics(physics.Transform{Position: rootPosition, Rotation: c.ragdollYaw}),
-		rl.MatrixScale(c.scale, c.scale, c.scale),
+		matrixFromPhysics(physics.Transform{Position: rootPosition, Rotation: r.yaw}),
+		rl.MatrixScale(asset.scale, asset.scale, asset.scale),
 	)
 	inverseRoot := rl.MatrixInvert(root)
-	bones := c.model.Skeleton.GetBones()
-	base := c.ragdollPose
-	oldWorld := make([]rl.Matrix, len(base))
-	newWorld := make([]rl.Matrix, len(base))
-	propagated := make([]bool, len(base))
-	partAtBone := make(map[int]int, len(c.partBones))
-	for i, name := range c.partBones {
-		index, ok := c.bones[name]
-		if !ok {
-			return fmt.Errorf("ragdoll bone %q disappeared", name)
-		}
-		partAtBone[index] = i
-	}
-	for i := range base {
-		oldWorld[i] = rl.MatrixMultiply(matrixFromRaylib(base[i]), root)
-		newWorld[i] = oldWorld[i]
+	bones := asset.model.Skeleton.GetBones()
+	for i := range r.base {
+		r.oldWorld[i] = rl.MatrixMultiply(matrixFromRaylib(r.base[i]), root)
+		r.newWorld[i] = r.oldWorld[i]
+		r.propagated[i] = false
 	}
 	for i := range bones {
-		if part, ok := partAtBone[i]; ok {
-			boneTransform := physics.ComposeTransform(transforms[part], c.partOffsets[part])
-			newWorld[i] = matrixFromPhysics(boneTransform)
-			propagated[i] = true
-		} else if parent := bones[i].Parent; parent >= 0 && int(parent) < i && propagated[parent] {
-			delta := rl.MatrixMultiply(rl.MatrixInvert(oldWorld[parent]), newWorld[parent])
-			newWorld[i] = rl.MatrixMultiply(oldWorld[i], delta)
-			propagated[i] = true
+		if part := r.partAtBone[i]; part >= 0 {
+			r.newWorld[i] = matrixFromPhysics(physics.ComposeTransform(transforms[part], r.offsets[part]))
+			r.propagated[i] = true
+		} else if parent := bones[i].Parent; parent >= 0 && int(parent) < i && r.propagated[parent] {
+			delta := rl.MatrixMultiply(rl.MatrixInvert(r.oldWorld[parent]), r.newWorld[parent])
+			r.newWorld[i] = rl.MatrixMultiply(r.oldWorld[i], delta)
+			r.propagated[i] = true
 		}
 	}
-	hips := c.bones["Hips"]
-	rootDelta := rl.MatrixMultiply(rl.MatrixInvert(oldWorld[hips]), newWorld[hips])
+	hips := asset.bones["Hips"]
+	rootDelta := rl.MatrixMultiply(rl.MatrixInvert(r.oldWorld[hips]), r.newWorld[hips])
 	for i := range bones {
-		if !propagated[i] {
-			newWorld[i] = rl.MatrixMultiply(oldWorld[i], rootDelta)
+		if !r.propagated[i] {
+			r.newWorld[i] = rl.MatrixMultiply(r.oldWorld[i], rootDelta)
 		}
-	}
-	pose := c.model.GetCurrentPose()
-	for i := range bones {
-		local := rl.MatrixMultiply(newWorld[i], inverseRoot)
+		local := rl.MatrixMultiply(r.newWorld[i], inverseRoot)
 		var transform rl.Transform
 		local.Decompose(&transform.Translation, &transform.Rotation, &transform.Scale)
-		transform.Scale = base[i].Scale
-		pose[i] = transform
+		transform.Scale = r.base[i].Scale
+		r.pose[i] = transform
+		c.matrices[i] = rl.MatrixMultiply(asset.inverseBind[i], matrixFromRaylib(transform))
 	}
-	updateSkinning(c.model)
 	return nil
 }
 

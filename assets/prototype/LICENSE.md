@@ -6,7 +6,7 @@
 - Source: https://github.com/mrdoob/three.js/tree/dev/examples/models/gltf/RobotExpressive
 - Original file: https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/models/gltf/RobotExpressive/RobotExpressive.glb
 - Original SHA-256: `047f5e5fb3bb6d378bd1df16ca6137f2a596c99b3a1b5690b4020c05aaf6f319`
-- Prototype modification: re-exported with Blender 5.2.2, unifying the two hand skins while preserving all animation clips.
-- Modified SHA-256: `776c466dcd9d8db5db5d21c223e9fc8de08beec895b96cce429f99d8d4e8854f`
+- Prototype modification: raylib loads one skin per model, and the original has two identical ones, one per hand (same joints, same inverse bind matrices). In the JSON chunk the left hand node now uses skin 0 and the second skin is removed; the binary chunk is unchanged. An earlier re-export through Blender moved every bone-parented part by the length of its bone and is no longer used.
+- Modified SHA-256: `23ca15a6f2d0196198bbecb2dda5c733b6432be9a455c719a7765ede9a839449`
 
 The source README states: "Model by Tomás Laulhé ... CC0 1.0." Attribution is retained even though CC0 does not require it.

@@ -1,13 +1,10 @@
 package client
 
 import (
-	"cmp"
 	"context"
 	"fmt"
-	"image/color"
 	"log"
 	"math"
-	"slices"
 
 	"ravenfield/internal/animation"
 	"ravenfield/internal/config"
@@ -27,10 +24,10 @@ type app struct {
 	tuning      game.MovementTuning
 	session     *session
 	predictor   *predictor
-	model       *animation.CharacterModel
-	models      []*animation.CharacterModel
-	modelFor    map[game.SoldierID]*animation.CharacterModel
-	views       []remoteView
+	asset       *animation.CharacterAsset
+	self        *animation.Character
+	soldiers    *soldiers
+	fallen      bodies
 	alpha       float32
 	camera      rl.Camera3D
 	yaw         float32
@@ -46,6 +43,9 @@ type app struct {
 	netWindow float32
 	netBytes  int64
 	netRate   float32
+	frames    frameStats
+	// knockdowns counts the automatic knockdowns done.
+	knockdowns int
 }
 
 // Run connects to a server and plays: to the embedded one in solo play and
@@ -69,7 +69,7 @@ func Run(settings config.Client) error {
 	rl.InitWindow(int32(settings.Width), int32(settings.Height), "Ravenfield prototype — stage 1")
 	defer rl.CloseWindow()
 	rl.SetExitKey(0)
-	rl.SetTargetFPS(144)
+	rl.SetTargetFPS(int32(settings.MaxFPS))
 
 	if err := physics.Init(); err != nil {
 		return err
@@ -92,26 +92,20 @@ func Run(settings config.Client) error {
 		return err
 	}
 	defer predictor.close()
-	model, err := animation.LoadCharacterModel(characterModelPath)
+	// Everything is loaded before connecting: once connected, the client must
+	// send a command every tick, and a stall puts its clock behind the server.
+	asset, err := animation.LoadCharacterAsset(characterModelPath)
 	if err != nil {
 		return err
 	}
-	defer model.Close()
+	defer asset.Close()
 	a := &app{
 		settings: settings, world: world, scene: scene, spawn: description.Spawn, tuning: tuning,
-		predictor: predictor, model: model, modelFor: make(map[game.SoldierID]*animation.CharacterModel),
+		predictor: predictor, asset: asset, self: asset.NewCharacter(), soldiers: newSoldiers(asset),
 		captured: settings.FrameLimit == 0, debug: settings.Debug, thirdPerson: true,
 	}
-	defer a.closeRemotes()
-	// Everything is loaded before connecting: once connected, the client must
-	// send a command every tick, and a stall puts its clock behind the server.
-	for range animatedRemotes {
-		model, err := animation.LoadCharacterModel(characterModelPath)
-		if err != nil {
-			return err
-		}
-		a.models = append(a.models, model)
-	}
+	defer a.self.Close()
+	defer a.fallen.close()
 
 	conn, stop, err := open(settings, tuning)
 	if err != nil {
@@ -205,8 +199,18 @@ func (a *app) run() error {
 				return err
 			}
 		}
+		knock := a.settings.Knockdowns > a.knockdowns && a.played >= 2+0.5*float32(a.knockdowns)
+		if knock {
+			a.knockdowns++
+		}
+		if rl.IsKeyPressed(rl.KeyL) || knock {
+			if err := a.soldiers.knockDown(a.world, &a.fallen, a.eye()); err != nil {
+				return err
+			}
+		}
 
 		deltaTime := rl.GetFrameTime()
+		a.frames.add(deltaTime)
 		if deltaTime > 0.1 {
 			deltaTime = 0.1
 		}
@@ -261,11 +265,14 @@ func (a *app) run() error {
 			feet = a.predictor.drawn(a.alpha)
 			speed = horizontalSpeed(soldier.Velocity)
 		}
-		if err := a.model.Update(deltaTime, speed); err != nil {
+		if err := a.self.Update(deltaTime, speed); err != nil {
 			return err
 		}
-		a.updateRemotes(deltaTime, feet)
+		if err := a.fallen.update(deltaTime); err != nil {
+			return err
+		}
 		a.updateCamera(feet)
+		a.soldiers.update(a.session, deltaTime, a.camera, float32(rl.GetScreenWidth())/float32(max(1, rl.GetScreenHeight())))
 		a.draw(feet, soldier != nil)
 		frames++
 		if a.settings.Screenshot != "" && frames == a.settings.FrameLimit {
@@ -279,10 +286,11 @@ func (a *app) run() error {
 	if own := a.session.localSoldier(); own != nil {
 		soldier = *own
 	}
-	log.Printf("prototype finished: tick=%d server_tick=%d feet=%+v grounded=%t ragdoll=%t active=%t animation=%s snapshots=%d snapshot_traffic=%.1fKB/s resyncs=%d corrections=%d soldiers=%d unresolved=%d",
-		a.session.tick, a.session.serverTick, soldier.Position, soldier.Grounded, a.ragdoll, a.model.RagdollActive(),
-		a.model.AnimationName(), a.session.received, float32(a.session.bytes.Load())/1024/max(a.played, 1e-3),
-		a.session.resyncs, a.predictor.corrections, len(a.session.soldiers), a.session.unresolved)
+	log.Printf("prototype finished: tick=%d server_tick=%d feet=%+v grounded=%t ragdoll=%t active=%t animation=%s snapshots=%d snapshot_traffic=%.1fKB/s resyncs=%d corrections=%d soldiers=%d unresolved=%d drawn=%d full_detail=%d bodies=%d ragdolls=%d peak_ragdolls=%d %s",
+		a.session.tick, a.session.serverTick, soldier.Position, soldier.Grounded, a.ragdoll, a.self.RagdollActive(),
+		a.self.AnimationName(), a.session.received, float32(a.session.bytes.Load())/1024/max(a.played, 1e-3),
+		a.session.resyncs, a.predictor.corrections, len(a.session.soldiers), a.session.unresolved,
+		a.soldiers.drawn, a.soldiers.full, len(a.fallen.all), a.fallen.ragdolls(), a.fallen.peak, &a.frames)
 	return nil
 }
 
@@ -292,53 +300,6 @@ func (a *app) ownSoldier() *game.Soldier {
 		return nil
 	}
 	return &a.predictor.soldier
-}
-
-// animatedRemotes is how many other soldiers get an animated model; farther
-// ones are capsules. Every model is a separate copy skinned on the CPU, which
-// does not scale to hundreds; shared models come with step 1.8.
-const animatedRemotes = 16
-
-type remoteView struct {
-	id       game.SoldierID
-	soldier  game.Soldier
-	distance float32
-}
-
-// updateRemotes places every other soldier at the interpolation time and lends
-// the models of a small pool to the nearest ones.
-func (a *app) updateRemotes(deltaTime float32, eye physics.Vec3) {
-	a.views = a.views[:0]
-	for _, known := range a.session.soldiers {
-		if known.soldier.ID == a.session.player.Soldier || known.remote.count == 0 {
-			continue
-		}
-		known.remote.smooth(deltaTime)
-		soldier := known.remote.at(a.session.clock.renderTick)
-		a.views = append(a.views, remoteView{id: known.soldier.ID, soldier: soldier, distance: distance(soldier.Position, eye)})
-	}
-	slices.SortFunc(a.views, func(first, second remoteView) int { return cmp.Compare(first.distance, second.distance) })
-	clear(a.modelFor)
-	for i := range min(len(a.views), len(a.models)) {
-		_ = a.models[i].Update(deltaTime, horizontalSpeed(a.views[i].soldier.Velocity))
-		a.modelFor[a.views[i].id] = a.models[i]
-	}
-}
-
-func (a *app) closeRemotes() {
-	for _, model := range a.models {
-		_ = model.Close()
-	}
-}
-
-var teamColors = map[game.Team]color.RGBA{
-	game.TeamNone: rl.Gray, game.TeamBlue: rl.NewColor(60, 110, 220, 255), game.TeamRed: rl.NewColor(210, 70, 60, 255),
-}
-
-func (a *app) drawCapsule(soldier game.Soldier, tint color.RGBA) {
-	feet := render.Vector(soldier.Position.Add(physics.V(0, a.tuning.CapsuleRadius, 0)))
-	head := render.Vector(soldier.Position.Add(physics.V(0, a.tuning.CapsuleRadius+2*a.tuning.CapsuleHalfHeight, 0)))
-	rl.DrawCapsule(feet, head, a.tuning.CapsuleRadius, 4, 6, tint)
 }
 
 // facing turns the character model, which looks along +Z, towards where a
@@ -414,6 +375,11 @@ func (a *app) updateCamera(feet physics.Vec3) {
 		-float32(math.Cos(float64(a.yaw)))*cosPitch,
 	)
 	eye := render.Vector(feet.Add(physics.V(0, a.tuning.EyeHeight, 0)))
+	if a.settings.Overview {
+		// High above the south edge of the map: every soldier is in view.
+		a.camera = rl.NewCamera3D(rl.NewVector3(0, 16, 21), rl.NewVector3(0, 0, -1), rl.NewVector3(0, 1, 0), a.settings.FieldOfView, rl.CameraPerspective)
+		return
+	}
 	if a.thirdPerson || a.ragdoll {
 		target := eye
 		eye = rl.Vector3Add(rl.Vector3Subtract(target, rl.Vector3Scale(forward, 5.5)), rl.NewVector3(0, 0.8, 0))
@@ -428,20 +394,15 @@ func (a *app) draw(feet physics.Vec3, spawned bool) {
 	rl.ClearBackground(rl.NewColor(135, 175, 205, 255))
 	rl.BeginMode3D(a.camera)
 	a.scene.Draw(a.debug)
-	if spawned && (a.thirdPerson || a.ragdoll) {
-		a.model.Draw(feet, facing(a.yaw))
-	}
-	for _, view := range a.views {
-		if model := a.modelFor[view.id]; model != nil {
-			model.Draw(view.soldier.Position, facing(view.soldier.Yaw))
-		} else {
-			a.drawCapsule(view.soldier, teamColors[view.soldier.Team])
+	if spawned && (a.thirdPerson || a.ragdoll || a.settings.Overview) {
+		team := game.TeamNone
+		if own := a.session.localSoldier(); own != nil {
+			team = own.Team
 		}
-		if a.debug {
-			center := view.soldier.Position.Add(physics.V(0, a.tuning.CenterHeight(), 0))
-			render.DrawCharacterCapsule(center, a.tuning.CapsuleHalfHeight, a.tuning.CapsuleRadius)
-		}
+		a.self.Draw(feet, facing(a.yaw), a.soldiers.tint(team), animation.DetailFull)
 	}
+	a.soldiers.draw(a.tuning, a.debug)
+	bodies := a.fallen.draw(&a.soldiers.frustum)
 	if a.debug && spawned && !a.ragdoll {
 		// The server's view of the own soldier, to compare with the prediction.
 		if server := a.session.localSoldier(); server != nil {
@@ -450,7 +411,7 @@ func (a *app) draw(feet physics.Vec3, spawned bool) {
 		}
 	}
 	if a.debug {
-		if parts, transforms, ok := a.model.RagdollDebug(); ok {
+		if parts, transforms, ok := a.self.RagdollDebug(); ok {
 			a.scene.DrawRagdoll(parts, transforms)
 		}
 		rl.DrawGrid(30, 1)
@@ -459,9 +420,11 @@ func (a *app) draw(feet physics.Vec3, spawned bool) {
 	rl.EndMode3D()
 	rl.DrawLine(int32(rl.GetScreenWidth()/2-7), int32(rl.GetScreenHeight()/2), int32(rl.GetScreenWidth()/2+7), int32(rl.GetScreenHeight()/2), rl.White)
 	rl.DrawLine(int32(rl.GetScreenWidth()/2), int32(rl.GetScreenHeight()/2-7), int32(rl.GetScreenWidth()/2), int32(rl.GetScreenHeight()/2+7), rl.White)
-	rl.DrawText("WASD move | Space jump | Shift sprint | K ragdoll | R respawn", 18, 18, 18, rl.White)
+	rl.DrawText("WASD move | Space jump | Shift sprint | K ragdoll | R respawn | L knock down nearest", 18, 18, 18, rl.White)
 	rl.DrawText("F1 physics | F3 camera | Esc cursor", 18, 44, 18, rl.White)
-	rl.DrawText(fmt.Sprintf("FPS %d | XYZ %.2f %.2f %.2f | %s", rl.GetFPS(), feet.X, feet.Y, feet.Z, a.model.AnimationName()), 18, 70, 18, rl.White)
+	rl.DrawText(fmt.Sprintf("FPS %d | XYZ %.2f %.2f %.2f | %s | drawn %d (full %d, capsules %d) | bodies %d (ragdolls %d)",
+		rl.GetFPS(), feet.X, feet.Y, feet.Z, a.self.AnimationName(), a.soldiers.drawn, a.soldiers.full, a.soldiers.capsules,
+		bodies, a.fallen.ragdolls()), 18, 70, 18, rl.White)
 	stats := a.session.conn.Stats()
 	rl.DrawText(fmt.Sprintf("%d Hz | tick %d server %d buffered %d | RTT %d ms | snapshots %.1f KB/s | resyncs %d | corrections %d (last %.3f m) | soldiers %d",
 		game.TickRate, a.session.tick, a.session.serverTick, a.session.player.BufferedCommands, stats.RTT.Milliseconds(),
@@ -470,6 +433,11 @@ func (a *app) draw(feet physics.Vec3, spawned bool) {
 		rl.DrawText("Press Esc to capture the mouse", 18, 132, 22, rl.Yellow)
 	}
 	rl.EndDrawing()
+}
+
+// eye is where the camera is.
+func (a *app) eye() physics.Vec3 {
+	return physics.V(a.camera.Position.X, a.camera.Position.Y, a.camera.Position.Z)
 }
 
 func (a *app) drawRay() {
@@ -495,7 +463,7 @@ func (a *app) die() error {
 	}
 	forward := physics.V(float32(math.Sin(float64(a.yaw))), 0, -float32(math.Cos(float64(a.yaw))))
 	impulse := forward.Mul(35).Add(physics.V(0, 20, 0))
-	if err := a.model.CreateRagdoll(a.world, a.predictor.drawn(a.alpha), facing(a.yaw), soldier.Velocity, impulse); err != nil {
+	if err := a.self.CreateRagdoll(a.world, a.predictor.drawn(a.alpha), facing(a.yaw), soldier.Velocity, impulse); err != nil {
 		return err
 	}
 	a.ragdoll = true
@@ -508,11 +476,36 @@ func (a *app) reset() error {
 	a.pitch = 0
 	a.elapsed = 0
 	a.ragdoll = false
-	if err := a.model.RemoveRagdoll(); err != nil {
+	if err := a.self.RemoveRagdoll(); err != nil {
 		return err
 	}
 	if err := a.scene.Reset(); err != nil {
 		return err
 	}
 	return a.session.respawn()
+}
+
+// frameStats measures frame times after the first second, which loads and
+// connects.
+type frameStats struct {
+	skipped        float32
+	frames         int
+	total, longest float32
+}
+
+func (f *frameStats) add(deltaTime float32) {
+	if f.skipped < 1 {
+		f.skipped += deltaTime
+		return
+	}
+	f.frames++
+	f.total += deltaTime
+	f.longest = max(f.longest, deltaTime)
+}
+
+func (f *frameStats) String() string {
+	if f.frames == 0 {
+		return "fps=0"
+	}
+	return fmt.Sprintf("fps=%.0f longest_frame=%.1fms", float32(f.frames)/f.total, f.longest*1000)
 }
