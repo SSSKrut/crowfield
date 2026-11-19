@@ -13,6 +13,10 @@ const (
 	MaxSnapshotSoldiers = 1023
 	MaxSnapshotRemoved  = 255
 
+	// SnapshotBudget is the size of one snapshot datagram; it leaves room below
+	// the transport limit (ARCHITECTURE.md, 6.6).
+	SnapshotBudget = 1100
+
 	// PositionUnitsPerMetre gives 2 mm steps: X and Z cover ±2048 m, Y ±512 m.
 	PositionUnitsPerMetre = 512
 	// VelocityUnitsPerMetre gives 1/32 m/s steps up to ±64 m/s.
@@ -27,7 +31,17 @@ const (
 	yawBits          = 12
 	pitchBits        = 10
 	soldierStateBits = 16 + teamBits + 8 + 2*horizontalBits + verticalBits + 3*velocityBits + yawBits + pitchBits + weaponBits
+	// snapshotFixedBits is the largest snapshot without soldiers and removals:
+	// header, a full private player state and both counts.
+	snapshotFixedBits = 8 + 16 + 32 + (1 + 32 + 8 + 16 + 6*32) + soldierCountBits + removedCountBits
 )
+
+// SnapshotCapacity returns how many soldier records fit into a datagram of the
+// given size next to the private player state and the given removals.
+func SnapshotCapacity(budget, removed int) int {
+	bits := budget*8 - snapshotFixedBits - removed*16
+	return max(0, min(MaxSnapshotSoldiers, bits/soldierStateBits))
+}
 
 type SoldierFlags uint8
 

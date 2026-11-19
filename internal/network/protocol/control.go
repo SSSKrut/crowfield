@@ -164,6 +164,21 @@ func (m *Ready) Decode(data []byte) error {
 	return r.Finish()
 }
 
+// Respawn asks the server to place the player's soldier at a spawn point again.
+type Respawn struct{}
+
+func (*Respawn) Type() MessageType { return MessageRespawn }
+
+func (m *Respawn) Encode(dst []byte) ([]byte, error) {
+	w := startWriting(dst, MessageRespawn)
+	return w.Bytes(), nil
+}
+
+func (m *Respawn) Decode(data []byte) error {
+	r := startReading(data, MessageRespawn)
+	return r.Finish()
+}
+
 func checkText(field, value string, maxBytes int) error {
 	if len(value) > maxBytes || !utf8.ValidString(value) {
 		return fmt.Errorf("%s must be UTF-8 of at most %d bytes", field, maxBytes)

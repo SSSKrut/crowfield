@@ -3,6 +3,7 @@ package game
 import (
 	"errors"
 	"fmt"
+	"iter"
 
 	"ravenfield/internal/physics"
 )
@@ -120,6 +121,21 @@ func (s *SoldierSet) Remove(id SoldierID) bool {
 	*soldier = Soldier{}
 	s.free = append(s.free, id.Slot())
 	return true
+}
+
+// All yields every soldier in slot order.
+func (s *SoldierSet) All() iter.Seq[*Soldier] {
+	return func(yield func(*Soldier) bool) {
+		for i := range s.soldiers {
+			if s.soldiers[i].ID != 0 && !yield(&s.soldiers[i]) {
+				return
+			}
+		}
+	}
+}
+
+func (s *SoldierSet) Len() int {
+	return len(s.soldiers) - len(s.free)
 }
 
 func (s *SoldierSet) Get(id SoldierID) *Soldier {

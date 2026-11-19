@@ -30,8 +30,18 @@ func TestSoldierSetAddGetRemove(t *testing.T) {
 	if _, err := set.Add(Soldier{}); !errors.Is(err, ErrNoFreeSlot) {
 		t.Errorf("full set returned %v", err)
 	}
+	var listed []SoldierID
+	for soldier := range set.All() {
+		listed = append(listed, soldier.ID)
+	}
+	if len(listed) != 2 || listed[0] != human || listed[1] != bot || set.Len() != 2 {
+		t.Errorf("listed %v, len %d", listed, set.Len())
+	}
 	if !set.Remove(human) || set.Remove(human) {
 		t.Error("remove must succeed once")
+	}
+	if set.Len() != 1 {
+		t.Errorf("len %d after removal", set.Len())
 	}
 	if set.Get(human) != nil {
 		t.Error("removed soldier still resolves")

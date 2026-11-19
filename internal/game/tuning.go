@@ -1,9 +1,12 @@
 package game
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
+	"math"
 	"os"
 )
 
@@ -67,6 +70,19 @@ func (t MovementTuning) Validate() error {
 		return errors.New("eye height must be inside the capsule")
 	}
 	return nil
+}
+
+// Hash identifies the tuning. The server sends it in Welcome, and a client with
+// a different tuning refuses to play, because its prediction would not match.
+func (t MovementTuning) Hash() uint64 {
+	hash := fnv.New64a()
+	for _, value := range []float32{
+		t.WalkSpeed, t.SprintSpeed, t.JumpSpeed, t.Gravity, t.GroundStickSpeed,
+		t.CapsuleHalfHeight, t.CapsuleRadius, t.MaxSlopeDegrees, t.EyeHeight, t.PushStrength,
+	} {
+		_, _ = hash.Write(binary.LittleEndian.AppendUint32(nil, math.Float32bits(value)))
+	}
+	return hash.Sum64()
 }
 
 // CenterHeight is the distance from the feet to the capsule center.

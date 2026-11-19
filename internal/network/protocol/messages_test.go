@@ -23,6 +23,7 @@ func sampleMessages() []Message {
 		},
 		&Reject{Reason: RejectFull, Message: "сервер заполнен"},
 		&Ready{},
+		&Respawn{},
 		&InputPacket{},
 		&InputPacket{HasAck: true, AckSequence: math.MaxUint16, AckBits: 0xDEADBEEF, Commands: sampleCommands(MaxCommandsPerInput, math.MaxUint32-3)},
 		sampleSnapshot(3),
@@ -137,7 +138,7 @@ func TestDecodeRejectsDamagedMessages(t *testing.T) {
 	if err := (&Hello{}).Decode(ready); err == nil {
 		t.Error("hello decoded a ready message")
 	}
-	for _, data := range [][]byte{{0}, {byte(MessageSnapshot) + 1}} {
+	for _, data := range [][]byte{{0}, {byte(MessageRespawn) + 1}} {
 		if _, err := PeekType(data); !errors.Is(err, ErrUnknownMessage) {
 			t.Errorf("type %d: %v", data[0], err)
 		}
@@ -269,21 +270,32 @@ func TestDecodeAndEncodeDoNotAllocate(t *testing.T) {
 	}
 }
 
-// A datagram budget of 1100 bytes (ARCHITECTURE.md, 6.6) carries 56 full soldier
-// records next to the private player state.
-func TestSnapshotDatagramCapacity(t *testing.T) {
-	for _, c := range []struct {
-		soldiers int
-		fits     bool
-	}{{56, true}, {57, false}} {
-		snapshot := sampleSnapshot(c.soldiers)
-		snapshot.Removed = nil
-		data, err := snapshot.Encode(nil)
-		if err != nil {
-			t.Fatal(err)
+// SnapshotCapacity must be exact: the server fills datagrams up to it.
+func TestSnapshotCapacity(t *testing.T) {
+	if got := SnapshotCapacity(SnapshotBudget, 0); got != 56 {
+		t.Errorf("a %d-byte datagram holds %d soldiers, want 56", SnapshotBudget, got)
+	}
+	for _, removed := range []int{0, 1, 2, 10, 60} {
+		capacity := SnapshotCapacity(SnapshotBudget, removed)
+		for _, c := range []struct {
+			soldiers int
+			fits     bool
+		}{{capacity, true}, {capacity + 1, false}} {
+			snapshot := sampleSnapshot(c.soldiers)
+			snapshot.Removed = make([]game.SoldierID, removed)
+			for i := range snapshot.Removed {
+				snapshot.Removed[i] = soldierID(i, 1)
+			}
+			data, err := snapshot.Encode(nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if fits := len(data) <= SnapshotBudget; fits != c.fits {
+				t.Errorf("%d soldiers and %d removals take %d bytes", c.soldiers, removed, len(data))
+			}
 		}
-		if fits := len(data) <= 1100; fits != c.fits {
-			t.Errorf("%d soldiers take %d bytes", c.soldiers, len(data))
-		}
+	}
+	if SnapshotCapacity(10, 0) != 0 {
+		t.Error("a tiny budget holds soldiers")
 	}
 }

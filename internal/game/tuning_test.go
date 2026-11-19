@@ -3,12 +3,32 @@ package game
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
 func TestDefaultMovementTuningIsValid(t *testing.T) {
 	if err := DefaultMovementTuning().Validate(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestMovementTuningHashChangesWithEveryField(t *testing.T) {
+	base := DefaultMovementTuning()
+	if base.Hash() != DefaultMovementTuning().Hash() {
+		t.Fatal("hash is not stable")
+	}
+	seen := map[uint64]string{base.Hash(): "default"}
+	value := reflect.ValueOf(&base).Elem()
+	for i := range value.NumField() {
+		changed := base
+		field := reflect.ValueOf(&changed).Elem().Field(i)
+		field.SetFloat(field.Float() + 0.25)
+		name := value.Type().Field(i).Name
+		if previous, ok := seen[changed.Hash()]; ok {
+			t.Errorf("changing %s gives the same hash as %s", name, previous)
+		}
+		seen[changed.Hash()] = name
 	}
 }
 

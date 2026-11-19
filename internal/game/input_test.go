@@ -61,6 +61,16 @@ func TestInputCommandSanitize(t *testing.T) {
 	}
 }
 
+func TestRepeatedCommandDropsOneOffActions(t *testing.T) {
+	command := NewInputCommand(10, 1, -1, 2, 0.3, ButtonJump|ButtonSprint|ButtonFire|ButtonReload|ButtonInteract)
+	repeated := command.Repeated(11)
+	want := command
+	want.Tick, want.Buttons = 11, ButtonSprint|ButtonFire
+	if repeated != want {
+		t.Errorf("repeated %+v, want %+v", repeated, want)
+	}
+}
+
 func near(value, want, tolerance float32) bool {
 	return float32(math.Abs(float64(value-want))) <= tolerance+1e-6
 }

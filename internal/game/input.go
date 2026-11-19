@@ -14,6 +14,9 @@ const (
 	ButtonCrouch
 
 	knownButtons = ButtonCrouch<<1 - 1
+	// edgeButtons trigger an action once; a command repeated for a lost one
+	// must not trigger them again.
+	edgeButtons = ButtonJump | ButtonReload | ButtonInteract
 )
 
 func (b Buttons) Has(button Buttons) bool {
@@ -54,6 +57,15 @@ func (c InputCommand) YawRadians() float32 {
 
 func (c InputCommand) PitchRadians() float32 {
 	return float32(c.Pitch) * (math.Pi / 2 / 32767)
+}
+
+// Repeated stands in for a command that did not arrive in time for its tick: the
+// player probably still moves and looks the same way, but one-off actions are
+// not repeated.
+func (c InputCommand) Repeated(tick Tick) InputCommand {
+	c.Tick = tick
+	c.Buttons &^= edgeButtons
+	return c
 }
 
 // Sanitize clamps values that a client can send but NewInputCommand never produces.

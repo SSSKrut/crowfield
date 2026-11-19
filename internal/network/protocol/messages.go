@@ -12,7 +12,7 @@ import (
 	"fmt"
 )
 
-const ProtocolVersion = 1
+const ProtocolVersion = 2
 
 type MessageType uint8
 
@@ -23,6 +23,7 @@ const (
 	MessageReady
 	MessageInput
 	MessageSnapshot
+	MessageRespawn
 )
 
 func (t MessageType) String() string {
@@ -39,6 +40,8 @@ func (t MessageType) String() string {
 		return "input"
 	case MessageSnapshot:
 		return "snapshot"
+	case MessageRespawn:
+		return "respawn"
 	}
 	return fmt.Sprintf("message %d", uint8(t))
 }
@@ -62,7 +65,7 @@ func PeekType(data []byte) (MessageType, error) {
 		return 0, ErrShortMessage
 	}
 	t := MessageType(data[0])
-	if t < MessageHello || t > MessageSnapshot {
+	if t < MessageHello || t > MessageRespawn {
 		return t, ErrUnknownMessage
 	}
 	return t, nil
@@ -83,6 +86,8 @@ func New(t MessageType) (Message, error) {
 		return &InputPacket{}, nil
 	case MessageSnapshot:
 		return &Snapshot{}, nil
+	case MessageRespawn:
+		return &Respawn{}, nil
 	}
 	return nil, ErrUnknownMessage
 }

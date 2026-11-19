@@ -10,12 +10,14 @@ type Client struct {
 	Cycles           int
 	Debug            bool
 	Tuning           string
+	Name             string
+	Netsim           string
 	MouseSensitivity float32
 	FieldOfView      float32
 }
 
 func DefaultClient() Client {
 	return Client{
-		Width: 1280, Height: 720, MouseSensitivity: 0.0025, FieldOfView: 75,
+		Width: 1280, Height: 720, MouseSensitivity: 0.0025, FieldOfView: 75, Name: "Player",
 	}
 }

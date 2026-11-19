@@ -19,6 +19,8 @@ func main() {
 	flag.IntVar(&settings.Cycles, "cycles", 1, "number of automatic ragdoll cycles")
 	flag.BoolVar(&settings.Debug, "debug", false, "show physics shapes")
 	flag.StringVar(&settings.Tuning, "tuning", "", "JSON file overriding movement tuning")
+	flag.StringVar(&settings.Name, "name", settings.Name, "player name")
+	flag.StringVar(&settings.Netsim, "netsim", "", "simulate network conditions, e.g. delay=50ms,jitter=10ms,loss=2%")
 	flag.Parse()
 	if err := client.Run(settings); err != nil {
 		log.Fatal(err)
