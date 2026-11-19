@@ -25,7 +25,10 @@ func main() {
 	flag.IntVar(&settings.MaxPlayers, "max-players", settings.MaxPlayers, "maximum number of human players")
 	flag.IntVar(&settings.SnapshotRate, "snapshot-rate", settings.SnapshotRate, "snapshots per second; must divide the tick rate")
 	flag.IntVar(&settings.Dummies, "dummies", 0, "roaming bot soldiers without AI, for load tests")
+	flag.Uint64Var(&settings.Seed, "seed", 0, "match seed for repeatable runs; 0 picks a random one")
+	bandwidth := flag.Int("client-bandwidth", settings.ClientBandwidth/1024, "snapshot budget of each client, KB/s")
 	flag.Parse()
+	settings.ClientBandwidth = *bandwidth * 1024
 	if err := run(settings); err != nil {
 		log.Fatal(err)
 	}
@@ -66,7 +69,8 @@ func run(settings config.Server) error {
 	}
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	log.Printf("server started: tick_rate=%d snapshot_rate=%d listen=%s", game.TickRate, settings.SnapshotRate, listener.Addr())
+	log.Printf("server started: tick_rate=%d snapshot_rate=%d client_bandwidth=%dKB/s listen=%s",
+		game.TickRate, settings.SnapshotRate, settings.ClientBandwidth/1024, listener.Addr())
 	log.Printf("certificate fingerprint %s", fingerprint)
 	return server.Serve(ctx, listener)
 }

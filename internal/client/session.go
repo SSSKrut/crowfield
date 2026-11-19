@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"ravenfield/internal/game"
@@ -21,6 +22,8 @@ const (
 	// A server queue outside [0, maxBuffered] means the client clock drifted;
 	// it then jumps back to the lead. Smooth adjustment comes in step 1.9.
 	maxBuffered = commandLead + 8
+	// A removed soldier's late records are ignored for this long.
+	buryTicks = 5 * game.TickRate
 )
 
 // session is the client's side of a connection: it sends a command every tick
@@ -44,9 +47,17 @@ type session struct {
 
 	serverTick game.Tick
 	player     protocol.PlayerState
-	soldiers   map[game.SoldierID]*game.Soldier
-	remotes    map[game.SoldierID]*remoteSoldier
+	// soldiers are the soldiers the client knows, by slot.
+	soldiers  map[int]*knownSoldier
+	baselines *protocol.Baselines
+	// buried are removed soldiers with the server tick of their removal:
+	// their records in datagrams that were on the way are ignored.
+	buried     map[game.SoldierID]game.Tick
+	resolved   []protocol.SoldierState
+	unresolved int
 	clock      interpolationClock
+	// bytes counts the snapshot datagrams received, payload only.
+	bytes atomic.Int64
 
 	snapshots chan *protocol.Snapshot
 	cancel    context.CancelFunc
@@ -96,7 +107,7 @@ func connect(conn transport.Conn, name string, tuning game.MovementTuning) (*ses
 	readCtx, stop := context.WithCancel(context.Background())
 	s := &session{
 		conn: conn, welcome: welcome, history: make([]game.InputCommand, 0, protocol.MaxCommandsPerInput),
-		soldiers: make(map[game.SoldierID]*game.Soldier), remotes: make(map[game.SoldierID]*remoteSoldier),
+		soldiers: make(map[int]*knownSoldier), baselines: protocol.NewBaselines(), buried: make(map[game.SoldierID]game.Tick),
 		clock: newInterpolationClock(int(welcome.SnapshotRate)), snapshots: make(chan *protocol.Snapshot, 64),
 		cancel: stop, failed: make(chan struct{}),
 	}
@@ -147,35 +158,55 @@ func (s *session) poll() (bool, error) {
 	}
 }
 
+// knownSoldier is a soldier as the client last heard of it, and its recent
+// states for drawing it in the past.
+type knownSoldier struct {
+	soldier game.Soldier
+	// tick is the server tick of the state in soldier.
+	tick   game.Tick
+	remote remoteSoldier
+}
+
+// apply takes in one snapshot datagram. Its soldiers are applied even when it
+// arrives late, since a soldier may be in no newer datagram; only the private
+// state and the clocks need the newest. A delta whose base is missing drops
+// the whole datagram, unacknowledged, so the server never builds on it; with
+// the rule of protocol.BaseHistory that is a bug, not a network condition.
 func (s *session) apply(snapshot *protocol.Snapshot) bool {
+	s.resolved = s.resolved[:0]
+	for i := range snapshot.Soldiers {
+		record := &snapshot.Soldiers[i]
+		if s.isBuried(record.State.ID, snapshot.ServerTick) {
+			continue
+		}
+		state, err := s.baselines.Resolve(snapshot.Sequence, record)
+		if err != nil {
+			s.unresolved++
+			log.Printf("snapshot datagram %d dropped: %v", snapshot.Sequence, err)
+			return false
+		}
+		s.resolved = append(s.resolved, state)
+	}
 	s.acks.observe(snapshot.Sequence)
 	s.received++
+	for _, id := range snapshot.Removed {
+		s.bury(id, snapshot.ServerTick)
+	}
+	for _, state := range s.resolved {
+		s.baselines.Store(snapshot.Sequence, state)
+		s.update(state, snapshot.ServerTick, snapshot.Player.Soldier)
+	}
+	for id, tick := range s.buried {
+		if int32(snapshot.ServerTick-tick) > buryTicks {
+			delete(s.buried, id)
+		}
+	}
 	if s.received > 1 && snapshot.ServerTick < s.serverTick {
 		return false
 	}
 	s.serverTick, s.player = snapshot.ServerTick, snapshot.Player
-	for _, state := range snapshot.Soldiers {
-		soldier := s.soldiers[state.ID]
-		if soldier == nil {
-			soldier = &game.Soldier{}
-			s.soldiers[state.ID] = soldier
-		}
-		state.Apply(soldier)
-		if state.ID != s.player.Soldier {
-			remote := s.remotes[state.ID]
-			if remote == nil {
-				remote = &remoteSoldier{}
-				s.remotes[state.ID] = remote
-			}
-			remote.add(snapshot.ServerTick, *soldier)
-		}
-	}
-	for _, id := range snapshot.Removed {
-		delete(s.soldiers, id)
-		delete(s.remotes, id)
-	}
 	s.clock.observe(snapshot.ServerTick)
-	if own := s.soldiers[s.player.Soldier]; own != nil {
+	if own := s.localSoldier(); own != nil {
 		own.Position, own.Velocity = s.player.Position, s.player.Velocity
 	}
 	if s.player.Processed && snapshot.ServerTick >= s.judgeFrom && s.tick >= s.settleUntil &&
@@ -183,6 +214,62 @@ func (s *session) apply(snapshot *protocol.Snapshot) bool {
 		s.resync()
 	}
 	return true
+}
+
+// update applies a soldier's state from a snapshot of the given server tick.
+// A new soldier in a known slot replaces the old one, even if the removal of
+// that one has not arrived yet.
+func (s *session) update(state protocol.SoldierState, tick game.Tick, own game.SoldierID) {
+	known := s.soldiers[state.ID.Slot()]
+	if known != nil && known.soldier.ID != state.ID {
+		s.bury(known.soldier.ID, tick)
+		known = nil
+	}
+	if known == nil {
+		known = &knownSoldier{tick: tick}
+		s.soldiers[state.ID.Slot()] = known
+	}
+	if int32(tick-known.tick) >= 0 {
+		state.Apply(&known.soldier)
+		known.tick = tick
+	}
+	if state.ID == own {
+		return
+	}
+	var soldier game.Soldier
+	state.Apply(&soldier)
+	remote := &known.remote
+	if !s.clock.started || remote.count == 0 {
+		remote.add(tick, soldier)
+		return
+	}
+	// A state that changes where the soldier is drawn now, after a stretch of
+	// extrapolation, is caught up with smoothly.
+	before := remote.at(s.clock.renderTick).Position
+	remote.add(tick, soldier)
+	remote.keep(before, s.clock.renderTick)
+}
+
+func (s *session) bury(id game.SoldierID, tick game.Tick) {
+	if buried, ok := s.buried[id]; !ok || int32(tick-buried) < 0 {
+		s.buried[id] = tick
+	}
+	s.baselines.Forget(id)
+	if known := s.soldiers[id.Slot()]; known != nil && known.soldier.ID == id {
+		delete(s.soldiers, id.Slot())
+	}
+}
+
+// isBuried reports whether a record of the given server tick belongs to a
+// soldier removed since. A later record means the slot came round to the
+// same generation again.
+func (s *session) isBuried(id game.SoldierID, tick game.Tick) bool {
+	buried, ok := s.buried[id]
+	if ok && int32(tick-buried) > 0 {
+		delete(s.buried, id)
+		return false
+	}
+	return ok
 }
 
 // resync jumps the client tick back to its lead when the server reports that
@@ -210,7 +297,10 @@ func (s *session) setClock(serverTick game.Tick, rtt time.Duration) {
 // localSoldier is the player's own soldier as of the latest snapshot, or nil
 // before it spawned.
 func (s *session) localSoldier() *game.Soldier {
-	return s.soldiers[s.player.Soldier]
+	if known := s.soldiers[s.player.Soldier.Slot()]; known != nil && s.player.Soldier != 0 && known.soldier.ID == s.player.Soldier {
+		return &known.soldier
+	}
+	return nil
 }
 
 func (s *session) close() {
@@ -225,6 +315,7 @@ func (s *session) readSnapshots(ctx context.Context) {
 			s.fail(err)
 			return
 		}
+		s.bytes.Add(int64(len(data)))
 		snapshot := &protocol.Snapshot{}
 		if snapshot.Decode(data) != nil {
 			continue

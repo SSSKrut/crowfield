@@ -16,11 +16,20 @@ type Server struct {
 	// Dummies are bot soldiers without AI that roam the map, to load the
 	// network and the clients until real bots exist.
 	Dummies int
+	// Seed fixes the match seed, which places the dummies, for runs that
+	// repeat; zero picks a random one.
+	Seed uint64
+	// ClientBandwidth is the snapshot budget of each client in bytes per
+	// second, transport overhead included; zero means the default.
+	ClientBandwidth int
 }
+
+// DefaultClientBandwidth is 32 KB/s (ARCHITECTURE.md, 6.6).
+const DefaultClientBandwidth = 32 * 1024
 
 func DefaultServer() Server {
 	return Server{
 		StatsInterval: 5 * time.Second, Listen: ":7777", Certificate: "server.crt", Key: "server.key",
-		MaxPlayers: 16, SnapshotRate: 20,
+		MaxPlayers: 16, SnapshotRate: 20, ClientBandwidth: DefaultClientBandwidth,
 	}
 }

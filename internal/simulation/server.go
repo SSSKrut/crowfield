@@ -36,7 +36,6 @@ type Server struct {
 	soldiers         *game.SoldierSet
 	players          [game.MaxPlayers]*player
 	sessions         map[transport.Conn]*session
-	removed          []removal
 	events           chan event
 	connections      sync.WaitGroup
 	tick             game.Tick
@@ -46,9 +45,10 @@ type Server struct {
 	grid             *game.SoldierGrid
 	history          *poseHistory
 
-	states    []protocol.SoldierState
-	removedID []game.SoldierID
-	profile   tickProfile
+	// states are the soldiers of the current snapshot by slot, quantized once
+	// for every player; a zero ID marks an empty slot.
+	states  []protocol.SoldierState
+	profile tickProfile
 }
 
 // NewServer builds the world of the prototype scene. Only its static part runs
@@ -60,6 +60,12 @@ func NewServer(settings config.Server, tuning game.MovementTuning) (*Server, err
 	}
 	if settings.SnapshotRate < 1 || game.TickRate%settings.SnapshotRate != 0 {
 		return nil, fmt.Errorf("snapshot rate %d does not divide the tick rate %d", settings.SnapshotRate, game.TickRate)
+	}
+	if settings.ClientBandwidth == 0 {
+		settings.ClientBandwidth = config.DefaultClientBandwidth
+	}
+	if settings.ClientBandwidth < 0 {
+		return nil, fmt.Errorf("client bandwidth %d is negative", settings.ClientBandwidth)
 	}
 	if err := tuning.Validate(); err != nil {
 		return nil, err
@@ -78,6 +84,9 @@ func NewServer(settings config.Server, tuning game.MovementTuning) (*Server, err
 	}
 	var seed [8]byte
 	_, _ = rand.Read(seed[:])
+	if settings.Seed != 0 {
+		binary.LittleEndian.PutUint64(seed[:], settings.Seed)
+	}
 	s := &Server{
 		settings: settings, tuning: tuning, scene: game.PrototypeScene(), world: world, soldiers: soldiers,
 		sessions: make(map[transport.Conn]*session), events: make(chan event, 4096),
@@ -152,9 +161,10 @@ func (s *Server) run(ctx context.Context) error {
 		s.profile.finish(started)
 		next = next.Add(game.TickDuration)
 		if since := time.Since(lastStats); s.settings.StatsInterval > 0 && since >= s.settings.StatsInterval {
-			log.Printf("server running: tick=%d rate=%.1f players=%d soldiers=%d missed_commands=%d %s",
-				s.tick, float64(s.profile.ticks)/since.Seconds(), s.playerCount(), s.soldiers.Len(),
-				s.profile.missedCommands, &s.profile)
+			players := s.playerCount()
+			log.Printf("server running: tick=%d rate=%.1f players=%d soldiers=%d missed_commands=%d snapshots=%.1fKB/s/player %s",
+				s.tick, float64(s.profile.ticks)/since.Seconds(), players, s.soldiers.Len(), s.profile.missedCommands,
+				float64(s.profile.snapshotBytes)/1024/since.Seconds()/float64(max(1, players)), &s.profile)
 			lastStats = time.Now()
 			s.profile = tickProfile{}
 		}

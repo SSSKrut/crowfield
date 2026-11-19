@@ -26,6 +26,10 @@ func (v Vec3) Mul(value float32) Vec3 {
 	return V(v.X*value, v.Y*value, v.Z*value)
 }
 
+func (v Vec3) Dot(other Vec3) float32 {
+	return v.X*other.X + v.Y*other.Y + v.Z*other.Z
+}
+
 type Quat struct {
 	X float32
 	Y float32

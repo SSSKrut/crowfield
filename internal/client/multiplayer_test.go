@@ -56,11 +56,11 @@ func TestTwoPlayersSeeEachOtherOverQUIC(t *testing.T) {
 		}
 	}
 	walkerID := walker.player.Soldier
-	remote := watcher.remotes[walkerID]
-	if walkerID == 0 || remote == nil || len(watcher.remotes) != 1 || len(walker.remotes) != 1 {
-		t.Fatalf("players do not see each other: %d and %d remotes", len(walker.remotes), len(watcher.remotes))
+	known := watcher.soldiers[walkerID.Slot()]
+	if walkerID == 0 || known == nil || known.soldier.ID != walkerID || remotes(watcher) != 1 || remotes(walker) != 1 {
+		t.Fatalf("players do not see each other: %d and %d remotes", remotes(walker), remotes(watcher))
 	}
-	seen := remote.at(watcher.clock.renderTick)
+	seen := known.remote.at(watcher.clock.renderTick)
 	actual := walker.localSoldier()
 	// The watcher sees the walker about the interpolation delay late.
 	behind := actual.Position.X - seen.Position.X

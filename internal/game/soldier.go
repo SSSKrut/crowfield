@@ -70,6 +70,11 @@ const (
 	maxGeneration   = 1<<(16-soldierSlotBits) - 1
 )
 
+// NewSoldierID packs a slot below MaxSoldiers and a generation below 16.
+func NewSoldierID(slot int, generation uint8) SoldierID {
+	return SoldierID(slot) | SoldierID(generation)<<soldierSlotBits
+}
+
 func (id SoldierID) Slot() int {
 	return int(id & (MaxSoldiers - 1))
 }
@@ -108,7 +113,7 @@ func (s *SoldierSet) Add(soldier Soldier) (SoldierID, error) {
 	slot := s.free[len(s.free)-1]
 	s.free = s.free[:len(s.free)-1]
 	s.generations[slot] = s.generations[slot]%maxGeneration + 1
-	soldier.ID = SoldierID(slot) | SoldierID(s.generations[slot])<<soldierSlotBits
+	soldier.ID = NewSoldierID(slot, s.generations[slot])
 	s.soldiers[slot] = soldier
 	return soldier.ID, nil
 }
@@ -132,6 +137,19 @@ func (s *SoldierSet) All() iter.Seq[*Soldier] {
 			}
 		}
 	}
+}
+
+// Slots is the capacity of the set: slots run from 0 to Slots()-1.
+func (s *SoldierSet) Slots() int {
+	return len(s.soldiers)
+}
+
+// At returns the soldier in a slot, or nil when the slot is free.
+func (s *SoldierSet) At(slot int) *Soldier {
+	if s.soldiers[slot].ID == 0 {
+		return nil
+	}
+	return &s.soldiers[slot]
 }
 
 func (s *SoldierSet) Len() int {

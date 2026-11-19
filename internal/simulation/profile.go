@@ -27,7 +27,10 @@ type tickProfile struct {
 	total, longest time.Duration
 	systems        [systemCount]time.Duration
 	missedCommands uint64
-	mark           time.Time
+	// snapshotBytes counts what snapshots cost on the wire, with the estimated
+	// overhead of every datagram.
+	snapshotBytes uint64
+	mark          time.Time
 }
 
 func (p *tickProfile) start() {

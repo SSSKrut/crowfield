@@ -4,13 +4,20 @@ import (
 	"math"
 
 	"ravenfield/internal/game"
+	"ravenfield/internal/physics"
 )
 
 const (
 	remoteSamples = 16
 	// Past the newest state a soldier keeps moving by its velocity for at most
-	// this long, then stands until a snapshot comes.
-	maxExtrapolation = game.TickRate / 4
+	// this long, then stands until a snapshot comes. Far soldiers out of sight
+	// are updated once or twice a second and live on this.
+	maxExtrapolation = game.TickRate / 2
+	// A soldier drawn off its new path catches up with this time constant,
+	// about 95 % within 0.3 s; a jump longer than catchUpDistance is shown at
+	// once, like a respawn.
+	catchUpTime     = 0.1
+	catchUpDistance = 3
 	// interpolationSnapshots is the delay in snapshot intervals: with one
 	// snapshot lost there is still a later one to interpolate towards.
 	interpolationSnapshots = 2
@@ -26,6 +33,9 @@ type remoteSample struct {
 type remoteSoldier struct {
 	samples [remoteSamples]remoteSample
 	count   int
+	// offset is what is left of a correction: where the soldier was drawn
+	// minus where its states put it now.
+	offset physics.Vec3
 }
 
 // add keeps the samples ordered by tick. A late datagram older than the newest
@@ -50,10 +60,31 @@ func (r *remoteSoldier) add(tick game.Tick, soldier game.Soldier) {
 	r.count++
 }
 
-// at returns the soldier at a fractional tick: by cubic Hermite interpolation
-// of position and velocity between the two states around it, and past the
-// newest state by its velocity for a short while.
+// keep turns the change a new state made to the drawn position at renderTick
+// into an offset that fades, so the soldier does not jump.
+func (r *remoteSoldier) keep(drawn physics.Vec3, renderTick float64) {
+	r.offset = r.offset.Add(drawn.Sub(r.at(renderTick).Position))
+	if distance(r.offset, physics.Vec3{}) > catchUpDistance {
+		r.offset = physics.Vec3{}
+	}
+}
+
+func (r *remoteSoldier) smooth(deltaTime float32) {
+	r.offset = r.offset.Mul(float32(math.Exp(-float64(deltaTime) / catchUpTime)))
+}
+
+// at returns the soldier drawn at a fractional tick, with what is left of a
+// correction.
 func (r *remoteSoldier) at(renderTick float64) game.Soldier {
+	soldier := r.interpolate(renderTick)
+	soldier.Position = soldier.Position.Add(r.offset)
+	return soldier
+}
+
+// interpolate returns the soldier at a fractional tick: by cubic Hermite
+// interpolation of position and velocity between the two states around it, and
+// past the newest state by its velocity for a while.
+func (r *remoteSoldier) interpolate(renderTick float64) game.Soldier {
 	oldest := max(0, r.count-remoteSamples)
 	newest := r.samples[(r.count-1)%remoteSamples]
 	if renderTick >= float64(newest.tick) {

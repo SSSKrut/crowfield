@@ -13,12 +13,7 @@ import (
 	"ravenfield/internal/network/transport"
 )
 
-const (
-	helloTimeout = 5 * time.Second
-	// Without acknowledgements yet, a removal is repeated in every snapshot
-	// for a second, which outlasts any reasonable loss.
-	removalTicks = game.TickRate
-)
+const helloTimeout = 5 * time.Second
 
 // session is a connection as the simulation sees it. It becomes a player once
 // its Hello is accepted.
@@ -43,14 +38,21 @@ type player struct {
 	lastProcessed game.Tick
 	buffered      int8
 
-	sequence uint16
-	snapshot protocol.Snapshot
-	buffer   []byte
-}
-
-type removal struct {
-	soldier game.SoldierID
-	until   game.Tick
+	// views is what the player was told about each soldier slot.
+	views      []entityView
+	removals   []pendingRemoval
+	candidates []candidate
+	// datagrams counts the snapshot datagrams sent; its low 16 bits are the
+	// sequence of the next one. acks holds, by datagram number modulo the
+	// window, the number plus one of each acknowledged datagram.
+	datagrams uint64
+	acks      [ackWindow]uint64
+	// allowance is how many bytes the budget of the player still allows.
+	allowance  float64
+	snapshot   protocol.Snapshot
+	packer     protocol.SnapshotPacker
+	removedIDs []game.SoldierID
+	buffer     []byte
 }
 
 type eventKind uint8
@@ -178,6 +180,7 @@ func (s *Server) handleEvent(e event) {
 		}
 	case eventInput:
 		if sess.player != nil {
+			sess.player.acknowledge(e.input)
 			for _, command := range e.input.Commands {
 				sess.player.inputs.put(command, s.tick)
 			}
@@ -202,8 +205,7 @@ func (s *Server) hello(sess *session, hello *protocol.Hello) {
 		s.reject(sess, protocol.RejectFull, "the server is full")
 		return
 	}
-	p := &player{id: id, name: hello.Name, conn: sess.conn}
-	_, _ = rand.Read(p.token[:])
+	p := s.newPlayer(id, hello.Name, sess.conn)
 	welcome := protocol.Welcome{
 		Player: id, SessionToken: p.token, TickRate: game.TickRate, SnapshotRate: uint8(s.settings.SnapshotRate),
 		ServerTick: s.tick, Map: game.PrototypeMap,
@@ -216,6 +218,12 @@ func (s *Server) hello(sess *session, hello *protocol.Hello) {
 	s.players[id] = p
 	sess.player = p
 	log.Printf("player %d %q joined", id, p.name)
+}
+
+func (s *Server) newPlayer(id game.PlayerID, name string, conn transport.Conn) *player {
+	p := &player{id: id, name: name, conn: conn, views: make([]entityView, s.soldiers.Slots())}
+	_, _ = rand.Read(p.token[:])
+	return p
 }
 
 func (s *Server) freePlayer() (game.PlayerID, bool) {
@@ -284,8 +292,8 @@ func (s *Server) leave(sess *session, reason error) {
 		return
 	}
 	if p.soldier != 0 {
+		// Every other player's view of the slot notices the soldier is gone.
 		s.soldiers.Remove(p.soldier)
-		s.removed = append(s.removed, removal{soldier: p.soldier, until: s.tick + removalTicks})
 		_ = p.controller.Close()
 	}
 	s.players[p.id] = nil

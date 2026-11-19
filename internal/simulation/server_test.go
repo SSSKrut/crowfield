@@ -186,48 +186,6 @@ func TestRespawnReturnsTheSoldierToTheSpawn(t *testing.T) {
 	})
 }
 
-// Large snapshots are split into datagrams that each decode on their own.
-func TestSnapshotIsSplitIntoDatagrams(t *testing.T) {
-	server, err := NewServer(config.Server{MaxPlayers: 1, SnapshotRate: game.TickRate}, game.DefaultMovementTuning())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer server.Close()
-	if server.soldiers, err = game.NewSoldierSet(100); err != nil {
-		t.Fatal(err)
-	}
-	for i := range 100 {
-		if _, err := server.soldiers.Add(game.Soldier{Alive: true, Position: physics.V(float32(i), 0, 0)}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	server.removed = []removal{{soldier: 0x1063, until: 10}}
-	conn, peer := transport.NewMemoryPair()
-	defer conn.Close("test over")
-	server.players[0] = &player{conn: conn, ready: true, soldier: 0x1001}
-	server.sendSnapshots()
-	seen := map[game.SoldierID]bool{}
-	for part := range 2 {
-		var snapshot protocol.Snapshot
-		data := receiveDatagram(t, peer)
-		if err := snapshot.Decode(data); err != nil {
-			t.Fatal(err)
-		}
-		if snapshot.Sequence != uint16(part) || snapshot.Player.Soldier != 0x1001 || (len(snapshot.Removed) > 0) != (part == 0) {
-			t.Errorf("part %d: sequence %d, player %#04x, removed %v", part, snapshot.Sequence, snapshot.Player.Soldier, snapshot.Removed)
-		}
-		if len(data) > protocol.SnapshotBudget {
-			t.Errorf("part %d takes %d bytes", part, len(data))
-		}
-		for _, state := range snapshot.Soldiers {
-			seen[state.ID] = true
-		}
-	}
-	if len(seen) != 100 {
-		t.Errorf("the parts carried %d soldiers, want 100", len(seen))
-	}
-}
-
 func startServer(t *testing.T, settings config.Server) (*Server, *transport.MemoryListener) {
 	t.Helper()
 	server, err := NewServer(settings, game.DefaultMovementTuning())

@@ -118,27 +118,81 @@ func TestSoloSessionThroughTheEmbeddedServer(t *testing.T) {
 	}
 }
 
-// With dummies a snapshot no longer fits one datagram; the client still gets
-// every soldier, from the parts.
-func TestClientReceivesEverySoldierOfASplitSnapshot(t *testing.T) {
+// With 256 dummies the client learns every soldier within a second, although
+// its budget lets the server send only some of them in each snapshot, and
+// every delta finds its base.
+func TestClientLearnsEverySoldierWithinTheBudget(t *testing.T) {
+	session, stop := soloSession(t, config.Client{Dummies: 256}, transport.NetworkConditions{})
+	defer stop()
+	play(t, session, game.TickRate)
+	if len(session.soldiers) != 257 || remotes(session) != 256 {
+		t.Errorf("client knows %d soldiers and %d remotes, want 257 and 256", len(session.soldiers), remotes(session))
+	}
+	bots := 0
+	for _, known := range session.soldiers {
+		if known.soldier.Controller.Kind == game.ControllerBot {
+			bots++
+		}
+	}
+	if bots != 256 || session.unresolved != 0 {
+		t.Errorf("%d soldiers are marked as bots, want 256; %d datagrams did not resolve", bots, session.unresolved)
+	}
+}
+
+// Deltas hold up under loss, duplicates and reordering: no datagram misses its
+// base, and every soldier keeps being updated.
+func TestDeltasSurviveABadNetwork(t *testing.T) {
+	conditions := transport.NetworkConditions{
+		Delay: 30 * time.Millisecond, Jitter: 20 * time.Millisecond, Loss: 0.1, Duplicate: 0.05, Seed: 7,
+	}
+	session, stop := soloSession(t, config.Client{Dummies: 64}, conditions)
+	defer stop()
+	play(t, session, 3*game.TickRate)
+	if session.unresolved != 0 || len(session.soldiers) != 65 {
+		t.Fatalf("%d datagrams did not resolve; %d soldiers known", session.unresolved, len(session.soldiers))
+	}
+	for _, known := range session.soldiers {
+		if behind := int32(session.serverTick - known.tick); behind > game.TickRate/2 {
+			t.Errorf("soldier %#04x was last updated %d ticks ago", known.soldier.ID, behind)
+		}
+	}
+	t.Logf("%d datagrams, %.1f KB/s", session.received, float64(session.bytes.Load())/1024/3)
+}
+
+// soloSession connects to an embedded server, through a simulated network if
+// conditions are given.
+func soloSession(t *testing.T, settings config.Client, conditions transport.NetworkConditions) (*session, func()) {
+	t.Helper()
 	tuning := game.DefaultMovementTuning()
-	local, err := startLocalServer(tuning, config.Client{Dummies: 256})
+	local, err := startLocalServer(tuning, settings)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer local.stop()
 	conn, err := local.dial()
 	if err != nil {
 		t.Fatal(err)
+	}
+	if conditions != (transport.NetworkConditions{}) {
+		conn = transport.Simulate(conn, conditions)
 	}
 	session, err := connect(conn, "tester", tuning)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer session.close()
+	return session, func() {
+		session.close()
+		if err := local.stop(); err != nil {
+			t.Error(err)
+		}
+	}
+}
+
+// play runs the client loop with idle commands for the given number of ticks.
+func play(t *testing.T, session *session, ticks int) {
+	t.Helper()
 	ticker := time.NewTicker(game.TickDuration)
 	defer ticker.Stop()
-	for range game.TickRate {
+	for range ticks {
 		<-ticker.C
 		if _, err := session.sendCommand(game.InputCommand{}); err != nil {
 			t.Fatal(err)
@@ -146,19 +200,19 @@ func TestClientReceivesEverySoldierOfASplitSnapshot(t *testing.T) {
 		if _, err := session.poll(); err != nil {
 			t.Fatal(err)
 		}
+		session.clock.advance(game.TickDelta)
 	}
-	if len(session.soldiers) != 257 || len(session.remotes) != 256 {
-		t.Errorf("client knows %d soldiers and %d remotes, want 257 and 256", len(session.soldiers), len(session.remotes))
-	}
-	bots := 0
-	for _, soldier := range session.soldiers {
-		if soldier.Controller.Kind == game.ControllerBot {
-			bots++
+}
+
+// remotes counts the soldiers the client draws: all but its own.
+func remotes(s *session) int {
+	count := 0
+	for _, known := range s.soldiers {
+		if known.soldier.ID != s.player.Soldier {
+			count++
 		}
 	}
-	if bots != 256 {
-		t.Errorf("%d soldiers are marked as bots, want 256", bots)
-	}
+	return count
 }
 
 // Snapshots that were on their way when the clock jumped still report late
@@ -169,8 +223,8 @@ func TestStaleSnapshotsDoNotResyncAgain(t *testing.T) {
 	defer conn.Close("done")
 	defer peer.Close("done")
 	s := &session{
-		conn: conn, soldiers: map[game.SoldierID]*game.Soldier{}, remotes: map[game.SoldierID]*remoteSoldier{},
-		clock: newInterpolationClock(20),
+		conn: conn, soldiers: map[int]*knownSoldier{}, baselines: protocol.NewBaselines(),
+		buried: map[game.SoldierID]game.Tick{}, clock: newInterpolationClock(20),
 	}
 	snapshot := func(tick game.Tick, buffered int8) *protocol.Snapshot {
 		return &protocol.Snapshot{ServerTick: tick, Player: protocol.PlayerState{

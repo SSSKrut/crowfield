@@ -46,6 +46,8 @@ func sampleCommands(count int, first game.Tick) []game.InputCommand {
 	return commands
 }
 
+// sampleSnapshot mixes full records of humans and bots with every kind of
+// delta, and short and long slot gaps.
 func sampleSnapshot(soldiers int) *Snapshot {
 	snapshot := &Snapshot{
 		Sequence: 777, ServerTick: 99999,
@@ -55,15 +57,53 @@ func sampleSnapshot(soldiers int) *Snapshot {
 		},
 		Removed: []game.SoldierID{soldierID(9, 15), soldierID(4095, 1)},
 	}
+	slot := -1
 	for i := range soldiers {
-		snapshot.Soldiers = append(snapshot.Soldiers, SoldierState{
-			ID: soldierID(i, uint8(1+i%15)), Team: game.Team(i % 3), Flags: SoldierFlags(i * 37),
-			Position: [3]int32{-1 << 20, (1 << 18) - 1 - int32(i), int32(i * 1000)},
-			Velocity: [3]int16{-2048, 2047, int16(i)},
-			Yaw:      4095 - uint16(i), Pitch: int16(-512 + i), Weapon: uint8(i % 16),
-		})
+		slot += 1 + i*5%11
+		state := SoldierState{
+			ID: soldierID(slot, uint8(1+i%15)), Bot: i%2 == 1, Team: game.Team(i % 3), Flags: SoldierFlags(i * 37),
+			Position: [3]int32{-1 << 20, (1 << 18) - 1 - int32(i), int32(i * 1000)}, Weapon: uint8(i % 16),
+		}
+		if state.Bot {
+			state.Velocity, state.Yaw, state.Pitch = [3]int16{-512, 0, int16(4 * i)}, uint16(4080-16*i), int16(-512+16*i)
+		} else {
+			state.Velocity, state.Yaw, state.Pitch = [3]int16{-2048, 2047, int16(i)}, 4095-uint16(i), int16(-512+i)
+		}
+		record := SoldierRecord{State: state}
+		switch i % 4 {
+		case 1:
+			record = delta(state, uint8(1+i), FieldMove|FieldAngles)
+			record.Move = [3]int32{int32(i) - 30, 0, 1 << 14}
+		case 2:
+			record = delta(state, MaxBaseAge, FieldPosition|FieldVelocity|FieldFlags|FieldWeapon)
+		case 3:
+			record = delta(state, uint8(i), 0)
+		}
+		snapshot.Soldiers = append(snapshot.Soldiers, record)
 	}
 	return snapshot
+}
+
+// delta makes a delta record that carries the given fields of a state, with
+// the other fields zero, as decoding leaves them.
+func delta(state SoldierState, base uint8, fields RecordFields) SoldierRecord {
+	carried := SoldierState{ID: state.ID, Bot: state.Bot}
+	if fields&FieldPosition != 0 {
+		carried.Position = state.Position
+	}
+	if fields&FieldVelocity != 0 {
+		carried.Velocity = state.Velocity
+	}
+	if fields&FieldAngles != 0 {
+		carried.Yaw, carried.Pitch = state.Yaw, state.Pitch
+	}
+	if fields&FieldFlags != 0 {
+		carried.Flags = state.Flags
+	}
+	if fields&FieldWeapon != 0 {
+		carried.Weapon = state.Weapon
+	}
+	return SoldierRecord{State: carried, Base: base, Fields: fields}
 }
 
 func soldierID(slot int, generation uint8) game.SoldierID {
@@ -149,6 +189,17 @@ func TestDecodeRejectsDamagedMessages(t *testing.T) {
 }
 
 func TestDecodeRejectsInvalidFields(t *testing.T) {
+	full := sampleSnapshot(1).Soldiers[0]
+	// body writes a record after a slot gap written by hand.
+	body := func(w *BitWriter, long bool, gap uint32, record SoldierRecord) {
+		w.WriteBool(long)
+		if long {
+			w.WriteBits(gap, longGapBits)
+		} else {
+			w.WriteBits(gap, shortGapBits)
+		}
+		record.writeBody(w)
+	}
 	cases := map[string]func(w *BitWriter){
 		"nine commands": func(w *BitWriter) {
 			w.WriteBool(false)
@@ -156,17 +207,42 @@ func TestDecodeRejectsInvalidFields(t *testing.T) {
 		},
 		"soldier without generation": func(w *BitWriter) {
 			writeSnapshotHeader(w, 1)
-			state := sampleSnapshot(1).Soldiers[0]
-			state.ID = 5
-			state.write(w)
+			record := full
+			record.State.ID = 5
+			record.write(w, -1)
 			w.WriteBits(0, removedCountBits)
 		},
 		"unknown team": func(w *BitWriter) {
 			writeSnapshotHeader(w, 1)
-			state := sampleSnapshot(1).Soldiers[0]
-			state.Team = 3
-			state.write(w)
+			record := full
+			record.State.Team = 3
+			record.write(w, -1)
 			w.WriteBits(0, removedCountBits)
+		},
+		"short gap written long": func(w *BitWriter) {
+			writeSnapshotHeader(w, 1)
+			body(w, true, 7, full)
+			w.WriteBits(0, removedCountBits)
+		},
+		"slot beyond the range": func(w *BitWriter) {
+			writeSnapshotHeader(w, 2)
+			last := full
+			last.State.ID = soldierID(game.MaxSoldiers-1, 1)
+			last.write(w, -1)
+			body(w, false, 0, full)
+			w.WriteBits(0, removedCountBits)
+		},
+		"unknown position mode": func(w *BitWriter) {
+			writeDeltaHead(w)
+			w.WriteBits(3, 2)
+			w.WriteBits(0, 4)
+			w.WriteBits(0, removedCountBits)
+		},
+		"move wider than needed": func(w *BitWriter) {
+			writeMove(w, 10, 1, -2, 3)
+		},
+		"empty move": func(w *BitWriter) {
+			writeMove(w, 1, 0, 0, 0)
 		},
 		"nan player position": func(w *BitWriter) {
 			w.WriteBits(1, 16)
@@ -204,6 +280,28 @@ func TestDecodeRejectsInvalidFields(t *testing.T) {
 	}
 }
 
+// writeDeltaHead starts a snapshot with one delta record, up to its position mode.
+func writeDeltaHead(w *BitWriter) {
+	writeSnapshotHeader(w, 1)
+	w.WriteBool(false)
+	w.WriteBits(0, shortGapBits)
+	w.WriteBits(1, generationBits)
+	w.WriteBool(false)
+	w.WriteBits(1, baseBits)
+}
+
+// writeMove writes a snapshot with one delta that only moves, in the given width.
+func writeMove(w *BitWriter, width uint, values ...int32) {
+	writeDeltaHead(w)
+	w.WriteBits(positionMoved, 2)
+	w.WriteBits(uint32(width-1), moveWidthBits)
+	for _, v := range values {
+		w.WriteSigned(v, width)
+	}
+	w.WriteBits(0, 4)
+	w.WriteBits(0, removedCountBits)
+}
+
 func writeSnapshotHeader(w *BitWriter, soldiers int) {
 	w.WriteBits(1, 16)
 	w.WriteBits(1, 32)
@@ -213,9 +311,21 @@ func writeSnapshotHeader(w *BitWriter, soldiers int) {
 
 func TestEncodeRejectsInvalidMessages(t *testing.T) {
 	outside := sampleSnapshot(1)
-	outside.Soldiers[0].Position[1] = 1 << 18
+	outside.Soldiers[0].State.Position[1] = 1 << 18
 	noGeneration := sampleSnapshot(1)
-	noGeneration.Soldiers[0].ID = 12
+	noGeneration.Soldiers[0].State.ID = 12
+	unordered := sampleSnapshot(2)
+	unordered.Soldiers[0], unordered.Soldiers[1] = unordered.Soldiers[1], unordered.Soldiers[0]
+	twice := sampleSnapshot(2)
+	twice.Soldiers[1].State.ID = soldierID(twice.Soldiers[0].State.ID.Slot(), 3)
+	fineBot := sampleSnapshot(2)
+	fineBot.Soldiers[1].State.Velocity[0]++
+	bothPositions := sampleSnapshot(2)
+	bothPositions.Soldiers[1].Fields |= FieldPosition
+	emptyMove := sampleSnapshot(2)
+	emptyMove.Soldiers[1].Move = [3]int32{}
+	longMove := sampleSnapshot(2)
+	longMove.Soldiers[1].Move[0] = 1 << 15
 	removed := sampleSnapshot(0)
 	removed.Removed = []game.SoldierID{3}
 	player := sampleSnapshot(0)
@@ -240,7 +350,13 @@ func TestEncodeRejectsInvalidMessages(t *testing.T) {
 		"removed no gen":      removed,
 		"player no gen":       player,
 		"infinite velocity":   nan,
-		"too many soldiers":   &Snapshot{Soldiers: make([]SoldierState, MaxSnapshotSoldiers+1)},
+		"too many soldiers":   &Snapshot{Soldiers: make([]SoldierRecord, MaxSnapshotSoldiers+1)},
+		"unordered soldiers":  unordered,
+		"same slot twice":     twice,
+		"fine bot velocity":   fineBot,
+		"position and move":   bothPositions,
+		"empty move":          emptyMove,
+		"move too long":       longMove,
 	} {
 		if data, err := message.Encode([]byte{1, 2}); err == nil || len(data) != 2 {
 			t.Errorf("%s: encoded to %d bytes, err %v", name, len(data), err)
@@ -267,35 +383,5 @@ func TestDecodeAndEncodeDoNotAllocate(t *testing.T) {
 		if allocs := testing.AllocsPerRun(100, func() { _, _ = message.Encode(buffer[:0]) }); allocs != 0 {
 			t.Errorf("%s: encoding into a large buffer allocates %.0f times", message.Type(), allocs)
 		}
-	}
-}
-
-// SnapshotCapacity must be exact: the server fills datagrams up to it.
-func TestSnapshotCapacity(t *testing.T) {
-	if got := SnapshotCapacity(SnapshotBudget, 0); got != 56 {
-		t.Errorf("a %d-byte datagram holds %d soldiers, want 56", SnapshotBudget, got)
-	}
-	for _, removed := range []int{0, 1, 2, 10, 60} {
-		capacity := SnapshotCapacity(SnapshotBudget, removed)
-		for _, c := range []struct {
-			soldiers int
-			fits     bool
-		}{{capacity, true}, {capacity + 1, false}} {
-			snapshot := sampleSnapshot(c.soldiers)
-			snapshot.Removed = make([]game.SoldierID, removed)
-			for i := range snapshot.Removed {
-				snapshot.Removed[i] = soldierID(i, 1)
-			}
-			data, err := snapshot.Encode(nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if fits := len(data) <= SnapshotBudget; fits != c.fits {
-				t.Errorf("%d soldiers and %d removals take %d bytes", c.soldiers, removed, len(data))
-			}
-		}
-	}
-	if SnapshotCapacity(10, 0) != 0 {
-		t.Error("a tiny budget holds soldiers")
 	}
 }

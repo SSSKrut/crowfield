@@ -41,6 +41,11 @@ type app struct {
 	ragdoll     bool
 	elapsed     float32
 	demoCycle   int
+	played      float32
+	// The snapshot traffic of the last whole second.
+	netWindow float32
+	netBytes  int64
+	netRate   float32
 }
 
 // Run connects to a server and plays: to the embedded one in solo play and
@@ -206,6 +211,7 @@ func (a *app) run() error {
 			deltaTime = 0.1
 		}
 		a.elapsed += deltaTime
+		a.played += deltaTime
 		accumulator += deltaTime
 		for accumulator >= game.TickDelta {
 			command, err := a.session.sendCommand(a.command())
@@ -232,6 +238,11 @@ func (a *app) run() error {
 		}
 		a.predictor.smooth(deltaTime)
 		a.session.clock.advance(deltaTime)
+		if a.netWindow += deltaTime; a.netWindow >= 1 {
+			bytes := a.session.bytes.Load()
+			a.netRate = float32(bytes-a.netBytes) / 1024 / a.netWindow
+			a.netBytes, a.netWindow = bytes, 0
+		}
 		soldier := a.ownSoldier()
 		if a.settings.Demo && soldier != nil && !a.ragdoll && a.elapsed >= 1.2 {
 			if err := a.die(); err != nil {
@@ -268,9 +279,10 @@ func (a *app) run() error {
 	if own := a.session.localSoldier(); own != nil {
 		soldier = *own
 	}
-	log.Printf("prototype finished: tick=%d server_tick=%d feet=%+v grounded=%t ragdoll=%t active=%t animation=%s snapshots=%d resyncs=%d corrections=%d soldiers=%d",
+	log.Printf("prototype finished: tick=%d server_tick=%d feet=%+v grounded=%t ragdoll=%t active=%t animation=%s snapshots=%d snapshot_traffic=%.1fKB/s resyncs=%d corrections=%d soldiers=%d unresolved=%d",
 		a.session.tick, a.session.serverTick, soldier.Position, soldier.Grounded, a.ragdoll, a.model.RagdollActive(),
-		a.model.AnimationName(), a.session.received, a.session.resyncs, a.predictor.corrections, len(a.session.soldiers))
+		a.model.AnimationName(), a.session.received, float32(a.session.bytes.Load())/1024/max(a.played, 1e-3),
+		a.session.resyncs, a.predictor.corrections, len(a.session.soldiers), a.session.unresolved)
 	return nil
 }
 
@@ -297,9 +309,13 @@ type remoteView struct {
 // the models of a small pool to the nearest ones.
 func (a *app) updateRemotes(deltaTime float32, eye physics.Vec3) {
 	a.views = a.views[:0]
-	for id, remote := range a.session.remotes {
-		soldier := remote.at(a.session.clock.renderTick)
-		a.views = append(a.views, remoteView{id: id, soldier: soldier, distance: distance(soldier.Position, eye)})
+	for _, known := range a.session.soldiers {
+		if known.soldier.ID == a.session.player.Soldier || known.remote.count == 0 {
+			continue
+		}
+		known.remote.smooth(deltaTime)
+		soldier := known.remote.at(a.session.clock.renderTick)
+		a.views = append(a.views, remoteView{id: known.soldier.ID, soldier: soldier, distance: distance(soldier.Position, eye)})
 	}
 	slices.SortFunc(a.views, func(first, second remoteView) int { return cmp.Compare(first.distance, second.distance) })
 	clear(a.modelFor)
@@ -447,9 +463,9 @@ func (a *app) draw(feet physics.Vec3, spawned bool) {
 	rl.DrawText("F1 physics | F3 camera | Esc cursor", 18, 44, 18, rl.White)
 	rl.DrawText(fmt.Sprintf("FPS %d | XYZ %.2f %.2f %.2f | %s", rl.GetFPS(), feet.X, feet.Y, feet.Z, a.model.AnimationName()), 18, 70, 18, rl.White)
 	stats := a.session.conn.Stats()
-	rl.DrawText(fmt.Sprintf("%d Hz | tick %d server %d buffered %d | RTT %d ms | resyncs %d | corrections %d (last %.3f m) | players %d",
+	rl.DrawText(fmt.Sprintf("%d Hz | tick %d server %d buffered %d | RTT %d ms | snapshots %.1f KB/s | resyncs %d | corrections %d (last %.3f m) | soldiers %d",
 		game.TickRate, a.session.tick, a.session.serverTick, a.session.player.BufferedCommands, stats.RTT.Milliseconds(),
-		a.session.resyncs, a.predictor.corrections, a.predictor.lastError, len(a.session.soldiers)), 18, 96, 18, rl.White)
+		a.netRate, a.session.resyncs, a.predictor.corrections, a.predictor.lastError, len(a.session.soldiers)), 18, 96, 18, rl.White)
 	if !a.captured && a.settings.FrameLimit == 0 {
 		rl.DrawText("Press Esc to capture the mouse", 18, 132, 22, rl.Yellow)
 	}
