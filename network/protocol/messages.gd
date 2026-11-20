@@ -250,9 +250,8 @@ class Damage:
 		damage = r.read_bits(8)
 
 
-## Death tells every player of a death a human took part in, for the kill
-## feed and the death screen. Names come with it: clients know soldiers, not
-## whose they are.
+## Death tells every player of a death, for the kill feed and the death
+## screen. Names come with it: clients know soldiers, not whose they are.
 class Death:
 	var tick := 0
 	var victim := 0
@@ -300,3 +299,66 @@ class Death:
 		killer_name = r.read_string(Protocol.NAME_LENGTH_BITS, Protocol.MAX_NAME_BYTES)
 		weapon = r.read_bits(Protocol.WEAPON_BITS)
 		zone = r.read_bits(Protocol.ZONE_BITS)
+
+
+## Launch tells every player of a rocket or a grenade on its way, for the
+## client to fly its picture with the same code (Projectile) from the tick it
+## left: where it starts, how fast, and whose it is.
+class Launch:
+	var tick := 0
+	var projectile := 0
+	var kind := 0
+	var owner := 0
+	var position := Vector3.ZERO
+	var velocity := Vector3.ZERO
+
+	func type() -> int:
+		return Protocol.Type.LAUNCH
+
+	func write(w: BitWriter) -> String:
+		var error := Protocol.check_soldier("owner", owner)
+		if error != "":
+			return error
+		if kind < 0 or kind >= 1 << Protocol.WEAPON_BITS or not position.is_finite() or not velocity.is_finite():
+			return "launch of a weapon %d out of range, or from nowhere" % kind
+		w.write_bits(tick, 32)
+		w.write_bits(projectile, 16)
+		w.write_bits(kind, Protocol.WEAPON_BITS)
+		w.write_bits(owner, 16)
+		Protocol.write_vector(w, position)
+		Protocol.write_vector(w, velocity)
+		return ""
+
+	func read(r: BitReader) -> void:
+		tick = r.read_bits(32)
+		projectile = r.read_bits(16)
+		kind = r.read_bits(Protocol.WEAPON_BITS)
+		owner = Protocol.read_soldier(r)
+		position = Protocol.read_vector(r)
+		velocity = Protocol.read_vector(r)
+
+
+## Blast tells every player where and when a projectile burst.
+class Blast:
+	var tick := 0
+	var projectile := 0
+	var kind := 0
+	var position := Vector3.ZERO
+
+	func type() -> int:
+		return Protocol.Type.BLAST
+
+	func write(w: BitWriter) -> String:
+		if kind < 0 or kind >= 1 << Protocol.WEAPON_BITS or not position.is_finite():
+			return "blast of a weapon %d out of range, or nowhere" % kind
+		w.write_bits(tick, 32)
+		w.write_bits(projectile, 16)
+		w.write_bits(kind, Protocol.WEAPON_BITS)
+		Protocol.write_vector(w, position)
+		return ""
+
+	func read(r: BitReader) -> void:
+		tick = r.read_bits(32)
+		projectile = r.read_bits(16)
+		kind = r.read_bits(Protocol.WEAPON_BITS)
+		position = Protocol.read_vector(r)

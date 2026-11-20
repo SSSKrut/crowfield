@@ -21,6 +21,13 @@ const FLINCH_DISTANCE := 80.0
 ## flight, and a little up.
 const STRIKE_IMPULSE := 30.0
 const STRIKE_LIFT := 5.0
+## A blast throws the soldiers it kills: one at its heart with BLAST_IMPULSE
+## N·s away from it and BLAST_LIFT up, less the farther, if it died within
+## BLAST_TICKS of it. A blast is remembered BLAST_MEMORY ticks.
+const BLAST_IMPULSE := 260.0
+const BLAST_LIFT := 160.0
+const BLAST_TICKS := 8.0
+const BLAST_MEMORY := 2 * Game.TICK_RATE
 ## A soldier shot dead loses its stride: its body keeps FALL_MOMENTUM of its
 ## speed along the ground, and all of it up and down. With all of it, a bot
 ## that ran at 5 m/s slid two metres on after it fell.
@@ -55,6 +62,9 @@ var shown: Array[Entry] = []
 var _entries := {}
 var _frame := 0
 var _ray := PhysicsRayQueryParameters3D.new()
+## _blasts are the recent blasts as [where, radius, tick].
+var _blasts: Array = []
+var _render_tick := 0.0
 
 
 func tint(team: int) -> Color:
@@ -65,6 +75,7 @@ func tint(team: int) -> Color:
 ## animation and shows its combat. A soldier that is dead at that time falls.
 func update(session: ClientSession, delta: float, camera: Camera3D) -> void:
 	_frame += 1
+	_render_tick = session.clock.render_tick
 	var eye := camera.global_position
 	for id in _entries.keys():
 		var known: KnownSoldier = session.soldiers.get(SoldierSet.slot_of(id))
@@ -172,7 +183,8 @@ func _show_combat(known: KnownSoldier, render_tick: float) -> bool:
 
 
 ## _show_shot shows one shot of another soldier. Its spread is the server's
-## secret; a little scatter keeps a burst from drawing one line.
+## secret; a little scatter keeps a burst from drawing one line, and the
+## pellets of a shotgun fly within their cone.
 func _show_shot(kind: int, remote: RemoteSoldier) -> void:
 	var tuning := rules.weapons.get_tuning(kind)
 	if tuning == null or view_model == null:
@@ -181,18 +193,20 @@ func _show_shot(kind: int, remote: RemoteSoldier) -> void:
 	if muzzle == Vector3.INF:
 		return
 	const SCATTER := 0.012
-	var direction := Game.view_direction(remote.yaw + SCATTER * (effects.random.randf() * 2 - 1),
-		remote.pitch + SCATTER * (effects.random.randf() * 2 - 1))
 	var eye := remote.position + Vector3(0, rules.movement.eye_height, 0)
-	var end := eye + direction * tuning.range
-	_ray.from = eye
-	_ray.to = end
-	_ray.collision_mask = Game.LAYER_STATIC | Game.LAYER_VEHICLE
-	var hit := get_world_3d().direct_space_state.intersect_ray(_ray)
-	if not hit.is_empty():
-		end = hit["position"]
+	var spread := SCATTER + deg_to_rad(tuning.pellet_spread)
+	for pellet in tuning.pellets:
+		var direction := Game.view_direction(remote.yaw + spread * (effects.random.randf() * 2 - 1),
+			remote.pitch + spread * (effects.random.randf() * 2 - 1))
+		var end := eye + direction * tuning.range
+		_ray.from = eye
+		_ray.to = end
+		_ray.collision_mask = Game.LAYER_STATIC | Game.LAYER_VEHICLE
+		var hit := get_world_3d().direct_space_state.intersect_ray(_ray)
+		if not hit.is_empty():
+			end = hit["position"]
+		effects.shot(muzzle, end, not hit.is_empty())
 	effects.flash(muzzle)
-	effects.shot(muzzle, end, not hit.is_empty())
 	if sounds != null:
 		sounds.shot_at(kind, muzzle)
 
@@ -200,6 +214,29 @@ func _show_shot(kind: int, remote: RemoteSoldier) -> void:
 ## momentum is the velocity a soldier that dies at velocity falls with.
 static func momentum(velocity: Vector3) -> Vector3:
 	return Vector3(velocity.x * FALL_MOMENTUM, velocity.y, velocity.z * FALL_MOMENTUM)
+
+
+## remember_blast keeps a blast that showed, for the soldiers it kills.
+func remember_blast(at: Vector3, radius: float, tick: float) -> void:
+	_blasts = _blasts.filter(func(blast: Array) -> bool: return tick - blast[2] < BLAST_MEMORY)
+	_blasts.append([at, radius, tick])
+
+
+## blow is the blow that fells a soldier at its death at a tick: the throw
+## of a blast that burst by it just then, or the strike of the last hit.
+func blow(soldier_position: Vector3, yaw: float, hit_box: int, hit_yaw: float, tick: float) -> CharacterView.Strike:
+	var center := soldier_position + Vector3(0, 0.85, 0)
+	for blast: Array in _blasts:
+		var away: Vector3 = center - blast[0]
+		var distance := away.length()
+		var radius: float = blast[1]
+		if distance > radius or absf(tick - blast[2]) > BLAST_TICKS:
+			continue
+		var share := 1.0 - distance / radius
+		var outward := away / distance if distance > 0.01 else Vector3.UP
+		var impulse := outward * BLAST_IMPULSE * share + Vector3.UP * BLAST_LIFT * share
+		return CharacterView.Strike.new(RagdollRig.Part.HIPS, center, impulse)
+	return strike(soldier_position, yaw, hit_box, hit_yaw)
 
 
 ## strike is the blow of the last hit on a soldier, for its fall.
@@ -219,8 +256,8 @@ func _fall(entry: Entry, known: KnownSoldier, eye: Vector3) -> void:
 		entry.view.queue_free()
 		return
 	bodies.make_room(pool, eye)
-	var blow := strike(remote.position, remote.yaw, known.soldier.hit_box, known.soldier.hit_yaw)
-	if not entry.view.fall(pool, momentum(remote.last_alive_velocity()), blow):
+	var fell := blow(remote.position, remote.yaw, known.soldier.hit_box, known.soldier.hit_yaw, _render_tick)
+	if not entry.view.fall(pool, momentum(remote.last_alive_velocity()), fell):
 		entry.view.queue_free()
 		return
 	falls += 1

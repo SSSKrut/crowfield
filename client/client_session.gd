@@ -134,7 +134,7 @@ func poll() -> bool:
 		if message[0] != Conn.Channel.EVENTS:
 			continue
 		var type := Protocol.peek_type(message[1])
-		if type not in [Protocol.Type.HIT_CONFIRM, Protocol.Type.DAMAGE, Protocol.Type.DEATH]:
+		if type not in [Protocol.Type.HIT_CONFIRM, Protocol.Type.DAMAGE, Protocol.Type.DEATH, Protocol.Type.LAUNCH, Protocol.Type.BLAST]:
 			continue
 		var event: Variant = Protocol.decode(message[1])
 		if event is Object:

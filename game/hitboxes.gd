@@ -23,8 +23,10 @@ const B := [
 const RADII := [0.35, 0.29, 0.1, 0.1, 0.08, 0.08, 0.15, 0.15]
 const ZONES := [Zone.HEAD, Zone.TORSO, Zone.LIMB, Zone.LIMB, Zone.LIMB, Zone.LIMB, Zone.LIMB, Zone.LIMB]
 
-## COUNT is how many hitboxes a soldier has.
+## COUNT is how many hitboxes a soldier has; TORSO_BOX is the body, where a
+## blast wounds.
 const COUNT := 8
+const TORSO_BOX := 1
 ## REACH bounds the hitboxes horizontally around a soldier's position: a shot
 ## that passes farther away misses it.
 const REACH := 1.0

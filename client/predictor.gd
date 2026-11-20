@@ -115,6 +115,8 @@ func reconcile(server: PlayerState) -> void:
 		soldier.position = server.position
 		soldier.arsenal = server.arsenal
 		return
+	# Health is the server's alone; the prediction needs it for a medkit.
+	soldier.health = server.health
 	var at := server.last_processed_tick
 	var slot := _ticks[at % HISTORY]
 	var known := started and slot.tick == at and slot.stepped

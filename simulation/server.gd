@@ -38,6 +38,8 @@ var navigation: Navigation
 var bots: Bots
 ## random places the soldiers of players in the zones of their teams.
 var random := RandomNumberGenerator.new()
+## projectiles are the rockets and grenades in flight.
+var projectiles: Array[Projectile] = []
 var grid := SoldierGrid.new(GRID_CELL_SIZE)
 var history: PoseHistory
 var profile := TickProfile.new()
@@ -55,6 +57,10 @@ var _ray := PhysicsRayQueryParameters3D.new()
 ## _shots are the shots of the current tick, resolved after every soldier acted.
 var _shots: Array[PendingShot] = []
 var _snapshots := SnapshotSender.new()
+var _next_projectile := 1
+## _launchers names the owner of each projectile, for the kill feed: a
+## soldier who dies before its grenade bursts is gone by then.
+var _launchers := {}
 
 
 ## create builds the world of the map of the settings and its navigation.
@@ -106,6 +112,7 @@ func close() -> void:
 		navigation.close()
 	# The bots and the sessions point back at the server: let go of them.
 	bots = null
+	projectiles.clear()
 	sessions.clear()
 	players.fill(null)
 
@@ -132,6 +139,7 @@ func step() -> void:
 	bots.update()
 	profile.lap(TickProfile.System.BOTS)
 	_resolve_shots()
+	_move_projectiles()
 	bots.kill()
 	profile.lap(TickProfile.System.SHOTS)
 	grid.rebuild(soldiers)
@@ -178,9 +186,18 @@ func _move_player(player: ServerPlayer) -> void:
 		player.controller.teleport(soldier, spawn_point(soldier.team, random))
 
 
-## queue_shot adds the shot a soldier fired this tick, to resolve with the
-## others once every soldier acted; view is the moment its shooter saw.
+## queue_shot takes what a soldier fired this tick: bullets, to resolve with
+## the others once every soldier acted, as they were at view, the moment its
+## shooter saw; a projectile, which leaves at once; or a medkit, which heals.
 func queue_shot(soldier: Soldier, shot: Shot, view: float) -> void:
+	var tuning := rules.weapons.get_tuning(shot.weapon)
+	match tuning.use:
+		WeaponTuning.Use.HEAL:
+			soldier.health = mini(Game.MAX_HEALTH, soldier.health + tuning.heal)
+			return
+		WeaponTuning.Use.PROJECTILE:
+			_launch(soldier, shot, tuning)
+			return
 	_shots.append(PendingShot.new(soldier.id, soldier.team, shot, view))
 	soldier.shots += 1
 	profile.shots += 1
@@ -508,44 +525,58 @@ func _view_time(command: InputCommand) -> float:
 
 
 ## _resolve_shots tests every shot of the tick against the world and the
-## soldiers, applies the damage and tells the people involved. A soldier killed
-## in a tick still fires its shot of that tick, so two soldiers can kill each
-## other.
+## soldiers, applies the damage and tells the people involved. The pellets of a
+## shotgun that strike one soldier add up into one wound, in the zone the best
+## of them struck. A soldier killed in a tick still fires its shot of that
+## tick, so two soldiers can kill each other.
 func _resolve_shots() -> void:
 	for pending in _shots:
-		var struck := _hitscan(pending)
-		if struck.is_empty():
-			continue
-		profile.hits += 1
-		total_hits += 1
-		var victim := soldiers.get_soldier(struck[0])
-		if victim == null or not victim.alive or (victim.team == pending.team and not settings.friendly_fire):
-			continue
-		var box: int = struck[1]
-		var zone := Hitboxes.zone_of(box)
-		var direction := pending.shot.direction
-		victim.hit_count += 1
-		victim.hit_box = box
-		victim.hit_yaw = Game.yaw_of(direction)
-		var tuning := rules.weapons.get_tuning(pending.shot.weapon)
-		var taken := damage(victim, tuning.hit_damage(zone, struck[2]))
-		if victim.is_bot() and not taken[1]:
-			bots.hurt(victim.bot, pending.shooter)
-		_tell_hit(pending, victim, zone, taken[0], taken[1])
+		var shot := pending.shot
+		var tuning := rules.weapons.get_tuning(shot.weapon)
+		var directions := shot.pellets if not shot.pellets.is_empty() else PackedVector3Array([shot.direction])
+		var wounds := {}
+		for direction in directions:
+			var struck := _hitscan(pending, direction)
+			if struck.is_empty():
+				continue
+			profile.hits += 1
+			total_hits += 1
+			var victim := soldiers.get_soldier(struck[0])
+			if victim == null or not victim.alive or (victim.team == pending.team and not settings.friendly_fire):
+				continue
+			var zone := Hitboxes.zone_of(struck[1])
+			var amount := tuning.hit_damage(zone, struck[2])
+			if not wounds.has(victim.id):
+				wounds[victim.id] = [0, zone, struck[1], direction]
+			var wound: Array = wounds[victim.id]
+			wound[0] += amount
+			if zone < wound[1]:
+				wound[1] = zone
+				wound[2] = struck[1]
+		for id: int in wounds:
+			var victim := soldiers.get_soldier(id)
+			var wound: Array = wounds[id]
+			victim.hit_count += 1
+			victim.hit_box = wound[2]
+			victim.hit_yaw = Game.yaw_of(wound[3])
+			var taken := damage(victim, wound[0])
+			if victim.is_bot() and not taken[1]:
+				bots.hurt(victim.bot, pending.shooter)
+			_tell_hit(pending.shooter, pending.team, shot.weapon, wound[3], victim, wound[1], taken[0], taken[1])
 	_shots.clear()
 
 
-## _hitscan finds the soldier a shot strikes first, as [soldier, hitbox,
-## distance], or [] (ARCHITECTURE.md, 6.9): a ray through the static world
-## limits its reach, the grid gives the soldiers near its track, with a margin
-## for how far they can have moved since the moment of the shot, and their
-## hitboxes are tested where the pose history has them at that moment. A
-## soldier that did not exist then cannot be hit: the player could not see
-## it. A teammate stops a shot even without friendly fire.
-func _hitscan(pending: PendingShot) -> Array:
+## _hitscan finds the soldier a shot along direction strikes first, as
+## [soldier, hitbox, distance], or [] (ARCHITECTURE.md, 6.9): a ray through the
+## static world limits its reach, the grid gives the soldiers near its track,
+## with a margin for how far they can have moved since the moment of the
+## shot, and their hitboxes are tested where the pose history has them at that
+## moment. A soldier that did not exist then cannot be hit: the player could
+## not see it. A teammate stops a shot even without friendly fire.
+func _hitscan(pending: PendingShot, direction: Vector3) -> Array:
 	var shot := pending.shot
 	var reach := rules.weapons.get_tuning(shot.weapon).range
-	var wall := cast_ray(shot.origin, shot.direction, reach, Game.LAYER_STATIC | Game.LAYER_VEHICLE)
+	var wall := cast_ray(shot.origin, direction, reach, Game.LAYER_STATIC | Game.LAYER_VEHICLE)
 	if wall >= 0:
 		reach = wall
 	# The grid has the soldiers at the end of the last tick; since the moment
@@ -553,7 +584,7 @@ func _hitscan(pending: PendingShot) -> Array:
 	var since := (tick - pending.view) / Game.TICK_RATE
 	var margin := Hitboxes.REACH + 2 * rules.movement.sprint_speed * since
 	var struck := []
-	var count := grid.along_ray(shot.origin, shot.direction, reach, margin)
+	var count := grid.along_ray(shot.origin, direction, reach, margin)
 	var ids := grid.ids.duplicate()
 	for i in count:
 		var id := ids[i]
@@ -563,7 +594,7 @@ func _hitscan(pending: PendingShot) -> Array:
 		var pose := history.at(id, pending.view)
 		if pose.is_empty() or not pose[2]:
 			continue
-		var hit := Hitboxes.ray(shot.origin, shot.direction, reach, pose[0], pose[1])
+		var hit := Hitboxes.ray(shot.origin, direction, reach, pose[0], pose[1])
 		if not hit.is_empty():
 			reach = hit[0]
 			struck = [id, hit[1], hit[0]]
@@ -584,10 +615,11 @@ func cast_ray(origin: Vector3, direction: Vector3, length: float, mask: int) -> 
 	return origin.distance_to(hit["position"])
 
 
-## _tell_hit sends the events of a hit: the shooter learns it hit, the victim
-## where from, and everyone a death, for the kill feed.
-func _tell_hit(pending: PendingShot, victim: Soldier, zone: int, taken: int, killed: bool) -> void:
-	var shooter := soldiers.get_soldier(pending.shooter)
+## _tell_hit sends the events of a hit by a weapon along a direction: the
+## shooter learns it hit, the victim where from, and everyone a death, for the
+## kill feed. name is the shooter's, when it may be gone by now.
+func _tell_hit(by: int, team: int, weapon: int, direction: Vector3, victim: Soldier, zone: int, taken: int, killed: bool, name: String = "") -> void:
+	var shooter := soldiers.get_soldier(by)
 	var shooter_player := player_of(shooter)
 	if shooter_player != null:
 		var confirm := Messages.HitConfirm.new()
@@ -601,8 +633,8 @@ func _tell_hit(pending: PendingShot, victim: Soldier, zone: int, taken: int, kil
 	if victim_player != null:
 		var hurt := Messages.Damage.new()
 		hurt.tick = tick
-		hurt.attacker = pending.shooter
-		hurt.yaw = roundi(Game.yaw_of(pending.shot.direction) / TAU * 256) & 0xFF
+		hurt.attacker = by
+		hurt.yaw = roundi(Game.yaw_of(direction) / TAU * 256) & 0xFF
 		hurt.zone = zone
 		hurt.damage = mini(taken, 255)
 		_send_event(victim_player, hurt)
@@ -611,16 +643,129 @@ func _tell_hit(pending: PendingShot, victim: Soldier, zone: int, taken: int, kil
 	var death := Messages.Death.new()
 	death.tick = tick
 	death.victim = victim.id
-	death.killer = pending.shooter
+	death.killer = by
 	death.victim_team = victim.team
-	death.killer_team = pending.team
+	death.killer_team = team
 	death.victim_name = name_of(victim)
-	death.killer_name = name_of(shooter)
-	death.weapon = pending.shot.weapon
+	death.killer_name = name if name != "" and shooter == null else name_of(shooter)
+	death.weapon = weapon
 	death.zone = zone
+	_send_to_all(death)
+
+
+func _send_to_all(message: Object) -> void:
 	for player in players:
 		if player != null and player.ready:
-			_send_event(player, death)
+			_send_event(player, message)
+
+
+# Projectiles.
+
+
+## _launch sends a projectile on its way and tells every player.
+func _launch(soldier: Soldier, shot: Shot, tuning: WeaponTuning) -> void:
+	var projectile := Projectile.launch(_next_projectile, shot, soldier, tuning, tick)
+	_next_projectile = _next_projectile % 0xFFFF + 1
+	projectiles.append(projectile)
+	_launchers[projectile.id] = name_of(soldier)
+	var launch := Messages.Launch.new()
+	launch.tick = tick
+	launch.projectile = projectile.id
+	launch.kind = projectile.kind
+	launch.owner = soldier.id
+	launch.position = projectile.position
+	launch.velocity = projectile.velocity
+	_send_to_all(launch)
+
+
+## _move_projectiles moves every projectile for the tick and bursts those that
+## reach their end. A rocket also bursts on the first soldier in its way, as
+## soldiers are now: no lag compensation for what flies.
+func _move_projectiles() -> void:
+	for projectile: Projectile in projectiles.duplicate():
+		var tuning := rules.weapons.get_tuning(projectile.kind)
+		var from := projectile.position
+		var burst := projectile.step(_space_state, _ray, tuning, tick)
+		if tuning.bounce <= 0:
+			var struck := _strike(projectile, from, projectile.position)
+			if struck != Vector3.INF:
+				projectile.position = struck
+				burst = true
+		if burst:
+			projectiles.erase(projectile)
+			_blast(projectile, tuning)
+
+
+## _strike returns where a projectile moving from one point to another meets
+## the hitboxes of a soldier other than its owner first, or Vector3.INF.
+func _strike(projectile: Projectile, from: Vector3, to: Vector3) -> Vector3:
+	var length := from.distance_to(to)
+	if length < 1e-4:
+		return Vector3.INF
+	var direction := (to - from) / length
+	var count := grid.along_ray(from, direction, length, Hitboxes.REACH)
+	var ids := grid.ids.duplicate()
+	var nearest := length
+	for i in count:
+		var target := soldiers.get_soldier(ids[i])
+		if target == null or not target.alive or target.id == projectile.owner:
+			continue
+		var hit := Hitboxes.ray(from, direction, nearest, target.position, target.yaw)
+		if not hit.is_empty():
+			nearest = hit[0]
+	return from + direction * nearest if nearest < length else Vector3.INF
+
+
+## _blast bursts a projectile: every soldier the blast reaches, not behind
+## cover, takes its share of the damage by its distance from the heart, as a
+## wound in the torso; teammates are spared without friendly fire, and so is
+## the owner. Every player learns where it burst.
+func _blast(projectile: Projectile, tuning: WeaponTuning) -> void:
+	var at := projectile.position
+	var name: String = _launchers.get(projectile.id, "")
+	_launchers.erase(projectile.id)
+	var count := grid.near(at, tuning.blast_radius + Hitboxes.REACH)
+	var ids := grid.ids.duplicate()
+	for i in count:
+		var victim := soldiers.get_soldier(ids[i])
+		if victim == null or not victim.alive or (victim.team == projectile.team and not settings.friendly_fire):
+			continue
+		var center := victim.position + Vector3(0, BODY_HEIGHT, 0)
+		var distance := at.distance_to(center)
+		var share := tuning.blast_share(distance)
+		if share <= 0 or not _exposed(at, victim):
+			continue
+		var direction := (center - at) / distance if distance > 1e-3 else Vector3.UP
+		victim.hit_count += 1
+		victim.hit_box = Hitboxes.TORSO_BOX
+		victim.hit_yaw = Game.yaw_of(direction)
+		var taken := damage(victim, maxi(1, roundi(tuning.damage * share)))
+		profile.hits += 1
+		total_hits += 1
+		if victim.is_bot() and not taken[1]:
+			bots.hurt(victim.bot, projectile.owner)
+		_tell_hit(projectile.owner, projectile.team, projectile.kind, direction, victim, Hitboxes.Zone.NONE, taken[0], taken[1], name)
+	var blast := Messages.Blast.new()
+	blast.tick = tick
+	blast.projectile = projectile.id
+	blast.kind = projectile.kind
+	blast.position = at
+	_send_to_all(blast)
+
+
+## BODY_HEIGHT is the middle of the body, where a blast is measured to.
+const BODY_HEIGHT := 0.85
+
+
+## _exposed tells whether a blast at a point reaches the body or the head of
+## a soldier past the static world.
+func _exposed(at: Vector3, victim: Soldier) -> bool:
+	for height: float in [BODY_HEIGHT, 1.45]:
+		var point := victim.position + Vector3(0, height, 0)
+		var distance := at.distance_to(point)
+		if distance < 1e-3 or cast_ray(at, (point - at) / distance, distance, Game.LAYER_STATIC | Game.LAYER_VEHICLE) < 0:
+			return true
+	return false
 
 
 ## player_of is the player of a human soldier, or null.

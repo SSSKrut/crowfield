@@ -79,7 +79,12 @@ func test_load_weapons_overrides_defaults() -> void:
 	check(weapons.rifle.damage == 60 and weapons.rifle.magazine == 5 and weapons.pistol.damage == _weapons.pistol.damage,
 		"loaded rifle %s/%s" % [weapons.rifle.damage, weapons.rifle.magazine])
 	var bad := {
-		"unknown weapon": '{"shotgun": {"damage": 60}}',
+		"unknown weapon": '{"flamethrower": {"damage": 60}}',
+		"no pellets": '{"shotgun": {"pellets": 0}}',
+		"a grenade without a fuse": '{"grenade": {"fuse": 0}}',
+		"a blast inside out": '{"rocket_launcher": {"blast_inner": 7}}',
+		"a medkit that heals nothing": '{"medkit": {"heal": 0}}',
+		"an unknown use": '{"pistol": {"use": 3}}',
 		"unknown field": '{"pistol": {"damge": 60}}',
 		"empty magazine": '{"pistol": {"magazine": 0}}',
 		"huge magazine": '{"pistol": {"magazine": 300}}',

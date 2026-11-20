@@ -108,8 +108,20 @@ func _messages() -> Array:
 	death.zone = Hitboxes.Zone.TORSO
 	var certificate := Messages.Certificate.new()
 	certificate.pem = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"
+	var launch := Messages.Launch.new()
+	launch.tick = 4400
+	launch.projectile = 65535
+	launch.kind = WeaponTuning.Kind.GRENADE
+	launch.owner = SoldierSet.make_id(9, 2)
+	launch.position = Vector3(-40.5, 2.25, 30.125)
+	launch.velocity = Vector3(3.5, 6.0, -15.25)
+	var blast := Messages.Blast.new()
+	blast.tick = 4568
+	blast.projectile = 65535
+	blast.kind = WeaponTuning.Kind.GRENADE
+	blast.position = Vector3(-38.0, 0.95, 18.5)
 	return [hello, welcome, reject, Messages.Ready.new(), Messages.Respawn.new(), input, confirm, damage, death,
-		Messages.CertificateRequest.new(), certificate, _snapshot()]
+		Messages.CertificateRequest.new(), certificate, _snapshot(), launch, blast]
 
 
 func _snapshot() -> Snapshot:

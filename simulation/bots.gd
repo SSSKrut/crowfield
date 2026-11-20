@@ -12,14 +12,20 @@ extends RefCounted
 ##   while looking about, and picks the next one;
 ## - ENGAGE: it sees an enemy, turns to it, waits out its reaction and fires in
 ##   bursts, standing or stepping aside, until the enemy dies or hides; a far
-##   enemy it closes on in rushes, shooting between them;
+##   enemy, or one beyond the reach of its gun, it closes on in rushes,
+##   shooting between them; now and then it fires a rocket or throws a
+##   grenade;
 ## - SEARCH: it goes to where it last saw the enemy.
 ## A bot thinks four times a second, staggered over the ticks: it looks for
 ## enemies within its view, nearest first, with rays to them on a budget per
 ## tick. Aim and fire run every tick. A bot sees its target as it was a
 ## reaction time ago, from the pose history of lag compensation, and its aim
 ## wanders off and settles back like a hand's (8.5). A hit makes it look for
-## the shooter. Passive bots only walk, for load tests.
+## the shooter, and a bot out of the fight heals itself with a medkit.
+##
+## A bot is born with one gun, and as often as not one thing more: a pistol, a
+## rocket launcher, grenades or a medkit. Passive bots only walk, for load
+## tests.
 
 enum State { ADVANCE, ENGAGE, SEARCH }
 
@@ -59,6 +65,33 @@ const FIRE_CONE := deg_to_rad(8.0)
 ## Beyond RIFLE_RANGE a bot takes the rifle, closer the assault rifle; it
 ## aims down the sights beyond AIM_RANGE and steps aside within STRAFE_RANGE.
 const RIFLE_RANGE := 55.0
+## The weapons a bot is born with: a gun, and with EXTRA_CHANCE one thing
+## more, by these weights.
+const GUNS := [[WeaponTuning.Kind.ASSAULT_RIFLE, 50], [WeaponTuning.Kind.RIFLE, 22], [WeaponTuning.Kind.SHOTGUN, 28]]
+const EXTRAS := [[WeaponTuning.Kind.PISTOL, 25], [WeaponTuning.Kind.ROCKET_LAUNCHER, 25], [WeaponTuning.Kind.GRENADE, 30],
+	[WeaponTuning.Kind.MEDKIT, 20]]
+const EXTRA_CHANCE := 0.55
+## A gun is worth firing within its REACH; beyond it the bot closes in, and
+## with a shotgun it rushes beyond SHOTGUN_PUSH.
+const REACH := {WeaponTuning.Kind.ASSAULT_RIFLE: 120.0, WeaponTuning.Kind.RIFLE: 250.0, WeaponTuning.Kind.PISTOL: 50.0,
+	WeaponTuning.Kind.SHOTGUN: 28.0}
+const SHOTGUN_PUSH := 14.0
+## A bot fires a rocket at an enemy within ROCKET_RANGE, or throws a grenade
+## within GRENADE_RANGE, with the chances below, looked at once a second;
+## after either it waits SPECIAL_PAUSE seconds, and gives up one it could not
+## make in SPECIAL_TICKS.
+const ROCKET_RANGE := Vector2(12, 120)
+const GRENADE_RANGE := Vector2(8, 28)
+const ROCKET_CHANCE := 0.5
+const GRENADE_CHANCE := 0.45
+const SPECIAL_PAUSE := Vector2(5, 10)
+const SPECIAL_TICKS := 3 * Game.TICK_RATE
+## A rocket is aimed this high over the feet of its target, to burst by them.
+const ROCKET_HEIGHT := 0.3
+## A bot out of the fight takes its medkit below HEAL_BELOW health, HEAL_CALM
+## ticks after its last wound.
+const HEAL_BELOW := 60
+const HEAL_CALM := 2 * Game.TICK_RATE
 const AIM_RANGE := 14.0
 const STRAFE_RANGE := 30.0
 ## Beyond PUSH_RANGE a bot rushes towards its target along the mesh for a
@@ -104,6 +137,12 @@ class Bot:
 	var strafe_until := 0
 	var push_until := 0
 	var hold_until := 0
+	## special is the slot of the rocket launcher or the grenade a bot is
+	## about to use, or -1; it gives up at special_until and may start
+	## another at special_at.
+	var special := -1
+	var special_until := 0
+	var special_at := 0
 	var weapon := 0
 	var attacker := 0
 	var hurt_at := -1000
@@ -191,8 +230,10 @@ func _spawn(bot: Bot, team: int) -> void:
 		soldier.position = _floor_point()
 		soldier.yaw = _random.randf() * TAU
 	soldier.health = Game.MAX_HEALTH
-	soldier.arsenal = Arsenal.create(Arsenal.default_loadout(), _rules.weapons)
+	soldier.arsenal = Arsenal.create(_loadout(), _rules.weapons)
 	bot.soldier = _server.soldiers.add(soldier)
+	bot.special = -1
+	bot.special_at = _server.tick + _random.randi_range(2 * Game.TICK_RATE, 5 * Game.TICK_RATE)
 	bot.state = State.ADVANCE
 	bot.path = PackedVector3Array()
 	bot.corner = 0
@@ -204,6 +245,26 @@ func _spawn(bot: Bot, team: int) -> void:
 	bot.think_at = _server.tick + 1 + bot.index % THINK_TICKS
 	bot.progress_at = _server.tick
 	bot.progress_from = soldier.position
+
+
+## _loadout picks the weapons of a new bot: a gun, and maybe one thing more.
+func _loadout() -> PackedInt32Array:
+	var loadout := PackedInt32Array([_pick(GUNS)])
+	if _random.randf() < EXTRA_CHANCE:
+		loadout.append(_pick(EXTRAS))
+	return loadout
+
+
+func _pick(weighted: Array) -> int:
+	var total := 0
+	for entry: Array in weighted:
+		total += entry[1]
+	var roll := _random.randi_range(1, total)
+	for entry: Array in weighted:
+		roll -= entry[1]
+		if roll <= 0:
+			return entry[0]
+	return weighted[0][0]
 
 
 ## died records when a dead bot comes back.
@@ -269,12 +330,9 @@ func update() -> void:
 		match bot.state:
 			State.ENGAGE:
 				_fight(bot, soldier)
-			State.SEARCH:
-				_walk(bot, soldier)
-				_arm(bot, soldier, 0)
 			_:
 				_walk(bot, soldier)
-				_arm(bot, soldier, 0)
+				_arm(bot, soldier, _mend(bot, soldier))
 
 
 func _gather_teams() -> void:
@@ -390,6 +448,7 @@ func _engage(bot: Bot, soldier: Soldier, enemy: int) -> void:
 
 
 func _search(bot: Bot, at: Vector3) -> void:
+	_end_special(bot)
 	bot.state = State.SEARCH
 	bot.target = 0
 	bot.goal = at
@@ -406,11 +465,13 @@ static func _enemy_of(team: int) -> int:
 
 
 ## _fight is a tick of an engaged bot: it checks its target, turns to it with
-## its error, picks a weapon by the distance, fires in bursts and steps aside.
+## its error, picks a weapon by the distance, fires in bursts and steps aside;
+## or it fires a rocket or throws a grenade, standing.
 func _fight(bot: Bot, soldier: Soldier) -> void:
 	var tick := _server.tick
 	var target := _server.soldiers.get_soldier(bot.target)
 	if target == null or not target.alive:
+		_end_special(bot)
 		bot.state = State.ADVANCE
 		bot.target = 0
 		bot.think_at = tick + 1
@@ -434,37 +495,142 @@ func _fight(bot: Bot, soldier: Soldier) -> void:
 	if not pose.is_empty():
 		seen = pose[0]
 	var eye := soldier.position + Vector3(0, _eye, 0)
-	var aim := seen + Vector3(0, AIM_HEIGHT, 0) - eye
-	var distance := aim.length()
-	var yaw := Game.yaw_of(aim)
-	var pitch := atan2(aim.y, Vector2(aim.x, aim.z).length())
+	var distance := eye.distance_to(seen + Vector3(0, AIM_HEIGHT, 0))
+	_plan_special(bot, soldier, distance)
+	if bot.special < 0:
+		_choose_weapon(bot, soldier, distance)
+	var tuning := _rules.weapons.get_tuning(soldier.arsenal.weapons[bot.weapon])
+	var angles := _aim(eye, seen, target.velocity, tuning)
+	if angles == Vector2.INF:
+		# A grenade cannot reach that far.
+		_end_special(bot)
+		_choose_weapon(bot, soldier, distance)
+		tuning = _rules.weapons.get_tuning(soldier.arsenal.weapons[bot.weapon])
+		angles = _aim(eye, seen, target.velocity, null)
 	bot.aim_error = bot.aim_error * _aim_settle + Vector2(_random.randf_range(-1, 1), _random.randf_range(-1, 1)) * NOISE
 	var steady := STEADY_ERROR * bot.skill * (1.0 + Game.horizontal_length(soldier.velocity) / _rules.movement.walk_speed)
 	if bot.aim_error.length() < steady:
 		bot.aim_error = bot.aim_error.normalized() * steady if bot.aim_error != Vector2.ZERO else Vector2(steady, 0)
-	_turn(soldier, yaw + bot.aim_error.x, pitch + bot.aim_error.y)
-	_choose_weapon(bot, soldier, distance)
-	if _rush(bot, soldier, distance):
+	_turn(soldier, angles.x + bot.aim_error.x, angles.y + bot.aim_error.y)
+	var on_target := absf(Game.remainder(soldier.yaw - angles.x)) < FIRE_CONE and absf(soldier.pitch - angles.y) < FIRE_CONE
+	var ready := on_target and tick - bot.seen_at <= SIGHT_TICKS and tick >= bot.noticed_at + bot.reaction
+	if bot.special >= 0:
+		_halt(soldier)
+		var arsenal := soldier.arsenal
+		var armed := arsenal.current == bot.special and arsenal.action == Arsenal.Action.READY and arsenal.cooldown == 0
+		var fired := _arm(bot, soldier, InputCommand.FIRE if ready and armed else 0)
+		if fired or tick >= bot.special_until:
+			_end_special(bot)
+		return
+	var kind := soldier.arsenal.weapons[bot.weapon]
+	var reach: float = REACH.get(kind, 100.0)
+	var push := minf(SHOTGUN_PUSH if kind == WeaponTuning.Kind.SHOTGUN else PUSH_RANGE, reach)
+	if _rush(bot, soldier, distance, push, kind == WeaponTuning.Kind.SHOTGUN):
 		_arm(bot, soldier, 0)
 		return
 	_dodge(bot, soldier, distance)
 	var buttons := 0
-	var on_target := absf(Game.remainder(soldier.yaw - yaw)) < FIRE_CONE and absf(soldier.pitch - pitch) < FIRE_CONE
-	var visible := tick - bot.seen_at <= SIGHT_TICKS
 	if distance > AIM_RANGE:
 		buttons |= InputCommand.AIM
-	if on_target and visible and tick >= bot.noticed_at + bot.reaction:
-		if _burst(bot, soldier, distance):
-			buttons |= InputCommand.FIRE
+	if ready and distance <= reach and _burst(bot, soldier, distance):
+		buttons |= InputCommand.FIRE
 	_arm(bot, soldier, buttons)
 
 
-## _rush moves a bot that fights a far target towards it, in rushes along the
-## mesh with holds to shoot between them. It returns whether the bot rushes
-## this tick, when it does not shoot.
-func _rush(bot: Bot, soldier: Soldier, distance: float) -> bool:
+## _aim is the yaw and pitch from the eye to hit a target seen at a point,
+## moving at a velocity, with a weapon: at its body with a gun, at its feet
+## where a rocket will meet it, or the throw of a grenade that lands by it.
+## It is Vector2.INF where a throw cannot reach.
+static func _aim(eye: Vector3, seen: Vector3, velocity: Vector3, tuning: WeaponTuning) -> Vector2:
+	if tuning == null or tuning.use != WeaponTuning.Use.PROJECTILE:
+		var body := seen + Vector3(0, AIM_HEIGHT, 0) - eye
+		return Vector2(Game.yaw_of(body), atan2(body.y, Vector2(body.x, body.z).length()))
+	var at := seen
+	if tuning.bounce <= 0:
+		var flight := eye.distance_to(seen) / tuning.projectile_speed
+		at = seen + Vector3(velocity.x, 0, velocity.z) * flight + Vector3(0, ROCKET_HEIGHT, 0)
+	return lob(eye, at, tuning)
+
+
+## lob is the yaw and pitch that sends a projectile of a weapon from a point
+## to land on another, on the lower of the two arcs that reach it, or
+## Vector2.INF when none does.
+static func lob(from: Vector3, to: Vector3, tuning: WeaponTuning) -> Vector2:
+	var offset := to - from
+	var across := Vector2(offset.x, offset.z).length()
+	var yaw := Game.yaw_of(offset)
+	var speed := tuning.projectile_speed
+	var gravity := tuning.projectile_gravity
+	if gravity <= 0 or across < 1e-3:
+		return Vector2(yaw, atan2(offset.y, across))
+	var root := speed * speed * speed * speed - gravity * (gravity * across * across + 2 * offset.y * speed * speed)
+	if root < 0:
+		return Vector2.INF
+	return Vector2(yaw, atan((speed * speed - sqrt(root)) / (gravity * across)))
+
+
+## _plan_special decides, once a second, whether a bot fires a rocket or
+## throws a grenade at an enemy at a distance, and takes it in hand.
+func _plan_special(bot: Bot, soldier: Soldier, distance: float) -> void:
 	var tick := _server.tick
-	if distance <= PUSH_RANGE:
+	if bot.special >= 0 or tick < bot.special_at:
+		return
+	bot.special_at = tick + Game.TICK_RATE
+	var arsenal := soldier.arsenal
+	for slot in Arsenal.MAX_LOADOUT:
+		if arsenal.magazine[slot] + arsenal.reserve[slot] == 0:
+			continue
+		var wanted := false
+		match arsenal.weapons[slot]:
+			WeaponTuning.Kind.ROCKET_LAUNCHER:
+				wanted = distance >= ROCKET_RANGE.x and distance <= ROCKET_RANGE.y and _random.randf() < ROCKET_CHANCE
+			WeaponTuning.Kind.GRENADE:
+				wanted = distance >= GRENADE_RANGE.x and distance <= GRENADE_RANGE.y and _random.randf() < GRENADE_CHANCE
+		if wanted:
+			bot.special = slot
+			bot.weapon = slot
+			bot.special_until = tick + SPECIAL_TICKS
+			return
+
+
+func _end_special(bot: Bot) -> void:
+	if bot.special < 0:
+		return
+	bot.special = -1
+	bot.special_at = _server.tick + roundi(_random.randf_range(SPECIAL_PAUSE.x, SPECIAL_PAUSE.y) * Game.TICK_RATE)
+
+
+## _mend has a wounded bot out of the fight take its medkit and use it, and
+## put it away again; it returns the buttons it presses.
+func _mend(bot: Bot, soldier: Soldier) -> int:
+	var arsenal := soldier.arsenal
+	var slot := _slot_of(arsenal, WeaponTuning.Kind.MEDKIT)
+	if slot < 0:
+		return 0
+	if soldier.health >= HEAL_BELOW or _server.tick - bot.hurt_at < HEAL_CALM or arsenal.magazine[slot] == 0:
+		if bot.weapon == slot:
+			bot.weapon = _best_gun(arsenal, 30.0)
+		return 0
+	bot.weapon = slot
+	if arsenal.current == slot and arsenal.action == Arsenal.Action.READY and arsenal.cooldown == 0:
+		return InputCommand.FIRE
+	return 0
+
+
+static func _slot_of(arsenal: Arsenal, kind: int) -> int:
+	for slot in Arsenal.MAX_LOADOUT:
+		if arsenal.weapons[slot] == kind:
+			return slot
+	return -1
+
+
+## _rush moves a bot that fights a target farther than push towards it, in
+## rushes along the mesh with holds to shoot between them; a bot with a
+## shotgun, which does nothing far away, runs and hardly holds. It returns
+## whether the bot rushes this tick, when it does not shoot.
+func _rush(bot: Bot, soldier: Soldier, distance: float, push: float, charge: bool = false) -> bool:
+	var tick := _server.tick
+	if distance <= push:
 		bot.push_until = 0
 		return false
 	if tick >= bot.push_until and tick >= bot.hold_until and _paths > 0:
@@ -472,10 +638,11 @@ func _rush(bot: Bot, soldier: Soldier, distance: float) -> bool:
 		bot.path = _server.navigation.path(soldier.position, bot.last_seen)
 		bot.corner = 1
 		bot.push_until = tick + _random.randi_range(70, 150)
-		bot.hold_until = bot.push_until + _random.randi_range(90, 210)
+		bot.hold_until = bot.push_until + (_random.randi_range(10, 40) if charge else _random.randi_range(90, 210))
 	if tick >= bot.push_until or bot.path.size() < 2 or bot.corner >= bot.path.size():
 		return false
-	if not _follow(bot, soldier, _rules.movement.walk_speed):
+	var speed := _rules.movement.sprint_speed if charge else _rules.movement.walk_speed
+	if not _follow(bot, soldier, speed):
 		bot.push_until = tick
 	return true
 
@@ -503,20 +670,48 @@ func _burst(bot: Bot, soldier: Soldier, distance: float) -> bool:
 	return true
 
 
-## _choose_weapon takes the rifle for far targets and the assault rifle for
-## near ones, the pistol when both are dry, and keeps a weapon it has just
-## taken until it is ready.
+## _choose_weapon takes the gun that suits the distance best, of those with
+## rounds left: the shotgun up close, the rifle far away, the assault rifle
+## between, the pistol when nothing else is left. It keeps a weapon it has
+## just taken until it is ready, and one it reloads.
 func _choose_weapon(bot: Bot, soldier: Soldier, distance: float) -> void:
 	var arsenal := soldier.arsenal
 	if arsenal.action == Arsenal.Action.EQUIPPING:
 		return
-	var wanted := 1 if distance > RIFLE_RANGE else 0
-	for slot: int in [wanted, 1 - wanted, 2]:
-		if arsenal.weapons[slot] != WeaponTuning.Kind.NONE and arsenal.magazine[slot] + arsenal.reserve[slot] > 0:
-			if slot != bot.weapon and arsenal.action == Arsenal.Action.RELOADING and arsenal.current == bot.weapon:
-				return
-			bot.weapon = slot
-			return
+	var best := _best_gun(arsenal, distance)
+	if best < 0 or best == bot.weapon:
+		return
+	if arsenal.action == Arsenal.Action.RELOADING and arsenal.current == bot.weapon and _is_gun(arsenal.weapons[bot.weapon]):
+		return
+	bot.weapon = best
+
+
+## _best_gun is the slot of the gun with rounds best at a distance, or -1.
+static func _best_gun(arsenal: Arsenal, distance: float) -> int:
+	var best := -1
+	var best_score := 0.0
+	for slot in Arsenal.MAX_LOADOUT:
+		var kind := arsenal.weapons[slot]
+		if not _is_gun(kind) or arsenal.magazine[slot] + arsenal.reserve[slot] == 0:
+			continue
+		var score := 0.0
+		match kind:
+			WeaponTuning.Kind.SHOTGUN:
+				score = 5.0 if distance < 15 else (2.0 if distance < REACH[kind] else 0.2)
+			WeaponTuning.Kind.RIFLE:
+				score = 4.0 if distance > RIFLE_RANGE else 1.0
+			WeaponTuning.Kind.ASSAULT_RIFLE:
+				score = 3.0 if distance < 90 else 1.5
+			WeaponTuning.Kind.PISTOL:
+				score = 0.8 if distance < 40 else 0.3
+		if score > best_score:
+			best = slot
+			best_score = score
+	return best
+
+
+static func _is_gun(kind: int) -> bool:
+	return REACH.has(kind)
 
 
 ## _dodge steps a bot aside while it fights near, or after a hit, and stands
@@ -540,25 +735,28 @@ func _dodge(bot: Bot, soldier: Soldier, distance: float) -> void:
 		_halt(soldier)
 
 
-## _arm works the weapons of a bot for a tick with the buttons it holds. A
-## bot that is not fighting reloads a weapon half empty, when its thought
-## asks; an idle arsenal needs no tick.
-func _arm(bot: Bot, soldier: Soldier, buttons: int) -> void:
+## _arm works the weapons of a bot for a tick with the buttons it holds, and
+## returns whether it fired. A bot that is not fighting reloads a weapon half
+## empty, when its thought asks; an idle arsenal needs no tick.
+func _arm(bot: Bot, soldier: Soldier, buttons: int) -> bool:
 	var arsenal := soldier.arsenal
 	if buttons == 0 and arsenal.action == Arsenal.Action.READY and arsenal.cooldown == 0 and arsenal.current == bot.weapon \
 			and arsenal.bloom == 0.0 and arsenal.kick_pitch == 0.0 and arsenal.kick_yaw == 0.0:
 		if not bot.reload:
-			return
+			return false
 		bot.reload = false
 		buttons = InputCommand.RELOAD
 	var tick := _server.tick
 	var command := InputCommand.create(tick, 0, 0, soldier.yaw, soldier.pitch, buttons)
 	command.weapon = bot.weapon
 	var speed := Game.horizontal_length(soldier.velocity) / _rules.movement.sprint_speed
-	var result := arsenal.step(_rules.weapons, command, speed, false, Arsenal.shot_seed(_server.match_seed, soldier.id, tick))
-	if result.has(Arsenal.EVENT_FIRED):
-		result.shot.origin = soldier.position + Vector3(0, _eye, 0)
-		_server.queue_shot(soldier, result.shot, tick - 1)
+	var result := arsenal.step(_rules.weapons, command, speed, false, Arsenal.shot_seed(_server.match_seed, soldier.id, tick),
+		soldier.health < Game.MAX_HEALTH)
+	if not result.has(Arsenal.EVENT_FIRED):
+		return false
+	result.shot.origin = soldier.position + Vector3(0, _eye, 0)
+	_server.queue_shot(soldier, result.shot, tick - 1)
+	return true
 
 
 func _wants_reload(soldier: Soldier) -> bool:

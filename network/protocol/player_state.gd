@@ -12,7 +12,7 @@ const RESPAWN_BITS := 16
 
 const _MAGAZINE_BITS := 8
 const _RESERVE_BITS := 10
-const _CURRENT_BITS := 2
+const _CURRENT_BITS := 3
 const _ACTION_BITS := 2
 const _ACTION_TICKS_BITS := 8
 const _COOLDOWN_BITS := 8

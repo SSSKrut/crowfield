@@ -87,7 +87,7 @@ func step(soldier: Soldier, command: InputCommand) -> void:
 func run_command(weapons: WeaponSet, soldier: Soldier, command: InputCommand, match_seed: int) -> WeaponStep:
 	step(soldier, command)
 	var result := soldier.arsenal.step(weapons, command, speed_share(soldier), not soldier.grounded,
-		Arsenal.shot_seed(match_seed, soldier.id, command.tick))
+		Arsenal.shot_seed(match_seed, soldier.id, command.tick), soldier.health < Game.MAX_HEALTH)
 	if result.has(Arsenal.EVENT_FIRED):
 		result.shot.origin = soldier.position + Vector3(0, tuning.eye_height, 0)
 	return result

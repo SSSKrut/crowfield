@@ -4,10 +4,16 @@ extends RefCounted
 ## seconds, as in the data file. The server and every client must use the
 ## same values: the client predicts its own weapon.
 
-enum Kind { NONE, ASSAULT_RIFLE, RIFLE, PISTOL }
-const KINDS := 4
-const NAMES := ["none", "assault rifle", "rifle", "pistol"]
-const LABELS := ["", "Assault rifle", "Rifle", "Pistol"]
+enum Kind { NONE, ASSAULT_RIFLE, RIFLE, PISTOL, SHOTGUN, ROCKET_LAUNCHER, GRENADE, MEDKIT }
+const KINDS := 8
+const NAMES := ["none", "assault rifle", "rifle", "pistol", "shotgun", "rocket launcher", "grenade", "medkit"]
+const LABELS := ["", "Assault rifle", "Rifle", "Pistol", "Shotgun", "RPG", "Grenade", "Medkit"]
+## What a weapon does when it fires: BULLETS the server traces at once,
+## shotgun pellets too; a PROJECTILE that flies until it bursts, a rocket or a
+## grenade; or HEAL the one who uses it.
+enum Use { BULLETS, PROJECTILE, HEAL }
+## A shot of a shotgun has at most MAX_PELLETS pellets.
+const MAX_PELLETS := 16
 
 ## The protocol carries a magazine in 8 bits and the spare rounds in 10.
 const MAX_MAGAZINE := 255
@@ -20,22 +26,27 @@ const FIELDS := [
 	"falloff_start", "falloff_end", "falloff_damage", "range", "magazine", "reserve",
 	"reload_time", "equip_time", "hip_spread", "aim_spread", "move_spread", "air_spread",
 	"bloom", "max_bloom", "bloom_recovery", "kick_pitch", "kick_yaw", "kick_recovery", "aim_zoom",
+	"use", "pellets", "pellet_spread", "projectile_speed", "projectile_gravity", "bounce", "fuse",
+	"blast_radius", "blast_inner", "heal",
 ]
-const INTEGER_FIELDS := ["magazine", "reserve"]
+const INTEGER_FIELDS := ["magazine", "reserve", "use", "pellets", "heal"]
 
 ## Automatic weapons fire while the trigger is held, the others once per pull.
 var automatic := false
 var rounds_per_minute := 600.0
 ## damage is what a hit in the torso takes at close range; hits in the head
 ## and the limbs take it times their multipliers. Beyond falloff_start metres
-## it falls linearly to falloff_damage of itself at falloff_end.
+## it falls linearly to falloff_damage of itself at falloff_end. A pellet of a
+## shotgun takes it by itself; a projectile takes it, whole, at the heart of
+## its blast.
 var damage := 25.0
 var head_multiplier := 2.0
 var limb_multiplier := 0.75
 var falloff_start := 30.0
 var falloff_end := 80.0
 var falloff_damage := 0.6
-## range is how far a shot reaches, in metres.
+## range is how far a shot reaches, in metres; a projectile without a fuse
+## bursts in the air there.
 var range := 300.0
 ## A soldier spawns with magazine rounds in the weapon and reserve spare.
 var magazine := 30
@@ -61,6 +72,24 @@ var kick_yaw := 0.35
 var kick_recovery := 5.0
 ## aim_zoom narrows the field of view while aiming. Only the client uses it.
 var aim_zoom := 0.75
+var use: int = Use.BULLETS
+## A shot of a shotgun is pellets pellets, scattered within pellet_spread
+## degrees around the shot.
+var pellets := 1
+var pellet_spread := 0.0
+## A projectile leaves at projectile_speed and falls at projectile_gravity, in
+## metres per second and per second squared. One that bounces keeps bounce of
+## its speed off what it strikes and bursts at its fuse, in seconds; one that
+## does not bursts where it strikes. Its blast takes the whole damage within
+## blast_inner metres, falling to nothing at blast_radius.
+var projectile_speed := 0.0
+var projectile_gravity := 0.0
+var bounce := 0.0
+var fuse := 0.0
+var blast_radius := 0.0
+var blast_inner := 0.0
+## heal is the health a medkit gives back.
+var heal := 0
 
 
 static func create(values: Dictionary) -> WeaponTuning:
@@ -74,6 +103,21 @@ static func kind_name(kind: int) -> String:
 	if kind >= 0 and kind < KINDS:
 		return NAMES[kind]
 	return "weapon %d" % kind
+
+
+## fuse_ticks is the time of the fuse in ticks.
+func fuse_ticks() -> int:
+	return Game.seconds_to_ticks(fuse)
+
+
+## blast_share is the share of the damage of a blast at a distance from its
+## heart.
+func blast_share(distance: float) -> float:
+	if distance <= blast_inner:
+		return 1.0
+	if distance >= blast_radius:
+		return 0.0
+	return 1.0 - (distance - blast_inner) / (blast_radius - blast_inner)
 
 
 ## fire_interval is the number of ticks between two shots.
@@ -130,7 +174,28 @@ func validate() -> String:
 		return "kick must not be negative"
 	if aim_zoom <= 0 or aim_zoom > 1:
 		return "aim zoom must be in (0, 1]"
+	if use < Use.BULLETS or use > Use.HEAL:
+		return "use must be 0 for bullets, 1 for a projectile or 2 for healing"
+	if pellets < 1 or pellets > MAX_PELLETS or pellet_spread < 0:
+		return "a shot has 1 to %d pellets in a spread that is not negative" % MAX_PELLETS
+	if use == Use.PROJECTILE:
+		if projectile_speed <= 0 or projectile_gravity < 0 or bounce < 0 or bounce >= 1 or fuse < 0:
+			return "a projectile needs a speed, and a gravity, bounce below 1 and fuse that are not negative"
+		if bounce > 0 and not _in_seconds(fuse):
+			return "a projectile that bounces needs a fuse of up to %.0f s" % MAX_FUSE
+		if blast_radius <= 0 or blast_inner < 0 or blast_inner >= blast_radius:
+			return "a blast needs a radius larger than its inner radius"
+	if use == Use.HEAL and (heal < 1 or heal > Game.MAX_HEALTH):
+		return "a medkit heals 1 to %d" % Game.MAX_HEALTH
 	return ""
+
+
+## A fuse burns at most MAX_FUSE seconds.
+const MAX_FUSE := 10.0
+
+
+func _in_seconds(seconds: float) -> bool:
+	return seconds > 0 and seconds <= MAX_FUSE
 
 
 func _in_ticks(seconds: float) -> bool:

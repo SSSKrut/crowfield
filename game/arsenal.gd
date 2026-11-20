@@ -4,8 +4,8 @@ extends RefCounted
 ## and the soldier's own player know it; the other players see the weapon in
 ## its hands. Spread and kick are in radians.
 
-## MAX_LOADOUT is how many weapons a soldier carries.
-const MAX_LOADOUT := 3
+## MAX_LOADOUT is how many weapons a soldier carries at most.
+const MAX_LOADOUT := 7
 
 enum Action { READY, EQUIPPING, RELOADING }
 
@@ -30,9 +30,9 @@ const _MIX1 := -4658895280553007687
 const _MIX2 := -7723592293110705685
 
 ## weapons holds the kind in every slot, magazine and reserve their rounds.
-var weapons := PackedInt32Array([0, 0, 0])
-var magazine := PackedInt32Array([0, 0, 0])
-var reserve := PackedInt32Array([0, 0, 0])
+var weapons := _slots()
+var magazine := _slots()
+var reserve := _slots()
 var current := 0
 var action: int = Action.READY
 ## action_ticks is how many ticks the action has left, cooldown how many
@@ -48,15 +48,24 @@ var kick_pitch := 0.0
 var kick_yaw := 0.0
 
 
-## DEFAULT_LOADOUT carries all three weapons until classes choose (stage 3).
+## default_loadout is what a player carries until classes choose (stage 3):
+## every weapon, the first three as they always were.
 static func default_loadout() -> PackedInt32Array:
-	return PackedInt32Array([WeaponTuning.Kind.ASSAULT_RIFLE, WeaponTuning.Kind.RIFLE, WeaponTuning.Kind.PISTOL])
+	return PackedInt32Array([WeaponTuning.Kind.ASSAULT_RIFLE, WeaponTuning.Kind.RIFLE, WeaponTuning.Kind.PISTOL,
+		WeaponTuning.Kind.SHOTGUN, WeaponTuning.Kind.ROCKET_LAUNCHER, WeaponTuning.Kind.GRENADE, WeaponTuning.Kind.MEDKIT])
 
 
-## create arms a soldier with full magazines, the first weapon in hand.
+static func _slots() -> PackedInt32Array:
+	var slots := PackedInt32Array()
+	slots.resize(MAX_LOADOUT)
+	return slots
+
+
+## create arms a soldier with full magazines, the first weapon in hand. A
+## loadout shorter than the slots leaves the rest empty.
 static func create(loadout: PackedInt32Array, set: WeaponSet) -> Arsenal:
 	var arsenal := Arsenal.new()
-	for i in MAX_LOADOUT:
+	for i in mini(loadout.size(), MAX_LOADOUT):
 		arsenal.weapons[i] = loadout[i]
 		var tuning := set.get_tuning(loadout[i])
 		if tuning != null:
@@ -97,8 +106,8 @@ func weapon() -> int:
 
 
 func is_empty() -> bool:
-	return weapons == PackedInt32Array([0, 0, 0]) and magazine == PackedInt32Array([0, 0, 0]) \
-		and reserve == PackedInt32Array([0, 0, 0]) and current == 0 and action == Action.READY \
+	var none := _slots()
+	return weapons == none and magazine == none and reserve == none and current == 0 and action == Action.READY \
 		and action_ticks == 0 and cooldown == 0 and not trigger and bloom == 0.0 and kick_pitch == 0.0 and kick_yaw == 0.0
 
 
@@ -115,8 +124,9 @@ func agrees(other: Arsenal) -> bool:
 ## step works the weapons for a tick of the command, after the soldier moved.
 ## The order is: the timers run, a change of weapon starts, an action ends, a
 ## reload starts, then the weapon fires if it may. speed is the soldier's
-## share of the sprint speed; seed makes the spread repeatable (shot_seed).
-func step(set: WeaponSet, command: InputCommand, speed: float, airborne: bool, seed: int) -> WeaponStep:
+## share of the sprint speed; seed makes the spread repeatable (shot_seed). A
+## medkit works only on a wounded soldier.
+func step(set: WeaponSet, command: InputCommand, speed: float, airborne: bool, seed: int, wounded: bool = false) -> WeaponStep:
 	var result := WeaponStep.new()
 	var tuning := set.get_tuning(weapon())
 	_recover(tuning)
@@ -146,6 +156,9 @@ func step(set: WeaponSet, command: InputCommand, speed: float, airborne: bool, s
 		_start_reload(tuning)
 		result.events |= EVENT_RELOAD_STARTED
 	if action != Action.READY or not fire or cooldown > 0 or (trigger and not tuning.automatic):
+		return result
+	if tuning.use == WeaponTuning.Use.HEAL and not wounded and magazine[current] > 0:
+		trigger = true
 		return result
 	if magazine[current] == 0:
 		if reserve[current] > 0:
@@ -220,12 +233,21 @@ func _shoot(tuning: WeaponTuning, command: InputCommand, speed: float, airborne:
 	var pitch := clampf(command.pitch_radians() + kick_pitch, -MAX_SHOT_PITCH, MAX_SHOT_PITCH)
 	var random := [seed]
 	var direction := scatter(yaw, pitch, angle * sqrt(_next(random)), TAU * _next(random))
+	var pellets := PackedVector3Array()
+	if tuning.pellets > 1:
+		# The pellets scatter around the shot, each by numbers of its own.
+		var shot_yaw := Game.yaw_of(direction)
+		var shot_pitch := asin(clampf(direction.y, -1.0, 1.0))
+		var cone := deg_to_rad(tuning.pellet_spread)
+		for i in tuning.pellets:
+			pellets.append(scatter(shot_yaw, shot_pitch, cone * sqrt(_next(random)), TAU * _next(random)))
 	bloom = minf(deg_to_rad(tuning.max_bloom), bloom + deg_to_rad(tuning.bloom))
 	kick_pitch = minf(MAX_KICK, kick_pitch + deg_to_rad(tuning.kick_pitch))
 	kick_yaw = clampf(kick_yaw + deg_to_rad(tuning.kick_yaw) * (2.0 * _next(random) - 1.0), -MAX_KICK, MAX_KICK)
 	var shot := Shot.new()
 	shot.weapon = weapon()
 	shot.direction = direction
+	shot.pellets = pellets
 	return shot
 
 

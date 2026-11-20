@@ -16,7 +16,7 @@ const FALLOFF_DISTANCE := 12.0
 const QUIETEST := 0.03
 
 ## SHOT_VOLUMES are the volumes of the weapons' shots, at the shooter.
-const SHOT_VOLUMES := [0.0, 0.85, 1.0, 0.7]
+const SHOT_VOLUMES := [0.0, 0.85, 1.0, 0.7, 1.0, 0.9, 0.35, 0.5]
 ## A gunshot is a burst of filtered noise over a falling thump: decay is the
 ## time constant of the noise in seconds, smoothing how much of each new noise
 ## sample passes the low-pass filter, thump the starting pitch of the low
@@ -25,7 +25,16 @@ const GUNSHOTS := {
 	WeaponTuning.Kind.ASSAULT_RIFLE: {"decay": 0.07, "smoothing": 0.32, "thump": 115.0},
 	WeaponTuning.Kind.RIFLE: {"decay": 0.13, "smoothing": 0.22, "thump": 85.0},
 	WeaponTuning.Kind.PISTOL: {"decay": 0.045, "smoothing": 0.5, "thump": 160.0},
+	WeaponTuning.Kind.SHOTGUN: {"decay": 0.12, "smoothing": 0.38, "thump": 70.0},
+	# The rush of a rocket leaving the tube, and the swish of a throw.
+	WeaponTuning.Kind.ROCKET_LAUNCHER: {"decay": 0.32, "smoothing": 0.1, "thump": 55.0},
+	WeaponTuning.Kind.GRENADE: {"decay": 0.05, "smoothing": 0.06, "thump": 0.0},
 }
+## A blast sounds like a gunshot of BLAST_VOICE, and is heard much farther:
+## as loud as 1 / (1 + distance / BLAST_FALLOFF).
+const BLAST_VOICE := {"decay": 0.5, "smoothing": 0.05, "thump": 42.0}
+const BLAST_FALLOFF := 45.0
+const BLAST_VOLUME := 1.0
 
 var _volume := 0.0
 var _audible := false
@@ -41,6 +50,9 @@ var _magazine_in: AudioStreamPlayer
 var _equip: AudioStreamPlayer
 ## _marker ticks when a shot of the player hurt someone.
 var _marker: AudioStreamPlayer
+## _heal chimes when the player's medkit works.
+var _heal: AudioStreamPlayer
+var _blast: AudioStreamWAV
 
 
 ## volume is the master volume from 0 to 1.
@@ -64,6 +76,8 @@ func _init(volume: float) -> void:
 	_magazine_in = _player(_to_stream(_clicks(0.25, 0.0, 0.12)), 0.5)
 	_equip = _player(_to_stream(_clicks(0.2, 0.0, 0.06)), 0.3)
 	_marker = _player(_to_stream(_tone(0.08, 2400.0, 0.015)), 0.35)
+	_heal = _player(_to_stream(_tone(0.35, 880.0, 0.12)), 0.35)
+	_blast = _to_stream(_gunshot(2.0, BLAST_VOICE["decay"], BLAST_VOICE["smoothing"], BLAST_VOICE["thump"], 99))
 	for i in POSITIONAL_VOICES:
 		var player := AudioStreamPlayer3D.new()
 		# The fall with distance is the game's own, below; the engine only
@@ -80,7 +94,9 @@ func _init(volume: float) -> void:
 func weapon(kind: int, events: int) -> void:
 	if not _audible or not is_inside_tree():
 		return
-	if events & Arsenal.EVENT_FIRED and _shots.has(kind):
+	if events & Arsenal.EVENT_FIRED and kind == WeaponTuning.Kind.MEDKIT:
+		_heal.play()
+	elif events & Arsenal.EVENT_FIRED and _shots.has(kind):
 		var voices: Array[AudioStreamPlayer] = _shots[kind]
 		var voice := voices[_next[kind]]
 		_next[kind] = (_next[kind] + 1) % SHOT_VOICES
@@ -105,14 +121,26 @@ func shot_at(kind: int, position: Vector3) -> void:
 	var camera := get_viewport().get_camera_3d()
 	if camera != null:
 		distance = camera.global_position.distance_to(position)
-	var gain := 1.0 / (1.0 + distance / FALLOFF_DISTANCE)
+	_play_at(_streams[kind], position, SHOT_VOLUMES[kind] / (1.0 + distance / FALLOFF_DISTANCE))
+
+
+## blast plays a blast from where it burst.
+func blast(position: Vector3) -> void:
+	if not _audible or not is_inside_tree():
+		return
+	var camera := get_viewport().get_camera_3d()
+	var distance := camera.global_position.distance_to(position) if camera != null else 0.0
+	_play_at(_blast, position, BLAST_VOLUME / (1.0 + distance / BLAST_FALLOFF))
+
+
+func _play_at(stream: AudioStreamWAV, position: Vector3, gain: float) -> void:
 	if gain < QUIETEST:
 		return
 	var player := _positional[_next_positional]
 	_next_positional = (_next_positional + 1) % POSITIONAL_VOICES
-	player.stream = _streams[kind]
+	player.stream = stream
 	player.global_position = position
-	player.volume_db = linear_to_db(gain * SHOT_VOLUMES[kind] * _volume)
+	player.volume_db = linear_to_db(gain * _volume)
 	player.play()
 
 

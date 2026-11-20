@@ -10,17 +10,17 @@ class_name Protocol
 ## A message implements type(), write(writer) -> error and read(reader); see
 ## Messages for the small ones.
 
-const VERSION := 10
+const VERSION := 11
 
 enum Type {
 	HELLO = 1, WELCOME, REJECT, READY, INPUT, SNAPSHOT, RESPAWN, HIT_CONFIRM, DAMAGE, DEATH,
-	CERTIFICATE_REQUEST, CERTIFICATE,
+	CERTIFICATE_REQUEST, CERTIFICATE, LAUNCH, BLAST,
 }
 const _TYPE_NAMES := {
 	Type.HELLO: "hello", Type.WELCOME: "welcome", Type.REJECT: "reject", Type.READY: "ready",
 	Type.INPUT: "input", Type.SNAPSHOT: "snapshot", Type.RESPAWN: "respawn", Type.HIT_CONFIRM: "hit confirm",
 	Type.DAMAGE: "damage", Type.DEATH: "death", Type.CERTIFICATE_REQUEST: "certificate request",
-	Type.CERTIFICATE: "certificate",
+	Type.CERTIFICATE: "certificate", Type.LAUNCH: "launch", Type.BLAST: "blast",
 }
 
 const UNKNOWN_MESSAGE := "unknown message type"
@@ -82,6 +82,10 @@ static func create(type: int) -> Object:
 			return Messages.CertificateRequest.new()
 		Type.CERTIFICATE:
 			return Messages.Certificate.new()
+		Type.LAUNCH:
+			return Messages.Launch.new()
+		Type.BLAST:
+			return Messages.Blast.new()
 	return null
 
 
@@ -128,6 +132,20 @@ static func check_text(field: String, value: String, max_bytes: int) -> String:
 	if bytes.size() > max_bytes or not BitReader.valid_utf8(bytes):
 		return "%s must be UTF-8 of at most %d bytes" % [field, max_bytes]
 	return ""
+
+
+## write_vector writes a vector at full precision.
+static func write_vector(w: BitWriter, value: Vector3) -> void:
+	w.write_float32(value.x)
+	w.write_float32(value.y)
+	w.write_float32(value.z)
+
+
+## read_vector reads a vector written by write_vector.
+static func read_vector(r: BitReader) -> Vector3:
+	var x := r.read_float32()
+	var y := r.read_float32()
+	return Vector3(x, y, r.read_float32())
 
 
 static func check_soldier(role: String, id: int) -> String:

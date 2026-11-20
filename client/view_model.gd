@@ -40,6 +40,11 @@ const GUN_DARK := Color8(32, 33, 36)
 const GUN_POLYMER := Color8(74, 76, 66)
 const GUN_WOOD := Color8(124, 82, 47)
 const SLEEVE := Color8(86, 92, 102)
+const TUBE := Color8(88, 96, 70)
+const TUBE_DARK := Color8(60, 66, 48)
+const GRENADE_BODY := Color8(70, 82, 52)
+const KIT_WHITE := Color8(225, 225, 218)
+const KIT_RED := Color8(200, 40, 40)
 const FLASH_CORE := Color8(255, 214, 120)
 const FLASH_FLAME := Color8(255, 170, 60, 220)
 
@@ -206,7 +211,8 @@ func hide_weapon() -> void:
 ## varies the flash from shot to shot.
 func fired(turn: float) -> void:
 	_recoil = 1.0
-	_flash = FLASH_TIME
+	var shape := _shape_of(_shown)
+	_flash = FLASH_TIME if shape == null or shape.flash else 0.0
 	_flash_turn = turn
 
 
@@ -459,6 +465,9 @@ class Shape:
 	var kick_pitch: float
 	## scope replaces the model with the view through a scope when aiming.
 	var scope := false
+	## flash is whether a shot flashes at the muzzle: a throw or a medkit
+	## does not.
+	var flash := true
 
 
 ## _limb is a box from one point to another, for arms.
@@ -545,4 +554,69 @@ static func _weapon_shapes() -> Array[Shape]:
 	pistol.kick_back = 0.03
 	pistol.kick_pitch = 0.18
 	shapes[WeaponTuning.Kind.PISTOL] = pistol
+	var shotgun := Shape.new()
+	shotgun.gun = [
+		Box.new(Vector3(0, -0.05, 0.05), Vector3(0.024, 0.03, 0.14), GUN_METAL),
+		Box.new(Vector3(0, -0.035, 0.42), Vector3(0.012, 0.012, 0.24), GUN_DARK),
+		Box.new(Vector3(0, -0.062, 0.36), Vector3(0.011, 0.011, 0.19), GUN_DARK),
+		Box.new(Vector3(0, -0.066, 0.3), Vector3(0.022, 0.022, 0.08), GUN_WOOD),
+		Box.new(Vector3(0, -0.019, 0.65), Vector3(0.003, 0.004, 0.003), GUN_METAL),
+		Box.new(Vector3(0, -0.11, -0.05), Vector3(0.016, 0.045, 0.02), GUN_WOOD, -0.35),
+		Box.new(Vector3(0, -0.085, -0.25), Vector3(0.022, 0.045, 0.11), GUN_WOOD),
+	]
+	shotgun.arms = _arms(Vector3(0.004, -0.11, -0.05), Vector3(0.11, -0.3, -0.42), Vector3(-0.006, -0.08, 0.3), Vector3(-0.17, -0.3, 0.02))
+	shotgun.muzzle = Vector3(0, -0.035, 0.67)
+	shotgun.hip = Vector3(0.15, -0.16, 0.24)
+	shotgun.aim = Vector3(0, -0.006, 0.22)
+	shotgun.kick_back = 0.08
+	shotgun.kick_pitch = 0.2
+	shapes[WeaponTuning.Kind.SHOTGUN] = shotgun
+	# The tube of the rocket launcher rests on the right shoulder; its sight
+	# stands out to the left.
+	var launcher := Shape.new()
+	launcher.gun = [
+		Box.new(Vector3(0.07, -0.04, 0.05), Vector3(0.045, 0.045, 0.45), TUBE),
+		Box.new(Vector3(0.07, -0.04, 0.58), Vector3(0.06, 0.06, 0.09), TUBE_DARK),
+		Box.new(Vector3(0.07, -0.04, 0.71), Vector3(0.035, 0.035, 0.05), TUBE_DARK),
+		Box.new(Vector3(0.07, -0.1, 0.02), Vector3(0.014, 0.04, 0.02), GUN_DARK, -0.2),
+		Box.new(Vector3(0.07, -0.1, 0.2), Vector3(0.014, 0.035, 0.02), GUN_DARK, -0.1),
+		Box.new(Vector3(0.02, -0.004, 0.18), Vector3(0.008, 0.016, 0.02), GUN_DARK),
+	]
+	launcher.arms = _arms(Vector3(0.07, -0.13, 0.02), Vector3(0.18, -0.3, -0.3), Vector3(0.06, -0.13, 0.2), Vector3(-0.1, -0.3, 0.0))
+	launcher.muzzle = Vector3(0.07, -0.04, 0.76)
+	launcher.hip = Vector3(0.16, -0.16, 0.34)
+	launcher.aim = Vector3(-0.02, 0, 0.22)
+	launcher.kick_back = 0.07
+	launcher.kick_pitch = 0.1
+	shapes[WeaponTuning.Kind.ROCKET_LAUNCHER] = launcher
+	# A grenade sits in the right hand; a throw swings it forward.
+	var grenade := Shape.new()
+	grenade.gun = [
+		Box.new(Vector3(0, 0, 0), Vector3(0.03, 0.04, 0.03), GRENADE_BODY),
+		Box.new(Vector3(0, 0.046, 0), Vector3(0.012, 0.01, 0.012), GUN_METAL),
+		Box.new(Vector3(0.016, 0.028, -0.008), Vector3(0.004, 0.026, 0.006), GUN_METAL, 0.3),
+	]
+	grenade.arms = _arms(Vector3(0, -0.035, -0.02), Vector3(0.12, -0.25, -0.3), Vector3(-0.16, -0.14, 0.24), Vector3(-0.22, -0.32, 0.0))
+	grenade.muzzle = Vector3(0, 0.05, 0.05)
+	grenade.hip = Vector3(0.14, -0.13, 0.3)
+	grenade.aim = Vector3(0.12, -0.11, 0.3)
+	grenade.kick_back = -0.18
+	grenade.kick_pitch = 0.5
+	grenade.flash = false
+	shapes[WeaponTuning.Kind.GRENADE] = grenade
+	var kit := Shape.new()
+	kit.gun = [
+		Box.new(Vector3(0, 0, 0), Vector3(0.1, 0.07, 0.04), KIT_WHITE),
+		Box.new(Vector3(0, 0, -0.042), Vector3(0.05, 0.015, 0.002), KIT_RED),
+		Box.new(Vector3(0, 0, -0.042), Vector3(0.015, 0.05, 0.002), KIT_RED),
+		Box.new(Vector3(0, 0.078, 0), Vector3(0.04, 0.008, 0.012), GUN_DARK),
+	]
+	kit.arms = _arms(Vector3(0.1, -0.03, 0), Vector3(0.2, -0.25, -0.25), Vector3(-0.1, -0.03, 0), Vector3(-0.2, -0.25, -0.25))
+	kit.muzzle = Vector3(0, 0, 0.05)
+	kit.hip = Vector3(0.02, -0.17, 0.34)
+	kit.aim = kit.hip
+	kit.kick_back = -0.05
+	kit.kick_pitch = 0.0
+	kit.flash = false
+	shapes[WeaponTuning.Kind.MEDKIT] = kit
 	return shapes

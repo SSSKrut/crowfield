@@ -18,7 +18,7 @@ signal left(message: String)
 
 const RECONNECT_WINDOW := 60.0
 const HELP_LINES := [
-	"WASD move | Space jump | Shift sprint | LMB fire | RMB aim | R reload | 1-3, wheel weapon",
+	"WASD move | Space jump | Shift sprint | LMB fire | RMB aim | R reload | 1-7, wheel weapon",
 	"K ragdoll | Backspace respawn | L knock down nearest | F1 physics | F2 network | F3 camera | Esc menu",
 ]
 const GAME_MENU := preload("res://menu/game_menu.tscn")
@@ -37,6 +37,7 @@ var bodies := Bodies.new()
 var soldier_views: SoldierViews
 var view_model: ViewModel
 var effects: Effects
+var projectiles: ProjectileViews
 var sounds: Sounds
 var feedback := Feedback.new()
 var hud: Hud
@@ -83,6 +84,8 @@ var _feet := Vector3.ZERO
 var _fallen := 0
 ## _momentum is the velocity the own soldier was last predicted with.
 var _momentum := Vector3.ZERO
+## _shake shakes the camera after a blast nearby, fading.
+var _shake := 0.0
 var _debug := false
 var _third_person := false
 var _net_graph := false
@@ -287,6 +290,12 @@ func _build_soldiers() -> void:
 	view_model = ViewModel.new()
 	view_model.sun = sun
 	add_child(view_model)
+	projectiles = ProjectileViews.new()
+	projectiles.rules = rules
+	projectiles.effects = effects
+	projectiles.sounds = sounds
+	projectiles.blasted.connect(_on_blast)
+	add_child(projectiles)
 	hud = Hud.new()
 	var layer := CanvasLayer.new()
 	layer.layer = 1
@@ -444,12 +453,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		_turn_wheel(1)
 	elif event.is_action_pressed("reload"):
 		_reload_pressed = true
-	elif event.is_action_pressed("weapon_1"):
-		_weapon = 0
-	elif event.is_action_pressed("weapon_2"):
-		_weapon = 1
-	elif event.is_action_pressed("weapon_3"):
-		_weapon = 2
+	elif _slot_pressed(event) >= 0:
+		_weapon = _slot_pressed(event)
 	elif event.is_action_pressed("toggle_debug"):
 		_debug = not _debug
 	elif event.is_action_pressed("toggle_net_graph"):
@@ -464,6 +469,14 @@ func _unhandled_input(event: InputEvent) -> void:
 		_reset()
 	elif event.is_action_pressed("debug_knock_down"):
 		soldier_views.knock_down(camera.global_position)
+
+
+## _slot_pressed is the slot whose key, 1 to 7, the event pressed, or -1.
+static func _slot_pressed(event: InputEvent) -> int:
+	for slot in Arsenal.MAX_LOADOUT:
+		if event.is_action_pressed("weapon_%d" % (slot + 1)):
+			return slot
+	return -1
 
 
 ## _open_menu shows the game menu and frees the cursor; the soldier stands
@@ -555,12 +568,19 @@ func _process(delta: float) -> void:
 		_events |= result.events
 		if result.has(Arsenal.EVENT_FIRED):
 			_shots.append(result.shot)
+			if rules.weapons.get_tuning(result.shot.weapon).use == WeaponTuning.Use.PROJECTILE:
+				projectiles.predict(result.shot, predictor.soldier, command.tick)
 	_alpha = _accumulator / session.tick_duration()
 	_charge("ticks")
 	var updated := false
 	if _reconnect_since < 0:
 		updated = session.poll()
 		feedback.take(session.news, session.player.soldier, sounds)
+		for event in session.news:
+			if event is Messages.Launch:
+				projectiles.launched(event, session.player.soldier)
+			elif event is Messages.Blast:
+				projectiles.burst(event)
 	feedback.update(delta)
 	if _reconnect_since < 0 and not session.is_alive():
 		_lose(session.failure)
@@ -602,7 +622,9 @@ func _process(delta: float) -> void:
 	_charge("bodies")
 	_update_camera(feet)
 	_update_weapon(delta, own)
+	projectiles.update(session.clock.render_tick, session.tick - 1 + _alpha)
 	effects.update(delta)
+	_shake *= exp(-delta * 4.0)
 	_charge("weapon")
 	soldier_views.update(session, delta, camera)
 	soldier_views.aim(feet + Vector3(0, rules.movement.eye_height, 0), Game.view_direction(_yaw, _pitch), rules.movement.center_height())
@@ -813,6 +835,10 @@ func _update_camera(feet: Vector3) -> void:
 		camera.look_at_from_position(target - forward * 5.5 + Vector3(0, 0.8, 0), target)
 		return
 	camera.look_at_from_position(eye, eye + forward, Vector3.UP)
+	if _shake > 0.01:
+		var time := Time.get_ticks_msec() / 1000.0
+		camera.rotate_object_local(Vector3.RIGHT, _shake * 0.04 * sin(time * 47.0))
+		camera.rotate_object_local(Vector3.UP, _shake * 0.03 * sin(time * 59.0 + 1.3))
 
 
 ## _update_weapon moves the weapon in hand for the frame and shows what the
@@ -844,21 +870,34 @@ func _update_weapon(delta: float, own: Soldier) -> void:
 		view_model.hide_weapon()
 	var state := get_world_3d().direct_space_state
 	for shot in _shots:
-		var reach := rules.weapons.get_tuning(shot.weapon).range
-		var query := PhysicsRayQueryParameters3D.create(shot.origin, shot.origin + shot.direction * reach, Game.LAYER_STATIC | Game.LAYER_VEHICLE)
-		var hit := state.intersect_ray(query)
-		var end: Vector3 = hit["position"] if not hit.is_empty() else shot.origin + shot.direction * reach
+		var shot_tuning := rules.weapons.get_tuning(shot.weapon)
 		var muzzle := view_model.held_muzzle(shot.weapon, _feet, _yaw, _pitch)
 		if muzzle == Vector3.INF:
 			muzzle = camera.global_position
 		if placed:
 			muzzle = view_model.muzzle_in_world(camera)
 			view_model.fired(_noise(shot.direction))
-		effects.shot(muzzle, end, not hit.is_empty())
 		sounds.weapon(shot.weapon, Arsenal.EVENT_FIRED)
+		if shot_tuning.use != WeaponTuning.Use.BULLETS:
+			continue
+		# A tracer for every pellet of a shotgun.
+		var directions := shot.pellets if not shot.pellets.is_empty() else PackedVector3Array([shot.direction])
+		for direction in directions:
+			var query := PhysicsRayQueryParameters3D.create(shot.origin, shot.origin + direction * shot_tuning.range, Game.LAYER_STATIC | Game.LAYER_VEHICLE)
+			var hit := state.intersect_ray(query)
+			var end: Vector3 = hit["position"] if not hit.is_empty() else shot.origin + direction * shot_tuning.range
+			effects.shot(muzzle, end, not hit.is_empty())
 	sounds.weapon(arsenal.weapon(), _events & ~Arsenal.EVENT_FIRED)
 	_shots.clear()
 	_events = 0
+
+
+## _on_blast shakes the camera for a blast nearby and lets the soldiers it
+## kills fly.
+func _on_blast(at: Vector3, radius: float, tick: float) -> void:
+	soldier_views.remember_blast(at, radius, tick)
+	var near := 1.0 - camera.global_position.distance_to(at) / (radius * 5.0)
+	_shake = maxf(_shake, clampf(near, 0.0, 1.0))
 
 
 ## _noise turns a direction into a number in [0, 1) that varies from shot to
@@ -880,7 +919,7 @@ func _die(feet: Vector3, velocity: Vector3) -> void:
 		Game.view_direction(_yaw, 0) * 35 + Vector3(0, 20, 0))
 	var own := session.local_soldier()
 	if _fallen != 0 and own != null:
-		blow = SoldierViews.strike(feet, _yaw, own.hit_box, own.hit_yaw)
+		blow = soldier_views.blow(feet, _yaw, own.hit_box, own.hit_yaw, session.clock.render_tick)
 	bodies.make_room(pool, camera.global_position)
 	if _self_view.fall(pool, velocity, blow):
 		_self_view.visible = true
