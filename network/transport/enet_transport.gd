@@ -53,6 +53,9 @@ static func listen(address: String, tls: TLSOptions) -> Variant:
 	var bind: String = parts[0] if parts[0] != "" else "0.0.0.0"
 	var host := ENetConnection.new()
 	var error := host.create_host_bound(bind, parts[1], _MAX_PEERS, _CHANNEL_COUNT)
+	if error == ERR_CANT_CREATE:
+		# ENet does not say why; nearly always another program holds the port.
+		return "cannot listen on UDP port %d: another server may be using it" % parts[1]
 	if error != OK:
 		return "listen on %s: %s" % [address, error_string(error)]
 	if tls != null:

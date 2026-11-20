@@ -50,7 +50,6 @@ var net_graph: NetGraph
 var jumps := 0
 ## reconnect_lines tell of a lost connection; empty while there is none.
 var reconnect_lines: PackedStringArray = []
-var capture_hint := false
 
 var _font: Font
 var _scale := 1.0
@@ -85,8 +84,6 @@ func _draw() -> void:
 	if not reconnect_lines.is_empty():
 		for i in reconnect_lines.size():
 			_text(reconnect_lines[i], Vector2(18, 160 + 28 * i) * _scale, 22, ORANGE)
-	if capture_hint:
-		_text("Press Esc to capture the mouse", Vector2(18, 132) * _scale, 22, YELLOW)
 
 
 func team_color(of: int) -> Color:

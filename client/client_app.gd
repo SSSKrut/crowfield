@@ -3,7 +3,8 @@ extends Node3D
 ## ClientApp is the game client. It connects to a server and plays: to the
 ## server embedded in it in solo play and when hosting, or to the one given by
 ## -connect. Its world holds the static map for the prediction and the
-## cosmetic physics: ragdolls and props.
+## cosmetic physics: ragdolls and props. The main menu starts it with flags,
+## as the command line does:
 ##
 ##   godot --path . -- [flags]
 ##
@@ -11,12 +12,18 @@ extends Node3D
 ## sent and predicted for each — applies what the server sent, and draws the
 ## soldiers in the recent past around the predicted own soldier.
 
+## left asks to end the game: the player chose to leave, with an empty
+## message, or the game failed, with the reason.
+signal left(message: String)
+
 const RECONNECT_WINDOW := 60.0
 const HELP_LINES := [
 	"WASD move | Space jump | Shift sprint | LMB fire | RMB aim | R reload | 1-3, wheel weapon",
-	"K ragdoll | Backspace respawn | L knock down nearest | F1 physics | F2 network | F3 camera | Esc cursor",
+	"K ragdoll | Backspace respawn | L knock down nearest | F1 physics | F2 network | F3 camera | Esc menu",
 ]
+const GAME_MENU := preload("res://menu/game_menu.tscn")
 const SKY := Color8(135, 175, 205)
+const VIRTUAL_INTERFACES := ["lo", "docker", "br-", "veth", "virbr"]
 
 var settings := {}
 var rules: Rules
@@ -32,6 +39,7 @@ var effects: Effects
 var sounds: Sounds
 var feedback := Feedback.new()
 var hud: Hud
+var menu: GameMenu
 var debug: DebugDraw
 var camera: Camera3D
 var sun: DirectionalLight3D
@@ -41,6 +49,8 @@ var _handshake: Handshake
 var _connector: Connector
 var _local: ServerRunner
 var _local_listeners: Array[Listener] = []
+## _fingerprint is the certificate fingerprint of a host.
+var _fingerprint := ""
 var _memory: Memory.MemoryListener
 ## _self is the own soldier's model, seen in third person and when it falls.
 var _self_view: CharacterView
@@ -102,7 +112,7 @@ var _profile := {}
 var _lap := 0
 
 
-static func create(arguments: PackedStringArray) -> Node:
+static func create(arguments: PackedStringArray) -> ClientApp:
 	var app := ClientApp.new()
 	app.name = "Client"
 	app.set_meta("arguments", arguments)
@@ -110,8 +120,8 @@ static func create(arguments: PackedStringArray) -> Node:
 
 
 static func define_flags(flags: Flags) -> void:
-	flags.define("width", 1280, "window width")
-	flags.define("height", 720, "window height")
+	flags.define("width", ProjectSettings.get_setting("display/window/size/viewport_width"), "window width")
+	flags.define("height", ProjectSettings.get_setting("display/window/size/viewport_height"), "window height")
 	flags.define("frames", 0, "close after this many frames")
 	flags.define("screenshot", "", "save a screenshot on the final frame")
 	flags.define("demo", false, "walk and trigger the ragdoll automatically")
@@ -149,7 +159,7 @@ func _ready() -> void:
 		get_tree().quit()
 		return
 	if error != "":
-		Main.fail(self, error)
+		_quit_with(error)
 		return
 	for name in ["width", "height", "frames", "screenshot", "demo", "movement", "shoot", "cycles", "debug", "tuning",
 			"weapons", "volume", "name", "netsim", "host", "connect", "fingerprint", "config-dir", "dummies",
@@ -157,12 +167,12 @@ func _ready() -> void:
 		settings[name] = flags.get_value(name)
 	var loaded: Variant = Rules.load_files(settings["tuning"], settings["weapons"])
 	if loaded is String:
-		Main.fail(self, loaded)
+		_quit_with(loaded)
 		return
 	rules = loaded
 	var conditions: Variant = NetworkConditions.parse(settings["netsim"])
 	if conditions is String:
-		Main.fail(self, conditions)
+		_quit_with(conditions)
 		return
 	_conditions = conditions
 	_setup_window()
@@ -171,13 +181,13 @@ func _ready() -> void:
 	# send a command every tick, and a stall puts its clock behind the server.
 	var character: Variant = CharacterAsset.load_asset()
 	if character is String:
-		Main.fail(self, character)
+		_quit_with(character)
 		return
 	asset = character
 	_build_soldiers()
 	error = _open()
 	if error != "":
-		Main.fail(self, error)
+		_quit_with(error)
 		return
 	_debug = settings["debug"]
 	_net_graph = settings["netgraph"]
@@ -187,8 +197,11 @@ func _ready() -> void:
 
 
 func _setup_window() -> void:
-	if DisplayServer.get_name() != "headless":
-		DisplayServer.window_set_size(Vector2i(settings["width"], settings["height"]))
+	var size := Vector2i(settings["width"], settings["height"])
+	# The window keeps the size the player gave it, unless the flags ask for another.
+	if DisplayServer.get_name() != "headless" and size != Vector2i(ProjectSettings.get_setting("display/window/size/viewport_width"),
+			ProjectSettings.get_setting("display/window/size/viewport_height")):
+		DisplayServer.window_set_size(size)
 		DisplayServer.window_set_title("Crowfield prototype — stage 2")
 		if settings["max-fps"] == 0:
 			DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
@@ -273,6 +286,14 @@ func _build_soldiers() -> void:
 	add_child(layer)
 	hud.feedback = feedback
 	hud.weapons = rules.weapons
+	menu = GAME_MENU.instantiate()
+	menu.visible = false
+	menu.resumed.connect(_close_menu)
+	menu.left.connect(func() -> void: _quit_with(""))
+	var menu_layer := CanvasLayer.new()
+	menu_layer.layer = 2
+	menu_layer.add_child(menu)
+	add_child(menu_layer)
 	_self_view = asset.instantiate()
 	add_child(_self_view)
 	_self_view.visible = false
@@ -338,7 +359,8 @@ func _open() -> String:
 		server.add_listener(listener)
 		_local_listeners.append(listener)
 		server.certificate_pem = Certificates.pem(certificate[0])
-		print("hosting on %s, certificate fingerprint %s" % [host, Certificates.fingerprint(certificate[0])])
+		_fingerprint = Certificates.fingerprint(certificate[0])
+		print("hosting on %s, certificate fingerprint %s" % [host, _fingerprint])
 	_local = ServerRunner.new(server)
 	add_child(_local)
 	_join(_memory.dial())
@@ -379,41 +401,91 @@ func _exit_tree() -> void:
 	MapScene.free_collision(_map_collision)
 
 
+## _unhandled_input takes the actions of the input map (Project Settings →
+## Input Map) that happen at a press; the held ones _command reads every tick.
 func _unhandled_input(event: InputEvent) -> void:
-	if event is InputEventMouseMotion and _captured:
+	if _failed:
+		return
+	if event.is_action_pressed("menu"):
+		if menu.visible:
+			_close_menu()
+		elif settings["frames"] == 0:
+			_open_menu()
+		return
+	if not _captured:
+		return
+	if event is InputEventMouseMotion:
 		_mouse += event.relative
-	elif event is InputEventMouseButton and event.pressed:
-		match event.button_index:
-			MOUSE_BUTTON_LEFT:
-				_fire_pressed = true
-			MOUSE_BUTTON_WHEEL_UP:
-				_turn_wheel(-1)
-			MOUSE_BUTTON_WHEEL_DOWN:
-				_turn_wheel(1)
-	elif event is InputEventKey and event.pressed and not event.echo:
-		match event.physical_keycode:
-			KEY_ESCAPE:
-				if settings["frames"] == 0:
-					_captured = not _captured
-					Input.mouse_mode = Input.MOUSE_MODE_CAPTURED if _captured else Input.MOUSE_MODE_VISIBLE
-			KEY_F1:
-				_debug = not _debug
-			KEY_F2:
-				_net_graph = not _net_graph
-			KEY_F3:
-				_third_person = not _third_person
-			KEY_K:
-				var own := _own_soldier()
-				if own != null:
-					_die(predictor.drawn(_alpha), own.velocity)
-			KEY_BACKSPACE:
-				_reset()
-			KEY_L:
-				soldier_views.knock_down(camera.global_position)
-			KEY_R:
-				_reload_pressed = true
-			KEY_1, KEY_2, KEY_3:
-				_weapon = event.physical_keycode - KEY_1
+	elif event.is_action_pressed("fire"):
+		_fire_pressed = true
+	elif event.is_action_pressed("weapon_previous"):
+		_turn_wheel(-1)
+	elif event.is_action_pressed("weapon_next"):
+		_turn_wheel(1)
+	elif event.is_action_pressed("reload"):
+		_reload_pressed = true
+	elif event.is_action_pressed("weapon_1"):
+		_weapon = 0
+	elif event.is_action_pressed("weapon_2"):
+		_weapon = 1
+	elif event.is_action_pressed("weapon_3"):
+		_weapon = 2
+	elif event.is_action_pressed("toggle_debug"):
+		_debug = not _debug
+	elif event.is_action_pressed("toggle_net_graph"):
+		_net_graph = not _net_graph
+	elif event.is_action_pressed("toggle_camera"):
+		_third_person = not _third_person
+	elif event.is_action_pressed("debug_ragdoll"):
+		var own := _own_soldier()
+		if own != null:
+			_die(predictor.drawn(_alpha), own.velocity)
+	elif event.is_action_pressed("debug_respawn"):
+		_reset()
+	elif event.is_action_pressed("debug_knock_down"):
+		soldier_views.knock_down(camera.global_position)
+
+
+## _open_menu shows the game menu and frees the cursor; the soldier stands
+## still meanwhile.
+func _open_menu() -> void:
+	_captured = false
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	menu.about = _about()
+	menu.open()
+
+
+func _close_menu() -> void:
+	menu.visible = false
+	_captured = true
+	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+
+
+## _about tells what game this is, for the game menu: on a host, the
+## addresses friends join and the fingerprint they may check.
+func _about() -> String:
+	if settings["connect"] != "":
+		var state := "Playing on" if session != null and _reconnect_since < 0 else "Connecting to"
+		return "%s %s as %s." % [state, settings["connect"], settings["name"]]
+	var bots := " with %d bots" % settings["dummies"] if settings["dummies"] > 0 else ""
+	if settings["host"] == "":
+		return "Solo play%s." % bots
+	var port: int = ENetTransport.split_address(settings["host"])[1]
+	var addresses := PackedStringArray()
+	for interface in IP.get_local_interfaces():
+		var name: String = interface["name"]
+		# The bridges of containers and virtual machines lead nowhere a friend is.
+		if VIRTUAL_INTERFACES.any(func(prefix: String) -> bool: return name.begins_with(prefix)):
+			continue
+		for address: String in interface["addresses"]:
+			if address.count(".") == 3 and not address.begins_with("127.") and not address.begins_with("169.254."):
+				addresses.append(address if port == ENetTransport.DEFAULT_PORT else "%s:%d" % [address, port])
+	var lines := PackedStringArray(["Hosting%s on UDP port %d. Players: %d of %d." % [
+		bots, port, _local.server.player_count(), Game.MAX_PLAYERS]])
+	if not addresses.is_empty():
+		lines.append("Friends on your network join %s." % " or ".join(addresses))
+	lines.append("Certificate fingerprint: %s" % _fingerprint)
+	return "\n".join(lines)
 
 
 ## _turn_wheel turns through the slots that hold a weapon.
@@ -600,21 +672,15 @@ func _command() -> InputCommand:
 		buttons = drill[1]
 		_pitch = -0.08
 	elif _captured:
-		if Input.is_physical_key_pressed(KEY_W):
-			forward += 1
-		if Input.is_physical_key_pressed(KEY_S):
-			forward -= 1
-		if Input.is_physical_key_pressed(KEY_D):
-			right += 1
-		if Input.is_physical_key_pressed(KEY_A):
-			right -= 1
-		if Input.is_physical_key_pressed(KEY_SPACE):
+		forward = Input.get_axis("move_back", "move_forward")
+		right = Input.get_axis("move_left", "move_right")
+		if Input.is_action_pressed("jump"):
 			buttons |= InputCommand.JUMP
-		if Input.is_physical_key_pressed(KEY_SHIFT):
+		if Input.is_action_pressed("sprint"):
 			buttons |= InputCommand.SPRINT
-		if Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT) or _fire_pressed:
+		if Input.is_action_pressed("fire") or _fire_pressed:
 			buttons |= InputCommand.FIRE
-		if Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT):
+		if Input.is_action_pressed("aim"):
 			buttons |= InputCommand.AIM
 		if _reload_pressed:
 			buttons |= InputCommand.RELOAD
@@ -950,7 +1016,6 @@ func _update_hud(feet: Vector3, own: Soldier) -> void:
 			"Connection lost: %s" % _reconnect_reason,
 			"Reconnecting: attempt %d, %d s of %d" % [_reconnect_attempts, int(ClientSession._now() - _reconnect_since), int(RECONNECT_WINDOW)],
 		])
-	hud.capture_hint = not _captured and settings["frames"] == 0
 	hud.queue_redraw()
 
 
@@ -998,10 +1063,11 @@ func _finish() -> void:
 	get_tree().quit()
 
 
+## _quit_with ends the game for a reason: the main menu shows it, or the
+## program ends with it when the game was started by flags.
 func _quit_with(message: String) -> void:
 	_failed = true
-	printerr(message)
-	get_tree().quit(1)
+	left.emit(message)
 
 
 ## FrameStats measures frame times after the first second, which loads and

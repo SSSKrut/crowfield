@@ -1,14 +1,20 @@
 class_name Main
 extends Node
-## Main starts what the command line asks for. Everything after -- belongs to
-## the game:
+## Main starts what the command line asks for. Without arguments it shows the
+## main menu, or runs a dedicated server when there is no window: under
+## --headless and in an export with the dedicated_server feature. Everything
+## after -- belongs to the game:
 ##
-##   godot --path . -- [client flags]           play, solo or on a server
-##   godot --headless --path . -- server [...]  run a dedicated server
+##   godot --path .                              the main menu
+##   godot --path . -- [client flags]            play straight away, solo or on a server
+##   godot --headless --path . -- [server flags] run a dedicated server
 ##   godot --headless --path . -- loadtest [...] load a server with headless clients
-##   godot --headless --path . -- test [filter] run the automatic tests
+##   godot --headless --path . -- test [filter]  run the automatic tests
 ##
-## -help after the mode lists its flags.
+## A mode word (client, server, loadtest, test) may come first; -help after it
+## lists the flags.
+
+const MENU := preload("res://menu/main_menu.tscn")
 
 
 func _ready() -> void:
@@ -17,7 +23,13 @@ func _ready() -> void:
 	if arguments.size() > 0 and not arguments[0].begins_with("-"):
 		mode = arguments[0]
 		arguments = arguments.slice(1)
+	elif OS.has_feature("dedicated_server") or DisplayServer.get_name() == "headless":
+		mode = "server"
+	elif arguments.is_empty():
+		mode = "menu"
 	match mode:
+		"menu":
+			_show_menu("")
 		"test":
 			var filter := arguments[0] if arguments.size() > 0 else ""
 			var failed := TestRunner.run(filter)
@@ -29,10 +41,34 @@ func _ready() -> void:
 		"loadclient":
 			add_child(LoadClient.create(arguments))
 		"client":
-			add_child(ClientApp.create(arguments))
+			_play(arguments, false)
 		_:
 			printerr("unknown mode %s: want client, server, loadtest or test" % mode)
 			get_tree().quit(2)
+
+
+func _show_menu(message: String) -> void:
+	var menu: MainMenu = MENU.instantiate()
+	menu.message = message
+	menu.play.connect(func(arguments: PackedStringArray) -> void:
+		menu.queue_free()
+		_play(arguments, true))
+	add_child(menu)
+
+
+## _play starts the client. One started from the menu goes back to it when
+## the game ends; one started by flags ends the program when the game fails,
+## for scripts that check how it ended.
+func _play(arguments: PackedStringArray, from_menu: bool) -> void:
+	var app := ClientApp.create(arguments)
+	app.left.connect(func(message: String) -> void:
+		app.queue_free()
+		if message != "" and not from_menu:
+			printerr(message)
+			get_tree().quit(1)
+			return
+		_show_menu(message), CONNECT_DEFERRED)
+	add_child(app)
 
 
 ## fail reports an error of startup and ends the program.

@@ -1,0 +1,175 @@
+[gd_scene load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://menu/main_menu.gd" id="1_menu"]
+[ext_resource type="Theme" path="res://menu/theme.tres" id="2_theme"]
+
+[sub_resource type="Gradient" id="Gradient_sky"]
+colors = PackedColorArray(0.36, 0.5, 0.62, 1, 0.07, 0.08, 0.1, 1)
+
+[sub_resource type="GradientTexture2D" id="GradientTexture2D_sky"]
+gradient = SubResource("Gradient_sky")
+fill_to = Vector2(0, 1)
+
+[node name="MainMenu" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme = ExtResource("2_theme")
+script = ExtResource("1_menu")
+
+[node name="Background" type="TextureRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+texture = SubResource("GradientTexture2D_sky")
+expand_mode = 1
+
+[node name="Center" type="CenterContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Panel" type="PanelContainer" parent="Center"]
+custom_minimum_size = Vector2(500, 0)
+layout_mode = 2
+
+[node name="Rows" type="VBoxContainer" parent="Center/Panel"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="Title" type="Label" parent="Center/Panel/Rows"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 44
+text = "CROWFIELD"
+horizontal_alignment = 1
+
+[node name="Subtitle" type="Label" parent="Center/Panel/Rows"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.62, 0.67, 0.74, 1)
+theme_override_font_sizes/font_size = 15
+text = "Multiplayer infantry shooter prototype"
+horizontal_alignment = 1
+
+[node name="Gap" type="Control" parent="Center/Panel/Rows"]
+custom_minimum_size = Vector2(0, 4)
+layout_mode = 2
+
+[node name="Fields" type="GridContainer" parent="Center/Panel/Rows"]
+layout_mode = 2
+theme_override_constants/h_separation = 14
+theme_override_constants/v_separation = 10
+columns = 2
+
+[node name="NameLabel" type="Label" parent="Center/Panel/Rows/Fields"]
+layout_mode = 2
+text = "Name"
+
+[node name="Name" type="LineEdit" parent="Center/Panel/Rows/Fields"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Player"
+placeholder_text = "Player"
+max_length = 32
+
+[node name="BotsLabel" type="Label" parent="Center/Panel/Rows/Fields"]
+layout_mode = 2
+text = "Bots"
+
+[node name="Bots" type="SpinBox" parent="Center/Panel/Rows/Fields"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+tooltip_text = "Roaming bot soldiers on your own server: in solo play and when you host. Half of them are enemies."
+max_value = 256.0
+value = 16.0
+
+[node name="SoloSeparator" type="HSeparator" parent="Center/Panel/Rows"]
+layout_mode = 2
+
+[node name="Solo" type="Button" parent="Center/Panel/Rows"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 42)
+layout_mode = 2
+text = "Play solo"
+
+[node name="HostTitle" type="Label" parent="Center/Panel/Rows"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.62, 0.67, 0.74, 1)
+theme_override_font_sizes/font_size = 15
+text = "Host a game: friends join your address and port"
+
+[node name="HostRow" type="HBoxContainer" parent="Center/Panel/Rows"]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="PortLabel" type="Label" parent="Center/Panel/Rows/HostRow"]
+layout_mode = 2
+text = "UDP port"
+
+[node name="Port" type="SpinBox" parent="Center/Panel/Rows/HostRow"]
+unique_name_in_owner = true
+layout_mode = 2
+min_value = 1.0
+max_value = 65535.0
+value = 7777.0
+
+[node name="Host" type="Button" parent="Center/Panel/Rows/HostRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 42)
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Host game"
+
+[node name="JoinTitle" type="Label" parent="Center/Panel/Rows"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.62, 0.67, 0.74, 1)
+theme_override_font_sizes/font_size = 15
+text = "Join a game: the port defaults to 7777"
+
+[node name="JoinRow" type="HBoxContainer" parent="Center/Panel/Rows"]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="Address" type="LineEdit" parent="Center/Panel/Rows/JoinRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+placeholder_text = "192.168.1.20 or host:port"
+
+[node name="Join" type="Button" parent="Center/Panel/Rows/JoinRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(130, 42)
+layout_mode = 2
+text = "Join"
+
+[node name="Status" type="Label" parent="Center/Panel/Rows"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 0.48, 0.42, 1)
+theme_override_font_sizes/font_size = 15
+autowrap_mode = 3
+
+[node name="QuitSeparator" type="HSeparator" parent="Center/Panel/Rows"]
+layout_mode = 2
+
+[node name="Quit" type="Button" parent="Center/Panel/Rows"]
+custom_minimum_size = Vector2(0, 42)
+layout_mode = 2
+text = "Quit"
+
+[connection signal="pressed" from="Center/Panel/Rows/Solo" to="." method="_on_solo_pressed"]
+[connection signal="pressed" from="Center/Panel/Rows/HostRow/Host" to="." method="_on_host_pressed"]
+[connection signal="text_submitted" from="Center/Panel/Rows/JoinRow/Address" to="." method="_on_address_submitted"]
+[connection signal="pressed" from="Center/Panel/Rows/JoinRow/Join" to="." method="_on_join_pressed"]
+[connection signal="pressed" from="Center/Panel/Rows/Quit" to="." method="_on_quit_pressed"]
