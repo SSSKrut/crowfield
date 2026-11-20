@@ -14,9 +14,6 @@ const MAX_HEALTH := 100
 enum Team { NONE, BLUE, RED }
 enum Controller { NONE, PLAYER, BOT }
 
-## PROTOTYPE_MAP names the prototype scene in Welcome; it is the only map yet.
-const PROTOTYPE_MAP := "prototype"
-
 ## Collision layers (ARCHITECTURE.md, 7.2). Characters meet the static world,
 ## vehicles and props, never each other; cosmetic bodies such as ragdolls
 ## only meet the static world and each other.

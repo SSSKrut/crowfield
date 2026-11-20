@@ -8,8 +8,8 @@ extends RefCounted
 
 ## A soldier that falls this far below the map goes back to the spawn.
 const FALL_LIMIT := -10.0
-## GRID_CELL_SIZE suits the prototype map and the queries of dummies, which
-## look a little over a metre around.
+## GRID_CELL_SIZE suits the queries of bots, which keep a little over a metre
+## from each other, and the tracks of shots.
 const GRID_CELL_SIZE := 4.0
 const HELLO_TIMEOUT := 5.0
 ## Messages are limited per connection before they are decoded
@@ -34,7 +34,10 @@ var reservations: Array[Reservation] = []
 var tick := 0
 var snapshot_interval := 3
 var match_seed := 0
-var dummies: Dummies
+var navigation: Navigation
+var bots: Bots
+## random places the soldiers of players in the zones of their teams.
+var random := RandomNumberGenerator.new()
 var grid := SoldierGrid.new(GRID_CELL_SIZE)
 var history: PoseHistory
 var profile := TickProfile.new()
@@ -54,9 +57,10 @@ var _shots: Array[PendingShot] = []
 var _snapshots := SnapshotSender.new()
 
 
-## create builds the world of the prototype scene. Only its static part runs
-## on the server: dynamic props are not replicated yet, so clients keep them
-## as local decoration. It returns the server, or the error as a String.
+## create builds the world of the map of the settings and its navigation.
+## Only its static part runs on the server: dynamic props are not replicated
+## yet, so clients keep them as local decoration. It returns the server, or
+## the error as a String.
 static func create(server_settings: ServerSettings, server_rules: Rules) -> Variant:
 	var error := server_settings.validate()
 	if error == "":
@@ -66,11 +70,11 @@ static func create(server_settings: ServerSettings, server_rules: Rules) -> Vari
 	var server := Server.new()
 	server.settings = server_settings
 	server.rules = server_rules
-	server.scene = MapScene.prototype()
+	server.scene = server_settings.scene if server_settings.scene != null else MapScene.named(server_settings.map)
 	server.space = PhysicsServer3D.space_create()
 	server._collision = server.scene.build_collision(server.space)
 	server._space_state = PhysicsServer3D.space_get_direct_state(server.space)
-	var capacity := server_settings.max_players + server_settings.dummies
+	var capacity := server_settings.max_players + server_settings.bots
 	server.soldiers = SoldierSet.new(capacity)
 	server.history = PoseHistory.new(capacity)
 	server.players.resize(Game.MAX_PLAYERS)
@@ -78,8 +82,10 @@ static func create(server_settings: ServerSettings, server_rules: Rules) -> Vari
 	server.match_seed = server_settings.seed
 	if server.match_seed == 0:
 		server.match_seed = Crypto.new().generate_random_bytes(8).decode_s64(0)
-	server.dummies = Dummies.new(server)
-	server.dummies.spawn_all(server_settings.dummies)
+	server.random.seed = server.match_seed ^ 7919
+	server.navigation = Navigation.create(server.scene)
+	server.bots = Bots.new(server)
+	server.bots.spawn_all(server_settings.bots)
 	return server
 
 
@@ -96,8 +102,10 @@ func close() -> void:
 		MapScene.free_collision(_collision)
 		PhysicsServer3D.free_rid(space)
 	space = RID()
-	# The dummies and the sessions point back at the server: let go of them.
-	dummies = null
+	if navigation != null:
+		navigation.close()
+	# The bots and the sessions point back at the server: let go of them.
+	bots = null
 	sessions.clear()
 	players.fill(null)
 
@@ -121,10 +129,10 @@ func step() -> void:
 		if player != null and player.soldier != 0:
 			_move_player(player)
 	profile.lap(TickProfile.System.PLAYERS)
-	dummies.move()
-	profile.lap(TickProfile.System.DUMMIES)
+	bots.update()
+	profile.lap(TickProfile.System.BOTS)
 	_resolve_shots()
-	dummies.kill()
+	bots.kill()
 	profile.lap(TickProfile.System.SHOTS)
 	grid.rebuild(soldiers)
 	profile.lap(TickProfile.System.GRID)
@@ -165,11 +173,32 @@ func _move_player(player: ServerPlayer) -> void:
 		return
 	var result := player.controller.run_command(rules.weapons, soldier, command, match_seed)
 	if result.has(Arsenal.EVENT_FIRED):
-		_shots.append(PendingShot.new(soldier.id, soldier.team, result.shot, _view_time(command)))
-		soldier.shots += 1
-		profile.shots += 1
+		queue_shot(soldier, result.shot, _view_time(command))
 	if soldier.position.y < FALL_LIMIT:
-		player.controller.teleport(soldier, scene.spawn_of(soldier.team))
+		player.controller.teleport(soldier, spawn_point(soldier.team, random))
+
+
+## queue_shot adds the shot a soldier fired this tick, to resolve with the
+## others once every soldier acted; view is the moment its shooter saw.
+func queue_shot(soldier: Soldier, shot: Shot, view: float) -> void:
+	_shots.append(PendingShot.new(soldier.id, soldier.team, shot, view))
+	soldier.shots += 1
+	profile.shots += 1
+
+
+## spawn_point picks where a soldier of a team appears: a random point of the
+## zone of the team on the navigation mesh, on the ground; the zone itself
+## when it is a point.
+func spawn_point(team: int, from: RandomNumberGenerator) -> Vector3:
+	var zone := scene.zone_of(team)
+	if zone.radius <= 0:
+		return zone.center
+	var offset := Vector2.from_angle(from.randf() * TAU) * sqrt(from.randf()) * zone.radius
+	var point := navigation.closest(zone.center + Vector3(offset.x, 0.5, offset.y))
+	var down := cast_ray(point + Vector3(0, 1.0, 0), Vector3.DOWN, 2.5, Game.LAYER_STATIC)
+	if down >= 0:
+		point.y += 1.0 - down
+	return point
 
 
 ## spawn gives a player a soldier at the spawn of its team, the team it
@@ -177,7 +206,7 @@ func _move_player(player: ServerPlayer) -> void:
 func _spawn(player: ServerPlayer) -> bool:
 	if player.team == Game.Team.NONE:
 		player.team = _smaller_team()
-	var at := scene.spawn_of(player.team)
+	var at := spawn_point(player.team, random)
 	var soldier := Soldier.new()
 	soldier.team = player.team
 	soldier.controller = Game.Controller.PLAYER
@@ -310,7 +339,7 @@ func _hello(session: Session, hello: Messages.Hello) -> void:
 	welcome.tick_rate = Game.TICK_RATE
 	welcome.snapshot_rate = settings.snapshot_rate
 	welcome.server_tick = tick
-	welcome.map = Game.PROTOTYPE_MAP
+	welcome.map = scene.name
 	welcome.map_hash = scene.hash_value()
 	welcome.tuning_hash = rules.hash_value()
 	welcome.match_seed = match_seed
@@ -500,6 +529,8 @@ func _resolve_shots() -> void:
 		victim.hit_yaw = Game.yaw_of(direction)
 		var tuning := rules.weapons.get_tuning(pending.shot.weapon)
 		var taken := damage(victim, tuning.hit_damage(zone, struck[2]))
+		if victim.is_bot() and not taken[1]:
+			bots.hurt(victim.bot, pending.shooter)
 		_tell_hit(pending, victim, zone, taken[0], taken[1])
 	_shots.clear()
 
@@ -554,7 +585,7 @@ func cast_ray(origin: Vector3, direction: Vector3, length: float, mask: int) -> 
 
 
 ## _tell_hit sends the events of a hit: the shooter learns it hit, the victim
-## where from, and everyone a death a human took part in.
+## where from, and everyone a death, for the kill feed.
 func _tell_hit(pending: PendingShot, victim: Soldier, zone: int, taken: int, killed: bool) -> void:
 	var shooter := soldiers.get_soldier(pending.shooter)
 	var shooter_player := player_of(shooter)
@@ -575,7 +606,7 @@ func _tell_hit(pending: PendingShot, victim: Soldier, zone: int, taken: int, kil
 		hurt.zone = zone
 		hurt.damage = mini(taken, 255)
 		_send_event(victim_player, hurt)
-	if not killed or (victim_player == null and shooter_player == null):
+	if not killed:
 		return
 	var death := Messages.Death.new()
 	death.tick = tick
@@ -607,7 +638,7 @@ func name_of(soldier: Soldier) -> String:
 	if soldier == null:
 		return "?"
 	if soldier.controller == Game.Controller.BOT:
-		return "Dummy %d" % soldier.bot
+		return Bots.name_of(soldier.bot)
 	var player: ServerPlayer = players[soldier.player]
 	if player != null:
 		return player.name
@@ -644,7 +675,7 @@ func damage(victim: Soldier, amount: int) -> Array:
 				player.controller = null
 			player.respawn_at = back
 	elif victim.controller == Game.Controller.BOT:
-		dummies.died(victim.bot, back)
+		bots.died(victim.bot, back)
 	return [taken, true]
 
 
@@ -660,7 +691,7 @@ func _respawn_dead() -> void:
 		soldiers.remove(player.soldier)
 		player.soldier = 0
 		_spawn(player)
-	dummies.respawn_dead()
+	bots.respawn_dead()
 
 
 ## Session is a connection as the simulation sees it. It becomes a player once

@@ -165,25 +165,41 @@ func stand_up() -> void:
 ## _apply moves the bones with ragdoll parts to their bodies. The other bones
 ## keep their pose relative to their parents, so the hands follow the forearms
 ## and the head's children the head; only the ancestors of parts need a place,
-## to set the parts' poses relative to them.
+## to set the parts' poses relative to them. The ancestors of the hips, the
+## root and the body, go with the hips as they stood over them: the shell of
+## the torso hangs from the body and falls with it.
 func _apply(transforms: Array[Transform3D]) -> void:
 	var rig := ragdoll.pool.rig
 	var to_skeleton := skeleton.global_transform.affine_inverse()
 	var rotation := skeleton.global_basis.orthonormalized().inverse()
 	if _globals.size() != skeleton.get_bone_count():
 		_globals.resize(skeleton.get_bone_count())
+	var below := rig.parts[RagdollRig.Part.HIPS].bone
+	_globals[below] = _global_of(rig, transforms, RagdollRig.Part.HIPS, to_skeleton, rotation)
+	for bone in rig.above_hips:
+		_globals[bone] = _globals[below] * _base_locals[below].affine_inverse()
+		below = bone
 	for bone in rig.moved:
 		var parent := skeleton.get_bone_parent(bone)
 		var part := rig.part_of_bone[bone]
-		if part < 0:
-			_globals[bone] = _base_locals[bone] if parent < 0 else _globals[parent] * _base_locals[bone]
+		var global: Transform3D
+		if rig.is_above_hips[bone] == 1:
+			global = _globals[bone]
+		elif part < 0:
+			_globals[bone] = _globals[parent] * _base_locals[bone]
 			continue
-		var world: Transform3D = transforms[part] * rig.parts[part].to_part.affine_inverse()
-		var global := Transform3D(rotation * world.basis, to_skeleton * world.origin)
-		_globals[bone] = global
+		else:
+			global = _global_of(rig, transforms, part, to_skeleton, rotation)
+			_globals[bone] = global
 		var local := global if parent < 0 else _globals[parent].affine_inverse() * global
 		skeleton.set_bone_pose_position(bone, local.origin)
 		skeleton.set_bone_pose_rotation(bone, local.basis.get_rotation_quaternion())
+
+
+## _global_of is where the bone of a part is in the space of the skeleton.
+func _global_of(rig: RagdollRig, transforms: Array[Transform3D], part: int, to_skeleton: Transform3D, rotation: Basis) -> Transform3D:
+	var world: Transform3D = transforms[part] * rig.parts[part].to_part.affine_inverse()
+	return Transform3D(rotation * world.basis, to_skeleton * world.origin)
 
 
 var _globals: Array[Transform3D] = []

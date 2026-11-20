@@ -89,9 +89,19 @@ text = "Bots"
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
-tooltip_text = "Roaming bot soldiers on your own server: in solo play and when you host. Half of them are enemies."
-max_value = 256.0
-value = 16.0
+tooltip_text = "Bots on your own server, in solo play and when you host: they look for enemies and fight. Half of them are on your team."
+max_value = 240.0
+value = 24.0
+
+[node name="MapLabel" type="Label" parent="Center/Panel/Rows/Fields"]
+layout_mode = 2
+text = "Map"
+
+[node name="Map" type="OptionButton" parent="Center/Panel/Rows/Fields"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+tooltip_text = "The map of your own server. Joining a server, you play its map."
 
 [node name="SoloSeparator" type="HSeparator" parent="Center/Panel/Rows"]
 layout_mode = 2

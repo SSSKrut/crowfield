@@ -243,9 +243,9 @@ func test_death_stops_the_prediction_until_a_new_soldier() -> void:
 
 
 ## Through the whole client path — session, interpolation, lag compensation —
-## a shot without spread at the drawn body of the nearest enemy dummy hits,
+## a shot without spread at the drawn body of the nearest enemy bot hits,
 ## as long as nothing static stands in the way.
-func test_shots_at_drawn_dummies_hit() -> void:
+func test_shots_at_drawn_bots_hit() -> void:
 	var rules := Rules.new()
 	var rifle := rules.weapons.rifle
 	rifle.hip_spread = 0
@@ -256,13 +256,14 @@ func test_shots_at_drawn_dummies_hit() -> void:
 	rifle.kick_pitch = 0
 	rifle.kick_yaw = 0
 	var configure := func(settings: ServerSettings) -> void:
-		settings.dummies = 48
+		settings.bots = 48
+		settings.bot_ai = false
 		settings.max_players = 1
 	var harness = preload("res://tests/harness.gd").new(configure, rules)
 	cleanup(func() -> void: harness.close())
 	var server: Server = harness.server
 	var space := _space()
-	var client := HeadlessClient.new(harness.listener.dial(), "aimer", rules, 1, space)
+	var client := HeadlessClient.new(harness.listener.dial(), "aimer", rules, 1, space, func(_map: String) -> MapScene: return harness.server.scene)
 	cleanup(func() -> void: client.close())
 	var state := PhysicsServer3D.space_get_direct_state(space)
 	var shots := 0
@@ -288,7 +289,7 @@ func test_shots_at_drawn_dummies_hit() -> void:
 	check(shots >= 15 and hits >= clear * 9 / 10, "%d hits of %d shots with a clear line (%d shots)" % [hits, clear, shots])
 
 
-## _enemy_in_view is [the eye, the body of the nearest enemy dummy within 25 m]
+## _enemy_in_view is [the eye, the body of the nearest enemy bot within 25 m]
 ## where the client draws it now, or [].
 static func _enemy_in_view(client: HeadlessClient, rules: Rules) -> Array:
 	if client.session == null or not client.predictor.started:

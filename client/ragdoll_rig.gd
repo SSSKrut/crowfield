@@ -23,6 +23,12 @@ var part_of_bone := PackedInt32Array()
 ## bones a fall needs the place of. Other bones keep their pose relative to
 ## their parents and follow by themselves.
 var moved := PackedInt32Array()
+## above_hips are the ancestors of the hips, nearest first: the root and the
+## body, which the shell of the torso hangs from. They have no parts, and go
+## where the hips take them.
+var above_hips := PackedInt32Array()
+## is_above_hips marks them by bone.
+var is_above_hips := PackedByteArray()
 
 
 ## build lays the parts out on the reference pose of the asset, whose bones
@@ -53,6 +59,12 @@ static func build(asset: CharacterAsset, reference: Skeleton3D) -> RagdollRig:
 	for bone in reference.get_bone_count():
 		if needed.has(bone):
 			rig.moved.append(bone)
+	rig.is_above_hips.resize(reference.get_bone_count())
+	var above := reference.get_bone_parent(rig.parts[Part.HIPS].bone)
+	while above >= 0:
+		rig.above_hips.append(above)
+		rig.is_above_hips[above] = 1
+		above = reference.get_bone_parent(above)
 	return rig
 
 

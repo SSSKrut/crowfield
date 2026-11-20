@@ -4,10 +4,10 @@ extends Node
 ## they play with random input through the whole path of a real client —
 ## ENet with DTLS, the protocol, the clock, prediction and snapshot deltas —
 ## but draw nothing. They run in processes of their own, as real clients do,
-## a few per process. Without -connect it starts its own server with dummies
+## a few per process. Without -connect it starts its own server with bots
 ## on the loopback address.
 ##
-##   godot --headless --path . -- loadtest -clients=16 -dummies=256 -duration=10m -report=60s
+##   godot --headless --path . -- loadtest -clients=16 -bots=256 -duration=10m -report=60s
 ##
 ## Every report shows per client the ticks and snapshots per second, the
 ## traffic, clock jumps, corrections of the prediction (and how many of them
@@ -43,7 +43,9 @@ func _ready() -> void:
 	flags.define("per-process", 2, "headless clients in each process")
 	flags.define("connect", "", "server address; without it the load test starts its own")
 	flags.define("fingerprint", "", "certificate fingerprint of the -connect server")
-	flags.define("dummies", 256, "dummies of the own server")
+	flags.define("bots", 256, "bots of the own server")
+	flags.define("bot-ai", false, "let the bots of the own server fight; by default they only roam")
+	flags.define("map", "prototype", "map of the own server: %s" % ", ".join(MapScene.MAPS))
 	flags.define("listen", "127.0.0.1:47800", "UDP address of the own server")
 	flags.define("duration", Flags.Duration.new(60), "how long to play")
 	flags.define("report", Flags.Duration.new(10), "how often to report")
@@ -57,7 +59,7 @@ func _ready() -> void:
 	if error != "":
 		Main.fail(self, error)
 		return
-	for name in ["clients", "per-process", "connect", "fingerprint", "dummies", "listen", "duration", "report", "netsim", "seed"]:
+	for name in ["clients", "per-process", "connect", "fingerprint", "bots", "bot-ai", "map", "listen", "duration", "report", "netsim", "seed"]:
 		_settings[name] = flags.get_value(name)
 	var address: String = _settings["connect"]
 	var fingerprint: String = _settings["fingerprint"]
@@ -90,11 +92,13 @@ func _ready() -> void:
 	print("load test: %d clients in %d processes on %s for %d s" % [_settings["clients"], _processes.size(), address, int(_settings["duration"])])
 
 
-## _start_server starts the own server with dummies. It returns [the
+## _start_server starts the own server with bots. It returns [the
 ## fingerprint of its certificate, error].
 func _start_server() -> Array:
 	var settings := ServerSettings.new()
-	settings.dummies = _settings["dummies"]
+	settings.bots = _settings["bots"]
+	settings.bot_ai = _settings["bot-ai"]
+	settings.map = _settings["map"]
 	settings.seed = _settings["seed"]
 	settings.stats_interval = _settings["report"]
 	var made: Variant = Server.create(settings, Rules.new())

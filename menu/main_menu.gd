@@ -14,6 +14,7 @@ var message := ""
 
 @onready var _name: LineEdit = %Name
 @onready var _bots: SpinBox = %Bots
+@onready var _map: OptionButton = %Map
 @onready var _port: SpinBox = %Port
 @onready var _address: LineEdit = %Address
 @onready var _status: Label = %Status
@@ -22,17 +23,24 @@ var message := ""
 func _ready() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	_port.value = ENetTransport.DEFAULT_PORT
+	for map_name in MapScene.MAPS:
+		_map.add_item(map_name.capitalize())
 	_load()
 	_show_status(message)
 	%Solo.grab_focus()
 
 
 func _on_solo_pressed() -> void:
-	_start(["-dummies=%d" % _bots.value])
+	_start(_own_server())
 
 
 func _on_host_pressed() -> void:
-	_start(["-dummies=%d" % _bots.value, "-host=:%d" % _port.value])
+	_start(_own_server() + ["-host=:%d" % _port.value])
+
+
+## _own_server are the flags of the server the player starts: its map and bots.
+func _own_server() -> Array:
+	return ["-map=" + MapScene.MAPS[_map.selected], "-bots=%d" % _bots.value]
 
 
 func _on_join_pressed() -> void:
@@ -79,6 +87,9 @@ func _load() -> void:
 		return
 	_name.text = config.get_value("player", "name", _name.text)
 	_bots.value = config.get_value("game", "bots", _bots.value)
+	var map_index := MapScene.MAPS.find(config.get_value("game", "map", ""))
+	if map_index >= 0:
+		_map.selected = map_index
 	_port.value = config.get_value("host", "port", _port.value)
 	_address.text = config.get_value("join", "address", _address.text)
 
@@ -87,6 +98,7 @@ func _save() -> void:
 	var config := ConfigFile.new()
 	config.set_value("player", "name", _name.text.strip_edges())
 	config.set_value("game", "bots", int(_bots.value))
+	config.set_value("game", "map", MapScene.MAPS[_map.selected])
 	config.set_value("host", "port", int(_port.value))
 	config.set_value("join", "address", _address.text.strip_edges())
 	config.save(SETTINGS)

@@ -1,29 +1,35 @@
 class_name Handshake
 extends RefCounted
 ## Handshake joins a server over a connection: Hello, then Welcome or Reject,
-## then Ready. A player who lost its connection gives the token of its last
-## session to get its place back; a new one gives none. Poll it every frame
-## until done() or failed().
+## then Ready. The Welcome names the map the server plays; the client builds it
+## before it says Ready, and refuses a map that differs from its own. A player
+## who lost its connection gives the token of its last session to get its
+## place back; a new one gives none. Poll it every frame until done() or
+## failed().
 
 const TIMEOUT := 5.0
 
 var conn: Conn
 var session: ClientSession
+## scene is the map the server plays, once welcomed.
+var scene: MapScene
 ## error tells why the handshake failed.
 var error := ""
 var _name: String
 var _rules: Rules
-var _map_hash: int
+var _maps: Callable
 var _token: PackedByteArray
 var _started := 0.0
 var _sent := -1.0
 
 
-func _init(connection: Conn, player_name: String, rules: Rules, map_hash: int, token: PackedByteArray = PackedByteArray()) -> void:
+## maps is called with the name of the map the server plays and returns the
+## MapScene the client built for it, or the error as a String.
+func _init(connection: Conn, player_name: String, rules: Rules, maps: Callable, token: PackedByteArray = PackedByteArray()) -> void:
 	conn = connection
 	_name = player_name
 	_rules = rules
-	_map_hash = map_hash
+	_maps = maps
 	_token = token
 	_started = ClientSession._now()
 
@@ -80,13 +86,21 @@ func poll() -> void:
 		problem = "server runs at %d Hz, the client at %d Hz" % [welcome.tick_rate, Game.TICK_RATE]
 	elif welcome.tuning_hash != _rules.hash_value():
 		problem = "server uses different movement or weapon tuning; prediction would not match"
-	elif welcome.map != Game.PROTOTYPE_MAP or welcome.map_hash != _map_hash:
-		problem = "server plays map %s, which differs from the client's %s" % [welcome.map, Game.PROTOTYPE_MAP]
+	else:
+		var built: Variant = _maps.call(welcome.map)
+		if built is String:
+			problem = "server plays map %s: %s" % [welcome.map, built]
+		elif (built as MapScene).hash_value() != welcome.map_hash:
+			problem = "server plays map %s, which differs from the client's" % welcome.map
+		else:
+			scene = built
 	if problem != "":
 		_fail(problem)
 		conn.close("handshake failed")
 		return
 	conn.send_reliable(Conn.Channel.CONTROL, Protocol.encode(Messages.Ready.new()))
+	# The server went on while the map was built.
+	welcome.server_tick += floori((ClientSession._now() - _sent - rtt) * Game.TICK_RATE)
 	session = ClientSession.new(conn, _name, welcome, rtt)
 
 

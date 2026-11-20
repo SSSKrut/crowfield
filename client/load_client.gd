@@ -13,6 +13,7 @@ var _names: PackedStringArray = []
 var _next: PackedFloat64Array = []
 var _space: RID
 var _collision: Array[RID] = []
+var _scene: MapScene
 var _rules: Rules
 var _conditions: NetworkConditions
 var _report_at := 0.0
@@ -54,8 +55,8 @@ func _ready() -> void:
 		return
 	_conditions = conditions
 	# The clients predict in one space: their capsules do not meet each other.
+	# The map goes into it once the server names it.
 	_space = PhysicsServer3D.space_create()
-	_collision = MapScene.prototype().build_collision(_space)
 	Engine.max_fps = 1000
 	for i in _settings["clients"]:
 		_names.append("Bot %d" % (_settings["first"] + i))
@@ -102,7 +103,7 @@ func _start(i: int) -> void:
 	var conn := connector.conn
 	if not _conditions.is_none():
 		conn = SimulatedConn.new(conn, _conditions)
-	_clients[i] = HeadlessClient.new(conn, _names[i], _rules, _settings["seed"] + _settings["first"] + i, _space)
+	_clients[i] = HeadlessClient.new(conn, _names[i], _rules, _settings["seed"] + _settings["first"] + i, _space, _load_map)
 	_connectors[i] = null
 	_next[i] = ClientSession._now()
 	_joined += 1
@@ -161,3 +162,15 @@ func _exit_tree() -> void:
 	MapScene.free_collision(_collision)
 	if _space.is_valid():
 		PhysicsServer3D.free_rid(_space)
+
+
+## _load_map builds the map the server plays in the space of the clients, the
+## first time a server names it.
+func _load_map(map_name: String) -> Variant:
+	if _scene != null:
+		return _scene if _scene.name == map_name else "the other clients play %s" % _scene.name
+	_scene = MapScene.named(map_name)
+	if _scene == null:
+		return "the client has no such map"
+	_collision = _scene.build_collision(_space)
+	return _scene

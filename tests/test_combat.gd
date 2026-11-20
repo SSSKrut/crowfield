@@ -1,6 +1,6 @@
 extends TestCase
 ## Combat on the server: hits by zone, walls and teammates that stop shots,
-## death and the return of dummies and players, and lag compensation.
+## death and the return of bots and players, and lag compensation.
 
 const FiringRange := preload("res://tests/firing_range.gd")
 
@@ -51,32 +51,33 @@ func test_teammates_shield_but_are_spared() -> void:
 			"friendly fire %s: the teammate has %d health, the enemy behind it %d" % [friendly_fire, range.health(friend), range.health(behind)])
 
 
-## A dead dummy stays where it fell, shots pass it, and it comes back after the
+## A dead bot stays where it fell, shots pass it, and it comes back after the
 ## delay as a new soldier of its team.
-func test_dead_dummy_comes_back_as_a_new_soldier() -> void:
+func test_dead_bot_comes_back_as_a_new_soldier() -> void:
 	var range := _range(func(settings: ServerSettings) -> void:
-		settings.dummies = 3
+		settings.bots = 3
+		settings.bot_ai = false
 		settings.respawn_delay = 0.5)
 	var server := range.server
-	var dead: int = server.dummies._soldiers[0]
+	var dead: int = server.bots.bots[0].soldier
 	server.damage(server.soldiers.get_soldier(dead), 60)
 	var wounded := server.soldiers.get_soldier(dead)
-	check(wounded.alive and wounded.health == 40, "after 60 damage the dummy is alive %s with %d health" % [wounded.alive, wounded.health])
+	check(wounded.alive and wounded.health == 40, "after 60 damage the bot is alive %s with %d health" % [wounded.alive, wounded.health])
 	server.damage(server.soldiers.get_soldier(dead), 40)
 	var corpse := server.soldiers.get_soldier(dead).copy()
-	if not check(not corpse.alive and corpse.health == 0 and server.profile.kills == 1, "after 100 damage the dummy is alive %s, %d kills" % [corpse.alive, server.profile.kills]):
+	if not check(not corpse.alive and corpse.health == 0 and server.profile.kills == 1, "after 100 damage the bot is alive %s, %d kills" % [corpse.alive, server.profile.kills]):
 		return
 	range.step(1)
 	range.fire(corpse.position + Vector3(0, 0.85, 0))
 	range.step(30 - 2 - server.rules.weapons.assault_rifle.fire_interval())
 	var still := server.soldiers.get_soldier(dead)
-	check(still != null and still.position == corpse.position, "before the delay the dead dummy moved or went")
+	check(still != null and still.position == corpse.position, "before the delay the dead bot moved or went")
 	check_equal(server.profile.hits, 0, "hits on the dead")
 	range.step(2)
 	check(server.soldiers.get_soldier(dead) == null, "the dead soldier is still there after the delay")
-	var back := server.soldiers.get_soldier(server.dummies._soldiers[0])
+	var back := server.soldiers.get_soldier(server.bots.bots[0].soldier)
 	check(back != null and back.id != dead and back.alive and back.health == Game.MAX_HEALTH and back.team == corpse.team,
-		"the dummy came back as %s" % [back])
+		"the bot came back as %s" % [back])
 
 
 ## A dead player stops moving and shooting, has no capsule and is told when it
@@ -155,11 +156,11 @@ func test_pose_history_interpolates_and_forgets() -> void:
 	check(history.at(id, 10).is_empty() and not history.at(other, 10).is_empty(), "the slot's former soldier still resolves")
 
 
-## Dummies roam the map: they move, stay inside the play area, keep to the
+## Passive bots roam the map: they move, stay inside the play area, keep to the
 ## floor or what they stepped onto, and none stands still for long.
-func test_dummies_roam_without_getting_stuck() -> void:
+func test_passive_bots_roam_without_getting_stuck() -> void:
 	var harness_script := preload("res://tests/harness.gd")
-	var harness = harness_script.new(func(settings: ServerSettings) -> void: settings.dummies = 64)
+	var harness = harness_script.new(func(settings: ServerSettings) -> void: settings.bots = 64; settings.bot_ai = false)
 	cleanup(func() -> void: harness.close())
 	var server: Server = harness.server
 	var start := {}
@@ -173,7 +174,7 @@ func test_dummies_roam_without_getting_stuck() -> void:
 				still[soldier.id] = still.get(soldier.id, 0) + 1
 	var area := server.scene.play_area
 	for soldier in server.soldiers.all():
-		check(absf(soldier.position.x) <= area + 1e-3 and absf(soldier.position.z) <= area + 1e-3, "a dummy left the area: %s" % soldier.position)
-		check(soldier.position.y > -0.1 and soldier.position.y < 1.6, "a dummy at height %.2f" % soldier.position.y)
-		check(start.has(soldier.id) and soldier.position.distance_to(start[soldier.id]) > 1, "dummy 0x%04x hardly moved" % soldier.id)
-		check(still.get(soldier.id, 0) < 2 * Game.TICK_RATE, "dummy 0x%04x stood still for %d ticks" % [soldier.id, still.get(soldier.id, 0)])
+		check(absf(soldier.position.x) <= area + 1e-3 and absf(soldier.position.z) <= area + 1e-3, "a bot left the area: %s" % soldier.position)
+		check(soldier.position.y > -0.1 and soldier.position.y < 1.6, "a bot at height %.2f" % soldier.position.y)
+		check(start.has(soldier.id) and soldier.position.distance_to(start[soldier.id]) > 1, "bot 0x%04x hardly moved" % soldier.id)
+		check(still.get(soldier.id, 0) < 2 * Game.TICK_RATE, "bot 0x%04x stood still for %d ticks" % [soldier.id, still.get(soldier.id, 0)])

@@ -19,11 +19,17 @@ var max_players := 16
 ## snapshot_rate is how many snapshots per second each client receives; it
 ## must divide the tick rate.
 var snapshot_rate := 20
-## dummies are bot soldiers without AI that roam the map, to load the network
-## and the clients until real bots exist.
-var dummies := 0
-## seed fixes the match seed, which places the dummies, for runs that repeat;
-## zero picks a random one.
+## map names the map; the small prototype unless the flags ask for another.
+var map := "prototype"
+## scene, when set, is a map built by hand instead, for tests.
+var scene: MapScene
+## bots are soldiers the server drives, half of them in each team.
+var bots := 0
+## bot_ai lets bots look for enemies and fight; without it they only roam,
+## to load the network and the clients.
+var bot_ai := true
+## seed fixes the match seed, which places the bots and makes their choices,
+## for runs that repeat; zero picks a random one.
 var seed := 0
 ## A player who sends no input for input_timeout is disconnected; one whose
 ## connection was lost keeps its place for reconnect_window.
@@ -36,9 +42,9 @@ var friendly_fire := false
 ## allow_respawn lets a player ask to go back to its spawn with full health
 ## and ammo, a debug aid of solo play.
 var allow_respawn := false
-## dummy_deaths kills that many dummies a second, struck at random, to load
-## the deaths of clients.
-var dummy_deaths := 0.0
+## bot_deaths kills that many bots a second, struck at random, to load the
+## deaths of clients.
+var bot_deaths := 0.0
 ## max_rewind bounds how far back in time lag compensation tests a shot; a
 ## player who saw further back is tested at the limit. It covers a round trip
 ## of 200 ms with jitter: the player also sees the others an interpolation
@@ -60,8 +66,10 @@ func validate() -> String:
 		return "timeouts, the respawn delay and the rewind limit must be positive"
 	if max_rewind * Game.TICK_RATE >= PoseHistory.TICKS:
 		return "max rewind %.2f s is not shorter than the history of %.2f s" % [max_rewind, float(PoseHistory.TICKS) / Game.TICK_RATE]
-	if dummies < 0 or max_players + dummies > SoldierSet.MAX_SOLDIERS:
-		return "at most %d soldiers fit, %d players and %d dummies asked" % [SoldierSet.MAX_SOLDIERS, max_players, dummies]
-	if dummy_deaths < 0:
-		return "dummy deaths must not be negative"
+	if bots < 0 or max_players + bots > SoldierSet.MAX_SOLDIERS:
+		return "at most %d soldiers fit, %d players and %d bots asked" % [SoldierSet.MAX_SOLDIERS, max_players, bots]
+	if bot_deaths < 0:
+		return "bot deaths must not be negative"
+	if scene == null and map not in MapScene.MAPS:
+		return "there is no map %s: the maps are %s" % [map, ", ".join(MapScene.MAPS)]
 	return ""

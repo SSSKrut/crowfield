@@ -67,7 +67,7 @@ func _messages() -> Array:
 	welcome.tick_rate = 60
 	welcome.snapshot_rate = 20
 	welcome.server_tick = 0xFFFFFFF0
-	welcome.map = Game.PROTOTYPE_MAP
+	welcome.map = "prototype"
 	welcome.map_hash = -1
 	welcome.tuning_hash = 42
 	welcome.match_seed = -7723592293110705685
@@ -102,7 +102,7 @@ func _messages() -> Array:
 	death.killer = SoldierSet.make_id(5, 3)
 	death.victim_team = Game.Team.RED
 	death.killer_team = Game.Team.BLUE
-	death.victim_name = "Dummy 4"
+	death.victim_name = "Rook 4"
 	death.killer_name = "Alice"
 	death.weapon = WeaponTuning.Kind.RIFLE
 	death.zone = Hitboxes.Zone.TORSO

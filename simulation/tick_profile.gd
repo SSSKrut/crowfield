@@ -3,8 +3,8 @@ extends RefCounted
 ## TickProfile measures where tick time goes, per system, between two log
 ## lines.
 
-enum System { EVENTS, PLAYERS, DUMMIES, SHOTS, GRID, HISTORY, SNAPSHOTS }
-const NAMES := ["events", "players", "dummies", "shots", "grid", "history", "snapshots"]
+enum System { EVENTS, PLAYERS, BOTS, SHOTS, GRID, HISTORY, SNAPSHOTS }
+const NAMES := ["events", "players", "bots", "shots", "grid", "history", "snapshots"]
 
 var ticks := 0
 ## total and longest are in microseconds, like systems.

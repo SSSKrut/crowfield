@@ -22,12 +22,13 @@ const HELP_LINES := [
 	"K ragdoll | Backspace respawn | L knock down nearest | F1 physics | F2 network | F3 camera | Esc menu",
 ]
 const GAME_MENU := preload("res://menu/game_menu.tscn")
-const SKY := Color8(135, 175, 205)
 const VIRTUAL_INTERFACES := ["lo", "docker", "br-", "veth", "virbr"]
 
 var settings := {}
 var rules: Rules
+## scene is the map, once the server named it; map_view draws it.
 var scene: MapScene
+var map_view: MapView
 var session: ClientSession
 var predictor: Predictor
 var asset: CharacterAsset
@@ -56,7 +57,6 @@ var _memory: Memory.MemoryListener
 var _self_view: CharacterView
 var _self_held: Node3D
 var _self_held_kind := -1
-var _props: Array[RigidBody3D] = []
 var _map_collision: Array[RID] = []
 var _accumulator := 0.0
 var _alpha := 0.0
@@ -138,8 +138,10 @@ static func define_flags(flags: Flags) -> void:
 	flags.define("connect", "", "join the server at this address instead of playing solo; the port defaults to %d" % ENetTransport.DEFAULT_PORT)
 	flags.define("fingerprint", "", "certificate fingerprint the -connect server must have; remembered after the first connection anyway")
 	flags.define("config-dir", OS.get_user_data_dir(), "where remembered servers and the host certificate are kept; empty keeps nothing")
-	flags.define("dummies", 0, "roaming bot soldiers without AI on the embedded server")
-	flags.define("dummy-deaths", 0.0, "dummies of the embedded server killed at random every second")
+	flags.define("map", "", "map of the embedded server, %s; the valley, or the prototype for -demo, -movement and -shoot" % ", ".join(MapScene.MAPS))
+	flags.define("bots", 0, "bot soldiers on the embedded server, half of them in each team")
+	flags.define("bot-ai", true, "let the bots fight; false only lets them roam")
+	flags.define("bot-deaths", 0.0, "bots of the embedded server killed at random every second")
 	flags.define("respawn-delay", Flags.Duration.new(0), "how long the dead of the embedded server wait; 0 is the default")
 	flags.define("stats", Flags.Duration.new(0), "log frame rate, memory and ragdolls this often")
 	flags.define("overview", false, "watch the whole map from above")
@@ -162,8 +164,8 @@ func _ready() -> void:
 		_quit_with(error)
 		return
 	for name in ["width", "height", "frames", "screenshot", "demo", "movement", "shoot", "cycles", "debug", "tuning",
-			"weapons", "volume", "name", "netsim", "host", "connect", "fingerprint", "config-dir", "dummies",
-			"dummy-deaths", "respawn-delay", "stats", "overview", "netgraph", "max-fps", "knockdowns", "sensitivity", "fov"]:
+			"weapons", "volume", "name", "netsim", "host", "connect", "fingerprint", "config-dir", "map", "bots", "bot-ai",
+			"bot-deaths", "respawn-delay", "stats", "overview", "netgraph", "max-fps", "knockdowns", "sensitivity", "fov"]:
 		settings[name] = flags.get_value(name)
 	var loaded: Variant = Rules.load_files(settings["tuning"], settings["weapons"])
 	if loaded is String:
@@ -197,69 +199,55 @@ func _ready() -> void:
 
 
 func _setup_window() -> void:
+	Engine.max_fps = settings["max-fps"]
+	if DisplayServer.get_name() == "headless":
+		return
 	var size := Vector2i(settings["width"], settings["height"])
 	# The window keeps the size the player gave it, unless the flags ask for another.
-	if DisplayServer.get_name() != "headless" and size != Vector2i(ProjectSettings.get_setting("display/window/size/viewport_width"),
+	if size != Vector2i(ProjectSettings.get_setting("display/window/size/viewport_width"),
 			ProjectSettings.get_setting("display/window/size/viewport_height")):
 		DisplayServer.window_set_size(size)
-		DisplayServer.window_set_title("Crowfield prototype — stage 2")
-		if settings["max-fps"] == 0:
-			DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
-	Engine.max_fps = settings["max-fps"]
+	DisplayServer.window_set_title("Crowfield prototype")
+	if settings["max-fps"] == 0:
+		DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
 
 
 func _build_world() -> void:
+	var sky_material := ProceduralSkyMaterial.new()
+	sky_material.sky_top_color = Color(0.29, 0.47, 0.75)
+	sky_material.sky_horizon_color = Color(0.69, 0.77, 0.86)
+	sky_material.ground_horizon_color = Color(0.69, 0.77, 0.86)
+	sky_material.ground_bottom_color = Color(0.3, 0.34, 0.3)
+	sky_material.sun_angle_max = 20.0
+	var sky := Sky.new()
+	sky.sky_material = sky_material
 	var environment := Environment.new()
-	environment.background_mode = Environment.BG_COLOR
-	environment.background_color = SKY
-	environment.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	environment.ambient_light_color = Color(0.62, 0.66, 0.72)
-	environment.ambient_light_energy = 0.9
+	environment.background_mode = Environment.BG_SKY
+	environment.sky = sky
+	environment.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
+	environment.ambient_light_energy = 0.55
+	environment.tonemap_mode = Environment.TONE_MAPPER_FILMIC
+	environment.fog_enabled = true
+	environment.fog_light_color = Color(0.66, 0.74, 0.84)
+	environment.fog_density = 0.0011
+	environment.fog_aerial_perspective = 0.4
+	environment.fog_sky_affect = 0.15
+	environment.ssao_enabled = true
+	environment.ssao_radius = 1.2
+	environment.ssao_intensity = 1.5
+	environment.glow_enabled = true
+	environment.glow_intensity = 0.3
+	environment.glow_hdr_threshold = 1.4
 	var world_environment := WorldEnvironment.new()
 	world_environment.environment = environment
 	add_child(world_environment)
 	sun = DirectionalLight3D.new()
-	sun.rotation = Vector3(-0.95, 0.6, 0)
-	sun.light_energy = 0.9
+	sun.rotation = Vector3(-0.8, 0.65, 0)
+	sun.light_color = Color(1.0, 0.95, 0.87)
+	sun.light_energy = 1.05
 	sun.shadow_enabled = true
+	sun.directional_shadow_max_distance = 140.0
 	add_child(sun)
-	scene = MapScene.prototype()
-	_map_collision = scene.build_collision(get_world_3d().space)
-	for i in scene.boxes.size():
-		var box := scene.boxes[i]
-		var mesh := BoxMesh.new()
-		mesh.size = box.half_extents * 2
-		var material := StandardMaterial3D.new()
-		material.albedo_color = Color8(115, 125, 115) if i == 0 else Color8(145, 130, 105)
-		mesh.material = material
-		var instance := MeshInstance3D.new()
-		instance.mesh = mesh
-		instance.transform = box.transform
-		add_child(instance)
-	# The props are decoration of the client: the server does not simulate them,
-	# so the predicted soldier does not bump into them either.
-	var tints := [Color8(255, 161, 0), Color8(102, 191, 255), Color8(255, 109, 194)]
-	for i in scene.spheres.size():
-		var sphere := scene.spheres[i]
-		var body := RigidBody3D.new()
-		body.collision_layer = Game.LAYER_COSMETIC
-		body.collision_mask = Game.LAYER_STATIC | Game.LAYER_COSMETIC
-		body.transform = sphere.transform
-		var shape := CollisionShape3D.new()
-		shape.shape = SphereShape3D.new()
-		shape.shape.radius = sphere.radius
-		body.add_child(shape)
-		var visual := MeshInstance3D.new()
-		var mesh := SphereMesh.new()
-		mesh.radius = sphere.radius
-		mesh.height = 2 * sphere.radius
-		var material := StandardMaterial3D.new()
-		material.albedo_color = tints[i % tints.size()]
-		mesh.material = material
-		visual.mesh = mesh
-		body.add_child(visual)
-		add_child(body)
-		_props.append(body)
 	camera = Camera3D.new()
 	camera.fov = settings["fov"]
 	camera.near = 0.05
@@ -269,6 +257,26 @@ func _build_world() -> void:
 	predictor = Predictor.new(get_world_3d().space, rules)
 	debug = DebugDraw.new()
 	add_child(debug)
+
+
+## _load_map builds the map the server plays, when the handshake names it:
+## its collision, for the prediction and the ragdolls, and its view. A map the
+## embedded server built is shared.
+func _load_map(map_name: String) -> Variant:
+	if scene != null:
+		return scene if scene.name == map_name else "the client already plays %s" % scene.name
+	var built: MapScene
+	if _local != null and _local.server.scene.name == map_name:
+		built = _local.server.scene
+	else:
+		built = MapScene.named(map_name)
+	if built == null:
+		return "the client has no such map"
+	scene = built
+	_map_collision = scene.build_collision(get_world_3d().space)
+	map_view = MapView.new(scene)
+	add_child(map_view)
+	return scene
 
 
 func _build_soldiers() -> void:
@@ -330,8 +338,10 @@ func _open() -> String:
 	var server_settings := ServerSettings.new()
 	server_settings.max_players = 1
 	server_settings.stats_interval = 0
-	server_settings.dummies = settings["dummies"]
-	server_settings.dummy_deaths = settings["dummy-deaths"]
+	server_settings.map = _map_name()
+	server_settings.bots = settings["bots"]
+	server_settings.bot_ai = settings["bot-ai"]
+	server_settings.bot_deaths = settings["bot-deaths"]
 	if settings["respawn-delay"] > 0:
 		server_settings.respawn_delay = settings["respawn-delay"]
 	# Going back to the spawn at will is for solo play only.
@@ -367,6 +377,16 @@ func _open() -> String:
 	return ""
 
 
+## _map_name is the map of the embedded server: the one asked for, or the
+## valley; the automatic scenarios run on the prototype they were made for.
+func _map_name() -> String:
+	if settings["map"] != "":
+		return settings["map"]
+	if settings["demo"] or settings["movement"] or settings["shoot"]:
+		return "prototype"
+	return "valley"
+
+
 ## _host_certificate keeps the certificate of a host in the config directory,
 ## so that the players who joined it once trust it again; without one it
 ## makes a fresh certificate every run.
@@ -381,7 +401,7 @@ func _join(conn: Conn, token: PackedByteArray = PackedByteArray()) -> void:
 	if not _conditions.is_none():
 		print("simulating network: %s" % _conditions)
 		conn = SimulatedConn.new(conn, _conditions)
-	_handshake = Handshake.new(conn, settings["name"], rules, scene.hash_value(), token)
+	_handshake = Handshake.new(conn, settings["name"], rules, _load_map, token)
 
 
 func _exit_tree() -> void:
@@ -467,9 +487,9 @@ func _about() -> String:
 	if settings["connect"] != "":
 		var state := "Playing on" if session != null and _reconnect_since < 0 else "Connecting to"
 		return "%s %s as %s." % [state, settings["connect"], settings["name"]]
-	var bots := " with %d bots" % settings["dummies"] if settings["dummies"] > 0 else ""
+	var bots := " with %d bots" % settings["bots"] if settings["bots"] > 0 else ""
 	if settings["host"] == "":
-		return "Solo play%s." % bots
+		return "Solo play on the %s%s." % [scene.name if scene != null else _map_name(), bots]
 	var port: int = ENetTransport.split_address(settings["host"])[1]
 	var addresses := PackedStringArray()
 	for interface in IP.get_local_interfaces():
@@ -566,7 +586,7 @@ func _process(delta: float) -> void:
 	if settings["demo"] and _ragdoll and _elapsed >= 3 and _demo_cycle + 1 < settings["cycles"]:
 		_reset()
 		_demo_cycle += 1
-	var feet := scene.spawn
+	var feet := scene.spawn_of(_team())
 	var speed := 0.0
 	var server_own := session.local_soldier()
 	if own != null:
@@ -783,7 +803,8 @@ func _update_camera(feet: Vector3) -> void:
 	var eye := feet + Vector3(0, rules.movement.eye_height, 0)
 	if settings["overview"]:
 		# High above the south edge of the map: every soldier is in view.
-		camera.look_at_from_position(Vector3(0, 16, 21), Vector3(0, 0, -1))
+		var area := scene.play_area
+		camera.look_at_from_position(Vector3(0, area * 0.75 + 6, area * 1.2 + 4), Vector3(0, 0, area * 0.1))
 		return
 	if _third_person or _ragdoll:
 		var target := eye
@@ -896,10 +917,7 @@ func _reset() -> void:
 	_elapsed = 0.0
 	_ragdoll = false
 	_self_view.stand_up()
-	for i in _props.size():
-		_props[i].transform = scene.spheres[i].transform
-		_props[i].linear_velocity = Vector3.ZERO
-		_props[i].angular_velocity = Vector3.ZERO
+	map_view.reset()
 	session.respawn()
 
 

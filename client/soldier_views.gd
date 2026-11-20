@@ -22,7 +22,7 @@ const FLINCH_DISTANCE := 80.0
 const STRIKE_IMPULSE := 30.0
 const STRIKE_LIFT := 5.0
 ## A soldier shot dead loses its stride: its body keeps FALL_MOMENTUM of its
-## speed along the ground, and all of it up and down. With all of it, a dummy
+## speed along the ground, and all of it up and down. With all of it, a bot
 ## that ran at 5 m/s slid two metres on after it fell.
 const FALL_MOMENTUM := 0.3
 ## Shots further behind than STALE_SHOTS ticks are not shown: the soldier was

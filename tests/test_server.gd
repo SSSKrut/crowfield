@@ -34,7 +34,7 @@ func _join(server: Server, listener: Memory.MemoryListener, name: String, space:
 	var conn := listener.dial()
 	if conditions != null:
 		conn = SimulatedConn.new(conn, conditions)
-	var client := HeadlessClient.new(conn, name, server.rules, name.hash(), space)
+	var client := HeadlessClient.new(conn, name, server.rules, name.hash(), space, func(_map: String) -> MapScene: return server.scene)
 	cleanup(func() -> void: client.close())
 	return client
 
@@ -54,7 +54,7 @@ func _run(server: Server, clients: Array, ticks: int) -> void:
 
 
 func test_client_joins_and_predicts_without_corrections() -> void:
-	var server := _server(func(s: ServerSettings) -> void: s.dummies = 32)
+	var server := _server(func(s: ServerSettings) -> void: s.bots = 32; s.bot_ai = false)
 	var listener := Memory.MemoryListener.new()
 	server.add_listener(listener)
 	var space := _space()
@@ -73,7 +73,7 @@ func test_client_joins_and_predicts_without_corrections() -> void:
 
 
 func test_prediction_holds_under_a_bad_network() -> void:
-	var server := _server(func(s: ServerSettings) -> void: s.dummies = 16)
+	var server := _server(func(s: ServerSettings) -> void: s.bots = 16; s.bot_ai = false)
 	var listener := Memory.MemoryListener.new()
 	server.add_listener(listener)
 	var conditions: NetworkConditions = NetworkConditions.parse("delay=50ms,jitter=10ms,loss=5%,seed=3")
@@ -97,10 +97,10 @@ func test_prediction_holds_under_a_bad_network() -> void:
 		check_equal(client.session.unresolved, 0, "datagrams without a delta base")
 
 
-## 256 dummies fit the budget of 32 KB/s, and the soldier under the crosshair
+## 256 bots fit the budget of 32 KB/s, and the soldier under the crosshair
 ## is updated with every snapshot.
 func test_snapshots_keep_the_budget() -> void:
-	var server := _server(func(s: ServerSettings) -> void: s.dummies = 256)
+	var server := _server(func(s: ServerSettings) -> void: s.bots = 256; s.bot_ai = false)
 	var listener := Memory.MemoryListener.new()
 	server.add_listener(listener)
 	var client := _join(server, listener, "Carol", _space())

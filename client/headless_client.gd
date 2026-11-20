@@ -19,16 +19,19 @@ var largest_correction := 0.0
 ## error tells why the client stopped.
 var error := ""
 var _rules: Rules
+var _maps: Callable
 var _last := -1.0
 
 
-## The client predicts in space, which holds the static map; headless clients
-## may share one, as their capsules do not meet each other.
-func _init(conn: Conn, name: String, rules: Rules, seed: int, space: RID) -> void:
+## The client predicts in space; maps builds the static map there for the
+## handshake. Headless clients may share one, as their capsules do not meet
+## each other.
+func _init(conn: Conn, name: String, rules: Rules, seed: int, space: RID, maps: Callable) -> void:
 	_rules = rules
+	_maps = maps
 	predictor = Predictor.new(space, rules)
-	handshake = Handshake.new(conn, name, rules, MapScene.prototype().hash_value())
-	input = Wanderer.new(seed, MapScene.prototype().play_area)
+	handshake = Handshake.new(conn, name, rules, maps)
+	input = Wanderer.new(seed)
 
 
 func close() -> void:
@@ -61,6 +64,7 @@ func tick() -> bool:
 		if not handshake.done():
 			return true
 		session = handshake.session
+		input.area = handshake.scene.play_area
 		predictor.join(session.welcome.match_seed)
 	var command := session.send_command(input.command(predictor))
 	if command == null:
@@ -102,7 +106,7 @@ func rejoin(conn: Conn) -> void:
 	session.abandon()
 	session = null
 	error = ""
-	handshake = Handshake.new(conn, name, _rules, MapScene.prototype().hash_value(), token)
+	handshake = Handshake.new(conn, name, _rules, _maps, token)
 
 
 ## Wanderer is random input: it walks or runs in a direction for a few
@@ -110,7 +114,7 @@ func rejoin(conn: Conn) -> void:
 ## Now and then it shoots, aims, reloads or takes another weapon.
 class Wanderer:
 	var random := RandomNumberGenerator.new()
-	var area: float
+	var area := 14.0
 	var elapsed := 0.0
 	var until := 0.0
 	var yaw := 0.0
@@ -120,9 +124,8 @@ class Wanderer:
 	var weapon := 0
 	var ticks := 0
 
-	func _init(seed: int, play_area: float) -> void:
+	func _init(seed: int) -> void:
 		random.seed = seed ^ 24301
-		area = play_area
 
 	func command(predictor: Predictor) -> InputCommand:
 		elapsed += Game.TICK_DELTA
