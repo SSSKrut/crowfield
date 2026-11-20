@@ -1,34 +1,22 @@
-CMAKE ?= cmake
-GO ?= go
-NATIVE_BUILD_DIR ?= build/native
-BIN_DIR ?= bin
+GODOT ?= godot
+# Flags after the target's own, e.g. make client ARGS="-dummies=64".
+ARGS ?=
 
-.PHONY: all native client server loadtest run-client run-server clean
+.PHONY: import client server loadtest test
 
-all: client server loadtest
+# import registers the scripts and imports the assets; the other targets need
+# it once after a checkout and after new scripts appear.
+import:
+	$(GODOT) --headless --path . --import
 
-native:
-	$(CMAKE) -S native/jolt -B $(NATIVE_BUILD_DIR) -G Ninja -DCMAKE_BUILD_TYPE=Release
-	$(CMAKE) --build $(NATIVE_BUILD_DIR)
+client: import
+	$(GODOT) --path . -- $(ARGS)
 
-client: native
-	mkdir -p $(BIN_DIR)
-	CGO_ENABLED=1 $(GO) build -o $(BIN_DIR)/client ./cmd/client
+server: import
+	$(GODOT) --headless --path . -- server $(ARGS)
 
-server: native
-	mkdir -p $(BIN_DIR)
-	CGO_ENABLED=1 $(GO) build -o $(BIN_DIR)/server ./cmd/server
+loadtest: import
+	$(GODOT) --headless --path . -- loadtest $(ARGS)
 
-loadtest: native
-	mkdir -p $(BIN_DIR)
-	CGO_ENABLED=1 $(GO) build -o $(BIN_DIR)/loadtest ./cmd/loadtest
-
-run-client: client
-	./$(BIN_DIR)/client
-
-run-server: server
-	./$(BIN_DIR)/server
-
-clean:
-	$(CMAKE) -E remove_directory build
-	$(CMAKE) -E remove_directory $(BIN_DIR)
+test: import
+	$(GODOT) --headless --path . -- test $(ARGS)

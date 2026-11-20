@@ -1,13 +1,12 @@
-/build/
-/bin/
-/dist/
-*.exe
-*.dll
-*.so
-*.dylib
-*.a
-*.o
+# The engine's cache of imported assets and scripts; `make import` rebuilds it.
+/.godot/
+# Exported builds.
+/export/
 *.log
 .DS_Store
+# The certificate and key a dedicated server makes on its first run.
 /server.crt
 /server.key
+# Left from the Go version: its binaries and the native build of Jolt.
+/bin/
+/build/

@@ -1,0 +1,334 @@
+extends TestCase
+## The client's view of the network: interpolation of other soldiers, the
+## clock, acknowledgements, reconciliation of the prediction, and shots at
+## soldiers drawn in the past.
+
+
+func _soldier(at: Vector3, velocity: Vector3, alive: bool = true, grounded: bool = false, yaw: float = 0.0) -> Soldier:
+	var soldier := Soldier.new()
+	soldier.position = at
+	soldier.velocity = velocity
+	soldier.alive = alive
+	soldier.grounded = grounded
+	soldier.yaw = yaw
+	return soldier
+
+
+func test_hermite_follows_steady_motion_exactly() -> void:
+	var remote := RemoteSoldier.new()
+	var velocity := Vector3(3, 0, -4)
+	for tick in range(100, 131, 3):
+		remote.add(tick, _soldier(velocity * (float(tick - 100) / Game.TICK_RATE), velocity))
+	for render_tick: float in [100.0, 101.5, 107.25, 119.9, 130.0]:
+		remote.evaluate(render_tick)
+		var want := velocity * ((render_tick - 100) / Game.TICK_RATE)
+		check(remote.position.distance_to(want) <= 1e-4, "at %.2f: %s, want %s" % [render_tick, remote.position, want])
+
+
+func test_remote_soldier_past_the_newest_state() -> void:
+	var remote := RemoteSoldier.new()
+	remote.add(10, _soldier(Vector3.ZERO, Vector3(6, 0, 0)))
+	remote.add(13, _soldier(Vector3(0.3, 0, 0), Vector3(6, 0, 0)))
+	remote.evaluate(16)
+	check_near(remote.position.x, 0.6, 1e-4, "three ticks past the newest state")
+	remote.evaluate(1000)
+	check_near(remote.position.x, 0.3 + 6.0 * RemoteSoldier.MAX_EXTRAPOLATION / Game.TICK_RATE, 1e-4, "long past the newest state")
+	remote.evaluate(5)
+	check(remote.position == Vector3.ZERO, "before the oldest state %s, want the oldest" % remote.position)
+	remote.add(12, _soldier(Vector3(9, 9, 9), Vector3.ZERO))
+	remote.evaluate(12)
+	check_near(remote.position.y, 0.0, 1e-6, "a late older state was used")
+
+
+func test_remote_soldier_stays_on_the_floor_and_turns_the_short_way() -> void:
+	var remote := RemoteSoldier.new()
+	remote.add(0, _soldier(Vector3.ZERO, Vector3(0, -0.5, 0), true, true, TAU - 0.1))
+	remote.add(6, _soldier(Vector3.ZERO, Vector3(0, -0.5, 0), true, true, 0.1))
+	remote.evaluate(3)
+	check_equal(remote.position.y, 0.0, "a grounded soldier dipped")
+	check(absf(Game.remainder(remote.yaw)) <= 1e-4, "turned the long way: yaw %.3f" % remote.yaw)
+	remote.evaluate(100)
+	check_equal(remote.position.y, 0.0, "extrapolation sank a grounded soldier")
+
+
+## A soldier seen a second apart, running and then dead: it is drawn alive
+## along the way and dies where the server has it dead, at the tick of that
+## state, with the momentum it ran with.
+func test_remote_soldier_dies_where_it_died() -> void:
+	var remote := RemoteSoldier.new()
+	var run := Vector3(5, 0, 0)
+	remote.add(100, _soldier(Vector3.ZERO, run))
+	remote.add(160, _soldier(Vector3(4, 0, 0), Vector3.ZERO, false))
+	remote.evaluate(150)
+	check(remote.alive, "dead at tick 150 at x=%.2f, before the tick of its death" % remote.position.x)
+	remote.evaluate(160)
+	check(not remote.alive and remote.position.distance_to(Vector3(4, 0, 0)) <= 1e-4, "at the tick of its death: alive %s at %s" % [remote.alive, remote.position])
+	check(remote.last_alive_velocity() == run, "falls with velocity %s, it ran at %s" % [remote.last_alive_velocity(), run])
+
+
+## A state that moves where the soldier is drawn is kept as an offset that
+## fades, and a jump as far as a respawn is shown at once.
+func test_remote_soldier_catches_up_smoothly() -> void:
+	var remote := RemoteSoldier.new()
+	remote.add(0, _soldier(Vector3.ZERO, Vector3.ZERO))
+	remote.add(10, _soldier(Vector3.ZERO, Vector3.ZERO))
+	remote.evaluate(15)
+	var drawn := remote.position
+	remote.add(20, _soldier(Vector3(1, 0, 0), Vector3.ZERO))
+	remote.keep(drawn, 15)
+	remote.evaluate(15)
+	check(remote.position.distance_to(drawn) <= 1e-5 and remote.offset.length() > 0.4,
+		"after a new state the soldier is drawn at %s with offset %s, was at %s" % [remote.position, remote.offset, drawn])
+	for i in 30:
+		remote.smooth(1.0 / 60)
+	check(remote.offset.length() < 0.01, "the correction has not faded: %s" % remote.offset)
+	remote.evaluate(25)
+	drawn = remote.position
+	remote.add(30, _soldier(Vector3(50, 0, 0), Vector3.ZERO))
+	remote.keep(drawn, 25)
+	check(remote.offset == Vector3.ZERO, "a long jump was smoothed: %s" % remote.offset)
+
+
+func test_interpolation_clock_follows_snapshots() -> void:
+	var clock := InterpolationClock.new(20)
+	if not check_equal(clock.delay, 7.0, "delay in ticks at 20 snapshots a second"):
+		return
+	clock.observe(100)
+	check_equal(clock.render_tick, 93.0, "the start")
+	# The frame clock runs a little fast; snapshots pull it back.
+	for tick in range(103, 401, 3):
+		clock.advance(3.3 / Game.TICK_RATE)
+		clock.observe(tick)
+	check(absf(400 - clock.delay - clock.render_tick) <= 3, "the clock is %.2f ticks off its target" % (400 - clock.delay - clock.render_tick))
+	clock.observe(1000)
+	check_equal(clock.render_tick, 1000 - clock.delay, "a big jump was smoothed instead of taken")
+
+
+func test_ack_tracker() -> void:
+	var acks := AckTracker.new()
+	for sequence in [10, 11, 13, 12, 9]:
+		acks.observe(sequence)
+	# Newest 13; 12, 11, 10 and 9 were received too.
+	check(acks.has and acks.latest == 13 and acks.bits == 0b1111, "latest %d bits %d" % [acks.latest, acks.bits])
+	acks.observe(13 + 32)
+	check(acks.latest == 45 and acks.bits == 1 << 31, "after a jump of 32: latest %d bits %d" % [acks.latest, acks.bits])
+	acks.observe(45 + 33)
+	check(acks.latest == 78 and acks.bits == 0, "after a jump of 33: latest %d bits %d" % [acks.latest, acks.bits])
+	acks = AckTracker.new()
+	acks.observe(65535)
+	acks.observe(1)
+	check(acks.latest == 1 and acks.bits == 0b10, "across the wrap: latest %d bits %d" % [acks.latest, acks.bits])
+
+
+func _space() -> RID:
+	var space := PhysicsServer3D.space_create()
+	var made := MapScene.prototype().build_collision(space)
+	cleanup(func() -> void:
+		MapScene.free_collision(made)
+		PhysicsServer3D.free_rid(space))
+	return space
+
+
+func _predictor(space: RID) -> Predictor:
+	var predictor := Predictor.new(space, Rules.new())
+	cleanup(func() -> void: predictor.close())
+	return predictor
+
+
+## _route crosses the ramp, jumps onto the platform and walks along its edge,
+## so predictions start from slopes, steps and the air.
+static func _route(step: int, tick: int) -> InputCommand:
+	if step < 36:
+		return InputCommand.create(tick, 1, 0, PI / 2, 0, InputCommand.SPRINT)
+	if step < 110:
+		var buttons := InputCommand.SPRINT
+		if step >= 66 and step < 84:
+			buttons |= InputCommand.JUMP
+		return InputCommand.create(tick, 1, 0, 0, 0.1, buttons)
+	if step < 160:
+		return InputCommand.create(tick, 1, 0.5, -PI / 2, 0, 0)
+	return InputCommand.create(tick, 0, 0, 0, 0, 0)
+
+
+## _confirmed is the private state a snapshot carries of a soldier after a
+## tick.
+func _confirmed(tick: int, soldier: Soldier) -> PlayerState:
+	var state := PlayerState.new()
+	state.processed = true
+	state.last_processed_tick = tick
+	state.soldier = soldier.id
+	state.position = soldier.position
+	state.velocity = soldier.velocity
+	state.health = soldier.health
+	state.arsenal = soldier.arsenal.copy()
+	return state
+
+
+func _standing(id: int, at: Vector3) -> Soldier:
+	var soldier := _soldier(at, Vector3.ZERO)
+	soldier.id = id
+	soldier.health = Game.MAX_HEALTH
+	return soldier
+
+
+## The server runs one command differently from the prediction; the client
+## corrects once, replays its newer commands, and ends where the server is.
+func test_reconcile_replays_from_the_server_state() -> void:
+	var rules := Rules.new()
+	var predictor := _predictor(_space())
+	var server := CharacterController.new(_space(), rules.movement, Game.LAYER_STATIC | Game.LAYER_VEHICLE)
+	cleanup(func() -> void: server.close())
+	var authoritative := Soldier.new()
+	authoritative.id = 0x1000
+	authoritative.alive = true
+	authoritative.health = Game.MAX_HEALTH
+	authoritative.arsenal = Arsenal.create(Arsenal.default_loadout(), rules.weapons)
+	server.teleport(authoritative, MapScene.prototype().spawn)
+	const LAG := 10
+	const DIFFERS := 40
+	var history := {}
+	for tick in 200:
+		var command := _route(tick, tick)
+		predictor.predict(command)
+		if tick == DIFFERS:
+			command = InputCommand.create(tick, 1, 0, PI / 2, 0, InputCommand.SPRINT | InputCommand.JUMP)
+		server.run_command(rules.weapons, authoritative, command, 0)
+		history[tick] = authoritative.copy()
+		if tick >= LAG:
+			predictor.reconcile(_confirmed(tick - LAG, history[tick - LAG]))
+	check_equal(predictor.corrections, 1, "corrections, want one for the tick that differed")
+	check(predictor.soldier.position == authoritative.position and predictor.soldier.velocity == authoritative.velocity,
+		"prediction %s %s, server %s %s" % [predictor.soldier.position, predictor.soldier.velocity, authoritative.position, authoritative.velocity])
+
+
+## A new session may reuse the tick numbers of the last one, whose commands the
+## server never saw: the prediction must not replay them.
+func test_join_forgets_the_last_session() -> void:
+	var predictor := _predictor(_space())
+	var spawn := MapScene.prototype().spawn
+	predictor.predict(InputCommand.create(0, 1, 0, 0, 0, 0))
+	predictor.reconcile(_confirmed(0, _standing(0x1000, spawn)))
+	for tick in range(1, 31):
+		predictor.predict(InputCommand.create(tick, 1, 0, 0, 0, 0))
+	# In the new one the server has stood the soldier still until tick 20, and
+	# the client's first command is for tick 25.
+	predictor.join(7)
+	predictor.predict(InputCommand.create(25, 0, 0, 0, 0, 0))
+	predictor.reconcile(_confirmed(20, _standing(0x1000, spawn)))
+	var moved := Vector2(predictor.soldier.position.x - spawn.x, predictor.soldier.position.z - spawn.z).length()
+	check(moved <= 1e-3, "the soldier moved %.3f m on commands of the last session" % moved)
+
+
+## The dead are not predicted: the soldier stays where the server has it while
+## commands go on, and a new soldier starts the prediction without a
+## correction.
+func test_death_stops_the_prediction_until_a_new_soldier() -> void:
+	var predictor := _predictor(_space())
+	var spawn := MapScene.prototype().spawn
+	var run := func(from: int, to: int) -> void:
+		for tick in range(from, to):
+			predictor.predict(InputCommand.create(tick, 1, 0, 0, 0, InputCommand.FIRE))
+	run.call(0, 1)
+	predictor.reconcile(_confirmed(0, _standing(0x1000, spawn)))
+	run.call(1, 10)
+	var dead := _confirmed(5, _standing(0x1000, Vector3(1, 0, 3)))
+	dead.health = 0
+	dead.respawn = 60
+	predictor.reconcile(dead)
+	run.call(10, 40)
+	check(not predictor.started and predictor.soldier.position == dead.position, "the dead soldier was predicted to %s" % predictor.soldier.position)
+	predictor.reconcile(_confirmed(38, _standing(0x2000, spawn)))
+	check(predictor.started and predictor.corrections == 0 and predictor.soldier.id == 0x2000,
+		"the new soldier: started %s, %d corrections, soldier 0x%04x" % [predictor.started, predictor.corrections, predictor.soldier.id])
+
+
+## Through the whole client path — session, interpolation, lag compensation —
+## a shot without spread at the drawn body of the nearest enemy dummy hits,
+## as long as nothing static stands in the way.
+func test_shots_at_drawn_dummies_hit() -> void:
+	var rules := Rules.new()
+	var rifle := rules.weapons.rifle
+	rifle.hip_spread = 0
+	rifle.aim_spread = 0
+	rifle.move_spread = 0
+	rifle.air_spread = 0
+	rifle.bloom = 0
+	rifle.kick_pitch = 0
+	rifle.kick_yaw = 0
+	var configure := func(settings: ServerSettings) -> void:
+		settings.dummies = 48
+		settings.max_players = 1
+	var harness = preload("res://tests/harness.gd").new(configure, rules)
+	cleanup(func() -> void: harness.close())
+	var server: Server = harness.server
+	var space := _space()
+	var client := HeadlessClient.new(harness.listener.dial(), "aimer", rules, 1, space)
+	cleanup(func() -> void: client.close())
+	var state := PhysicsServer3D.space_get_direct_state(space)
+	var shots := 0
+	var clear := 0
+	for tick in 12 * Game.TICK_RATE:
+		var aimed := _enemy_in_view(client, rules)
+		var command := InputCommand.new()
+		command.weapon = 1
+		if not aimed.is_empty() and tick > Game.TICK_RATE:
+			var to: Vector3 = aimed[1] - aimed[0]
+			command = InputCommand.create(0, 0, 0, atan2(to.x, -to.z), atan2(to.y, Vector2(to.x, to.z).length()),
+				InputCommand.FIRE if tick % 10 == 0 else 0)
+			command.weapon = 1
+		var fired := _tick(client, command)
+		if fired != null and not aimed.is_empty():
+			shots += 1
+			var reach: float = aimed[0].distance_to(aimed[1])
+			var hit := state.intersect_ray(PhysicsRayQueryParameters3D.create(fired.origin, fired.origin + fired.direction * reach, Game.LAYER_STATIC))
+			if hit.is_empty():
+				clear += 1
+		server.step()
+	var hits := server.total_hits
+	check(shots >= 15 and hits >= clear * 9 / 10, "%d hits of %d shots with a clear line (%d shots)" % [hits, clear, shots])
+
+
+## _enemy_in_view is [the eye, the body of the nearest enemy dummy within 25 m]
+## where the client draws it now, or [].
+static func _enemy_in_view(client: HeadlessClient, rules: Rules) -> Array:
+	if client.session == null or not client.predictor.started:
+		return []
+	var own := client.session.local_soldier()
+	if own == null:
+		return []
+	var eye := client.predictor.soldier.position + Vector3(0, rules.movement.eye_height, 0)
+	var best := 25.0
+	var found := Vector3.INF
+	for known: KnownSoldier in client.session.soldiers.values():
+		if known.soldier.id == own.id or known.soldier.team == own.team or known.remote.count == 0:
+			continue
+		known.remote.evaluate(client.session.clock.render_tick)
+		if not known.remote.alive:
+			continue
+		var distance := known.remote.position.distance_to(client.predictor.soldier.position)
+		if distance < best and distance > 3:
+			best = distance
+			found = known.remote.position + Vector3(0, 0.85, 0)
+	if found == Vector3.INF:
+		return []
+	return [eye, found]
+
+
+## _tick plays a tick of a client with a given command, the way the game does,
+## and returns the shot it fired, or null.
+static func _tick(client: HeadlessClient, command: InputCommand) -> Shot:
+	if client.session == null:
+		client.handshake.poll()
+		if client.handshake.done():
+			client.session = client.handshake.session
+			client.predictor.join(client.session.welcome.match_seed)
+		return null
+	var sent := client.session.send_command(command)
+	if sent == null:
+		return null
+	var result := client.predictor.predict(sent)
+	if client.session.poll():
+		client.predictor.reconcile(client.session.player)
+	client.session.clock.advance(Game.TICK_DELTA)
+	client.session.update_remotes(Game.TICK_DELTA)
+	return result.shot if result.has(Arsenal.EVENT_FIRED) else null
