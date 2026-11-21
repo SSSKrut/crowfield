@@ -40,6 +40,58 @@ func test_valley_ambience_tracks_the_water_and_respects_mute() -> void:
 	check(river.volume_db <= -79.0, "the river falls silent away from water")
 
 
+func test_remote_shots_behind_cover_filter_and_reuse_voices() -> void:
+	var tree := Engine.get_main_loop() as SceneTree
+	await tree.process_frame
+	var scene := Node3D.new()
+	tree.root.add_child(scene)
+	cleanup(scene.free)
+	var camera := Camera3D.new()
+	scene.add_child(camera)
+	camera.make_current()
+	var wall := StaticBody3D.new()
+	wall.collision_layer = Game.LAYER_STATIC
+	wall.position = Vector3(0, 0, -3)
+	var shape := CollisionShape3D.new()
+	var box := BoxShape3D.new()
+	box.size = Vector3(4, 3, 0.5)
+	shape.shape = box
+	wall.add_child(shape)
+	scene.add_child(wall)
+	var sounds := Sounds.new(1.0)
+	scene.add_child(sounds)
+	await tree.physics_frame
+	await tree.process_frame
+	var kind := WeaponTuning.Kind.ASSAULT_RIFLE
+	var blocked := Vector3(0, 0, -6)
+	sounds.shot_at(kind, blocked)
+	var first := sounds._positional[0]
+	check_equal(first.attenuation_filter_cutoff_hz, Sounds.COVER_FILTER_HZ, "solid cover filters the report")
+	sounds._next_positional = 0
+	sounds.shot_at(kind, -blocked)
+	check_equal(first.attenuation_filter_cutoff_hz, Sounds.DIRECT_FILTER_HZ, "the next clear shot resets a reused voice")
+	var direct_gain := first.volume_db
+	sounds._next_positional = 0
+	sounds.shot_at(kind, blocked)
+	check(first.volume_db < direct_gain - 4.0, "a blocked report is quieter at the same distance")
+	sounds._next_positional = 0
+	sounds.impact_at(Vector3(1, 0, -1))
+	check_equal(first.attenuation_filter_cutoff_hz, Sounds.DIRECT_FILTER_HZ, "an impact resets a reused voice")
+
+	for index in Sounds.SHOT_COVER_RAYS_PER_FRAME:
+		sounds.shot_at(kind, blocked)
+	check_equal(sounds._shot_cover_rays, Sounds.SHOT_COVER_RAYS_PER_FRAME, "a single frame has a bounded ray budget")
+	var overflow := sounds._positional[sounds._next_positional]
+	sounds.shot_at(kind, blocked)
+	check_equal(overflow.attenuation_filter_cutoff_hz, Sounds.DIRECT_FILTER_HZ, "overflow still has a positional report")
+	var previous_frame := sounds._shot_cover_frame
+	await tree.process_frame
+	sounds.shot_at(kind, blocked * 200)
+	check_equal(sounds._shot_cover_frame, previous_frame, "an inaudible shot does not open a new ray budget")
+	sounds.shot_at(kind, blocked)
+	check_equal(sounds._shot_cover_rays, 1, "the next frame restores its ray budget")
+
+
 func test_embedded_clock_ignores_time_spent_loading_the_map() -> void:
 	var tree := Engine.get_main_loop() as SceneTree
 	await tree.process_frame
