@@ -175,6 +175,7 @@ static func define_flags(flags: Flags) -> void:
 	flags.define("height", ProjectSettings.get_setting("display/window/size/viewport_height"), "window height")
 	flags.define("frames", 0, "close after this many frames")
 	flags.define("exit-on-leave", false, "close the game when leaving a match")
+	flags.define("solo-replay", false, "offer immediate replay after a solo round started by flags")
 	flags.define("dev-capture-dir", "", "write gameplay.jsonl to this development run directory")
 	flags.define("dev-native-input", false, "record local macOS movement key timing when the dev monitor is available")
 	flags.define("screenshot", "", "save a screenshot on the final frame")
@@ -223,7 +224,7 @@ func _ready() -> void:
 	if error != "":
 		_quit_with(error)
 		return
-	for name in ["width", "height", "frames", "exit-on-leave", "dev-capture-dir", "dev-native-input", "screenshot", "demo", "movement", "shoot", "cycles", "debug", "tuning",
+	for name in ["width", "height", "frames", "exit-on-leave", "solo-replay", "dev-capture-dir", "dev-native-input", "screenshot", "demo", "movement", "shoot", "cycles", "debug", "tuning",
 			"weapons", "volume", "name", "netsim", "host", "connect", "fingerprint", "config-dir", "map", "bots", "bot-ai",
 			"bot-deaths", "respawn-delay", "stats", "overview", "netgraph", "max-fps", "knockdowns", "sensitivity", "fov",
 			"graphics", "seed", "benchmark", "benchmark-warmup", "benchmark-path", "benchmark-route"]:
@@ -669,7 +670,10 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 func _can_replay() -> bool:
-	return allow_solo_replay and not _failed and session != null and _reconnect_since < 0 		and settings["host"] == "" and settings["connect"] == "" and session.match_state != null 		and session.match_state.result != MatchState.Result.ACTIVE
+	return (allow_solo_replay or settings["solo-replay"]) and not _failed \
+		and session != null and _reconnect_since < 0 and settings["host"] == "" \
+		and settings["connect"] == "" and session.match_state != null \
+		and session.match_state.result != MatchState.Result.ACTIVE
 
 
 func _replay_round() -> void:
