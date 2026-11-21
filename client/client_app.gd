@@ -282,7 +282,7 @@ func _setup_window() -> void:
 	if size != Vector2i(ProjectSettings.get_setting("display/window/size/viewport_width"),
 			ProjectSettings.get_setting("display/window/size/viewport_height")):
 		DisplayServer.window_set_size(size)
-	DisplayServer.window_set_title("Crowfield prototype")
+	DisplayServer.window_set_title("Crowfield")
 	if settings["max-fps"] == 0:
 		DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
 
@@ -1257,17 +1257,19 @@ func _draw_debug(spawned: bool) -> void:
 
 
 func _update_hud(feet: Vector3, own: Soldier) -> void:
-	var lines := PackedStringArray(HELP_LINES)
+	var lines := PackedStringArray()
 	var connected := session != null
-	lines.append("FPS %d | XYZ %.2f %.2f %.2f | %s | drawn %d (full %d) | bodies %d (ragdolls %d)" % [
-		Engine.get_frames_per_second(), feet.x, feet.y, feet.z, CharacterAsset.CLIPS[_self_view.clip],
-		soldier_views.drawn, soldier_views.full, bodies.all.size(), bodies.ragdolls()])
-	if connected:
-		lines.append("%d Hz | tick %d server %d lead %d (clock %+.1f%%) | RTT %d ms | snapshots %.1f KB/s | jumps %d | corrections %d (last %.3f m) | soldiers %d" % [
-			Game.TICK_RATE, session.tick, session.server_tick, session.player.input_lead, 100 * session.dilation,
-			roundi(session.conn.stats.rtt * 1000), _net_rate, session.resyncs, predictor.corrections, predictor.last_error,
-			session.soldiers.size()])
-	else:
+	if _debug or _net_graph:
+		lines.append_array(HELP_LINES)
+		lines.append("FPS %d | XYZ %.2f %.2f %.2f | %s | drawn %d (full %d) | bodies %d (ragdolls %d)" % [
+			Engine.get_frames_per_second(), feet.x, feet.y, feet.z, CharacterAsset.CLIPS[_self_view.clip],
+			soldier_views.drawn, soldier_views.full, bodies.all.size(), bodies.ragdolls()])
+		if connected:
+			lines.append("%d Hz | tick %d server %d lead %d (clock %+.1f%%) | RTT %d ms | snapshots %.1f KB/s | jumps %d | corrections %d (last %.3f m) | soldiers %d" % [
+				Game.TICK_RATE, session.tick, session.server_tick, session.player.input_lead, 100 * session.dilation,
+				roundi(session.conn.stats.rtt * 1000), _net_rate, session.resyncs, predictor.corrections, predictor.last_error,
+				session.soldiers.size()])
+	if not connected:
 		lines.append(_status + "…")
 	if _capture_notice != "" and Time.get_ticks_msec() < _capture_notice_until:
 		lines.append(_capture_notice)
