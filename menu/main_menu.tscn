@@ -1,14 +1,16 @@
-[gd_scene load_steps=5 format=3]
+[gd_scene load_steps=6 format=3]
 
 [ext_resource type="Script" path="res://menu/main_menu.gd" id="1_menu"]
 [ext_resource type="Theme" path="res://menu/theme.tres" id="2_theme"]
 
+[ext_resource type="Texture2D" path="res://menu/valley.webp" id="3_valley"]
+
 [sub_resource type="Gradient" id="Gradient_sky"]
-colors = PackedColorArray(0.2, 0.29, 0.29, 1, 0.055, 0.078, 0.082, 1)
+colors = PackedColorArray(0.035, 0.06, 0.065, 0.82, 0.045, 0.08, 0.095, 0.24)
 
 [sub_resource type="GradientTexture2D" id="GradientTexture2D_sky"]
 gradient = SubResource("Gradient_sky")
-fill_to = Vector2(0, 1)
+fill_to = Vector2(1, 0.36)
 
 [node name="MainMenu" type="Control"]
 layout_mode = 3
@@ -27,10 +29,22 @@ anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
+mouse_filter = 2
+texture = ExtResource("3_valley")
+expand_mode = 1
+stretch_mode = 6
+
+[node name="Shade" type="TextureRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+mouse_filter = 2
 texture = SubResource("GradientTexture2D_sky")
 expand_mode = 1
 
 [node name="Center" type="CenterContainer" parent="."]
+unique_name_in_owner = true
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0

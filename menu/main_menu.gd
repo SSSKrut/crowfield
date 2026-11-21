@@ -22,6 +22,8 @@ var message := ""
 
 func _ready() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	resized.connect(_position_panel)
+	_position_panel()
 	_port.value = ENetTransport.DEFAULT_PORT
 	for map_name in MapScene.MAPS:
 		_map.add_item(map_name.capitalize())
@@ -29,6 +31,11 @@ func _ready() -> void:
 	_on_map_selected(_map.selected)
 	_show_status(message)
 	%Solo.grab_focus()
+
+
+func _position_panel() -> void:
+	# Leave the right side of the Valley panorama visible on wider windows.
+	%Center.anchor_right = clampf(565.0 / maxf(size.x, 1.0), 0.54, 1.0)
 
 
 func _on_map_selected(index: int) -> void:
