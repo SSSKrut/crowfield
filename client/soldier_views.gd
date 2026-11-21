@@ -63,7 +63,7 @@ func tint(team: int) -> Color:
 
 ## update places every other soldier at the interpolation time, advances its
 ## animation and shows its combat. A soldier that is dead at that time falls.
-func update(session: ClientSession, delta: float, camera: Camera3D) -> void:
+func update(session: ClientSession, delta: float, camera: Camera3D, scene: MapScene) -> void:
 	_frame += 1
 	var eye := camera.global_position
 	for id in _entries.keys():
@@ -96,7 +96,12 @@ func update(session: ClientSession, delta: float, camera: Camera3D) -> void:
 		entry.known = known
 		entry.distance = remote.position.distance_to(eye)
 		entry.view.face(remote.position, remote.yaw)
-		entry.view.animate(delta, Game.horizontal_length(remote.velocity))
+		var speed := Game.horizontal_length(remote.velocity)
+		entry.view.animate(delta, speed)
+		if sounds != null:
+			var near_enough := entry.distance < Sounds.REMOTE_FOOTSTEP_RANGE
+			if entry.footstep_due(remote, speed / rules.movement.sprint_speed, delta, near_enough):
+				sounds.footstep_at(remote.position, scene, entry.distance)
 		_hold(entry, known.soldier.arsenal.weapon(), remote, known.soldier.team)
 		shown.append(entry)
 	drawn = shown.size()
@@ -288,3 +293,28 @@ class Entry:
 	var distance := 0.0
 	## coarse is the animation time owed to a soldier animated every few frames.
 	var coarse := 0.0
+	var foot_position := Vector3.INF
+	var foot_travel := 0.0
+
+
+	## Advance the gait from drawn motion. A new, airborne, or corrected
+	## soldier needs a clean sample before it can make another step.
+	func footstep_due(remote: RemoteSoldier, speed_ratio: float, delta: float, nearby: bool) -> bool:
+		if not nearby or not remote.grounded:
+			foot_position = Vector3.INF
+			foot_travel = 0.0
+			return false
+		var offset := remote.position - foot_position
+		foot_position = remote.position
+		var max_travel := maxf(0.9, delta * 12.0)
+		if not offset.is_finite() or offset.length_squared() > max_travel * max_travel:
+			foot_travel = 0.0
+			return false
+		if speed_ratio < 0.04:
+			return false
+		var stride_length := lerpf(0.80, 2.0, clampf(speed_ratio, 0.0, 1.0))
+		foot_travel += Vector2(offset.x, offset.z).length()
+		if foot_travel < stride_length:
+			return false
+		foot_travel = fposmod(foot_travel, stride_length)
+		return true

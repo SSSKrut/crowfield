@@ -1,6 +1,6 @@
 class_name Sounds
 extends Node
-## Local weapon and feedback cues, and spatial shots from other soldiers.
+## Local weapon and feedback cues, and spatial combat sounds from other soldiers.
 ## With a volume of zero the game is silent and creates no players.
 
 const SAMPLE_RATE := 44100
@@ -8,6 +8,9 @@ const SAMPLE_RATE := 44100
 const SHOT_VOICES := 6
 ## Shots of other soldiers play on this many positional voices in turn.
 const POSITIONAL_VOICES := 24
+## Movement has its own voices so a passing group cannot cut off gunfire.
+const REMOTE_FOOTSTEP_VOICES := 8
+const REMOTE_FOOTSTEP_RANGE := 16.0
 ## A distant shot is half as loud at this distance, before the spatial mix.
 const FALLOFF_DISTANCE := 20.0
 const QUIETEST := 0.03
@@ -41,6 +44,8 @@ var _shots := {}
 var _next := {}
 var _positional: Array[AudioStreamPlayer3D] = []
 var _next_positional := 0
+var _remote_boots: Array[AudioStreamPlayer3D] = []
+var _remote_step_number := 0
 var _dry: AudioStreamPlayer
 var _magazine_out: AudioStreamPlayer
 var _magazine_in: AudioStreamPlayer
@@ -87,14 +92,9 @@ func _init(volume: float) -> void:
 	_landing.pitch_scale = 0.84
 	_damage = _player(DAMAGE, 0.36)
 	for i in POSITIONAL_VOICES:
-		var player := AudioStreamPlayer3D.new()
-		# The fall with distance is the game's own, below; the engine only
-		# places the sound to the side it came from.
-		player.attenuation_model = AudioStreamPlayer3D.ATTENUATION_DISABLED
-		player.doppler_tracking = AudioStreamPlayer3D.DOPPLER_TRACKING_DISABLED
-		player.max_db = 0.0
-		add_child(player)
-		_positional.append(player)
+		_positional.append(_spatial_player())
+	for i in REMOTE_FOOTSTEP_VOICES:
+		_remote_boots.append(_spatial_player())
 
 
 ## weapon plays what the player's own weapon did in a tick: the bits of
@@ -152,8 +152,29 @@ func impact_at(position: Vector3) -> void:
 func _play_at(stream: AudioStreamWAV, position: Vector3, volume: float) -> void:
 	var player := _positional[_next_positional]
 	_next_positional = (_next_positional + 1) % POSITIONAL_VOICES
+	_play_spatial(player, stream, position, volume, SHOT_PITCHES[_next_positional % SHOT_VOICES])
+
+
+## Nearby movement carries much less far than a weapon report. When a group
+## is already loud enough to use the whole pool, keep its current steps intact.
+func footstep_at(feet: Vector3, scene: MapScene, distance: float) -> void:
+	if not _audible or not is_inside_tree() or distance >= REMOTE_FOOTSTEP_RANGE:
+		return
+	var gain := 1.0 - distance / REMOTE_FOOTSTEP_RANGE
+	for voice in _remote_boots:
+		if voice.playing:
+			continue
+		var variants: Array = FOOTSTEPS[_surface_at(feet, scene)]
+		var sample: AudioStreamWAV = variants[_remote_step_number % variants.size()]
+		var pitch: float = SHOT_PITCHES[_remote_step_number % SHOT_VOICES]
+		_remote_step_number += 1
+		_play_spatial(voice, sample, feet + Vector3.UP * 0.15, 0.34 * gain * gain, pitch)
+		return
+
+
+func _play_spatial(player: AudioStreamPlayer3D, stream: AudioStreamWAV, position: Vector3, volume: float, pitch: float) -> void:
 	player.stream = stream
-	player.pitch_scale = SHOT_PITCHES[_next_positional % SHOT_VOICES]
+	player.pitch_scale = pitch
 	player.global_position = position
 	player.volume_db = linear_to_db(volume * _volume)
 	player.play()
@@ -229,6 +250,16 @@ func flag_changed(captured: bool) -> void:
 		return
 	var cue := _flag_captured if captured else _flag_lost
 	cue.play()
+
+
+func _spatial_player() -> AudioStreamPlayer3D:
+	var player := AudioStreamPlayer3D.new()
+	# The engine pans the source. Each cue controls its own distance falloff.
+	player.attenuation_model = AudioStreamPlayer3D.ATTENUATION_DISABLED
+	player.doppler_tracking = AudioStreamPlayer3D.DOPPLER_TRACKING_DISABLED
+	player.max_db = 0.0
+	add_child(player)
+	return player
 
 
 func _player(stream: AudioStreamWAV, volume: float) -> AudioStreamPlayer:

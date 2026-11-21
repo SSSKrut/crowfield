@@ -119,6 +119,43 @@ func test_remote_soldier_stays_on_the_floor_and_turns_the_short_way() -> void:
 ## A soldier seen a second apart, running and then dead: it is drawn alive
 ## along the way and dies where the server has it dead, at the tick of that
 ## state, with the momentum it ran with.
+func test_remote_footsteps_follow_grounded_render_samples() -> void:
+	var remote := RemoteSoldier.new()
+	remote.add(0, _soldier(Vector3.ZERO, Vector3.ZERO, true, true))
+	remote.add(6, _soldier(Vector3.UP, Vector3.ZERO))
+	remote.add(12, _soldier(Vector3.ZERO, Vector3.ZERO, true, true))
+	for sample in [[0.0, true], [5.5, true], [6.0, false], [11.9, false], [12.0, true], [20.0, true]]:
+		remote.evaluate(sample[0])
+		check_equal(remote.grounded, sample[1], "grounded at render tick %s" % sample[0])
+
+
+func test_remote_footsteps_require_continuous_nearby_ground_travel() -> void:
+	var entry := SoldierViews.Entry.new()
+	var remote := RemoteSoldier.new()
+	remote.grounded = true
+	check(not entry.footstep_due(remote, 0.5, 0.1, true), "first sample made a step")
+	for step in range(1, 5):
+		remote.position.x = step * 0.4
+		check_equal(entry.footstep_due(remote, 0.5, 0.1, true), step == 4, "walking sample %d" % step)
+	remote.position = Vector3(10, 0, 0)
+	check(not entry.footstep_due(remote, 0.5, 0.1, true), "teleport made a step")
+	remote.grounded = false
+	remote.position.x += 0.8
+	check(not entry.footstep_due(remote, 0.5, 0.1, true), "airborne soldier made a step")
+	remote.grounded = true
+	remote.position.x += 0.8
+	check(not entry.footstep_due(remote, 0.5, 0.1, true), "landing reused airborne travel")
+	remote.position.x += 0.8
+	check(not entry.footstep_due(remote, 0.5, 0.1, false), "distant soldier made a step")
+	remote.position.x += 0.8
+	check(not entry.footstep_due(remote, 0.5, 0.1, true), "re-entry reused distant travel")
+	for i in 12:
+		remote.position.x += 0.1
+		check(not entry.footstep_due(remote, 0.0, 0.1, true), "stationary correction made a step")
+	remote.position.x += 0.4
+	check(not entry.footstep_due(remote, 0.5, 0.1, true), "movement reused stationary corrections")
+
+
 func test_remote_soldier_dies_where_it_died() -> void:
 	var remote := RemoteSoldier.new()
 	var run := Vector3(5, 0, 0)
