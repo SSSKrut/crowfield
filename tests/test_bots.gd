@@ -126,6 +126,7 @@ func test_bots_fight_a_battle_on_the_valley() -> void:
 	settings.seed = 9
 	var server: Server = Server.create(settings, Rules.new())
 	cleanup(func() -> void: server.close())
+	server.flag_match.started = true
 	var start := {}
 	var still := {}
 	var worst_still := 0
