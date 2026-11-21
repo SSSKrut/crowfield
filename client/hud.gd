@@ -115,8 +115,18 @@ func _draw_match() -> void:
 		var tint := GOLD if flag.contested else team_colors.get(flag.owner, LIGHT_GRAY) as Color
 		_box(center, x - 53, 38, 106, 2, tint)
 		_centered(map_scene.flags[index].name, center + Vector2(x, 45) * _scale, 16, WHITE)
-		var status := "CONTESTED" if flag.contested else ("NEUTRAL" if flag.owner == Game.Team.NONE else Game.team_name(flag.owner).to_upper())
-		_centered(status, center + Vector2(x, 62) * _scale, 12, tint.lightened(0.30), _DISPLAY)
+		var status := "NEUTRAL" if flag.owner == Game.Team.NONE else Game.team_name(flag.owner).to_upper()
+		var status_tint := tint
+		if flag.contested:
+			status = "CONTESTED"
+		elif flag.challenger != Game.Team.NONE and flag.progress > 0:
+			status_tint = team_color(flag.challenger)
+			if flag.owner == team and team != Game.Team.NONE:
+				status = "LOSING %d%%" % flag.progress
+				status_tint = GOLD
+			else:
+				status = "%s TAKING %d%%" % [Game.team_name(flag.challenger).to_upper(), flag.progress]
+		_centered(status, center + Vector2(x, 62) * _scale, 12, status_tint.lightened(0.30), _DISPLAY)
 		if show_bearings:
 			_draw_flag_bearing(map_scene.flags[index], center + Vector2(x, 84) * _scale)
 	_box(center, -48, footer + 2, 96, 22, PANEL)
