@@ -127,8 +127,7 @@ func _build_flags() -> void:
 		label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 		label.fixed_size = true
 		label.pixel_size = 0.0012
-		label.no_depth_test = true
-		label.visibility_range_end = 145.0
+		label.visibility_range_end = 45.0
 		root.add_child(label)
 		_flag_labels.append(label)
 
