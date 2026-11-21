@@ -1,6 +1,6 @@
 class_name Sounds
 extends Node
-## Local weapon and feedback cues, and spatial combat sounds from other soldiers.
+## Local feedback, spatial combat sounds and Valley ambience.
 ## With a volume of zero the game is silent and creates no players.
 
 const SAMPLE_RATE := 44100
@@ -14,6 +14,8 @@ const REMOTE_FOOTSTEP_RANGE := 16.0
 ## A distant shot is half as loud at this distance, before the spatial mix.
 const FALLOFF_DISTANCE := 20.0
 const QUIETEST := 0.03
+const WIND := preload("res://assets/audio/ambience/wind.ogg")
+const RIVER := preload("res://assets/audio/ambience/river.ogg")
 
 const SHOT_VOLUMES := [0.0, 0.70, 0.82, 0.62]
 const SHOT_PITCHES := [1.0, 0.98, 1.02, 0.99, 1.01, 1.0]
@@ -60,6 +62,9 @@ var _landing: AudioStreamPlayer
 var _damage: AudioStreamPlayer
 var _step_number := 0
 var _last_impact_usec := -1000000
+var _river: AudioStreamPlayer3D
+var _river_water: MapScene.Water
+var _river_gain := 0.0
 
 
 ## volume is the master volume from 0 to 1.
@@ -95,6 +100,37 @@ func _init(volume: float) -> void:
 		_positional.append(_spatial_player())
 	for i in REMOTE_FOOTSTEP_VOICES:
 		_remote_boots.append(_spatial_player())
+
+
+## Valley has one water surface. The visible river meanders across it.
+func start_ambience(scene: MapScene) -> void:
+	if not _audible or _river != null or scene.name != "valley" or scene.waters.is_empty():
+		return
+	var wind := _player(WIND, 0.12)
+	wind.name = "ValleyWind"
+	wind.play()
+	_river_water = scene.waters[0]
+	_river = _spatial_player()
+	_river.name = "ValleyRiver"
+	_river.stream = RIVER
+	_river.volume_db = -80.0
+	_river.play()
+
+
+## Move a single positional voice along the river, so it follows the bank
+## at each crossing without overlapping loop phases from several emitters.
+func update_ambience(listener: Vector3, delta: float) -> void:
+	if _river == null:
+		return
+	var center := _river_water.center
+	var half_width := _river_water.half_extents.x
+	var x := clampf(listener.x, center.x - half_width, center.x + half_width)
+	var source := Vector3(x, center.y, ValleyMap.river_z(x))
+	_river.global_position = source
+	var distance := listener.distance_to(source)
+	var target := 0.17 * (1.0 - smoothstep(5.0, 32.0, distance))
+	_river_gain = move_toward(_river_gain, target, delta * 1.4)
+	_river.volume_db = linear_to_db(maxf(0.0001, _river_gain * _volume))
 
 
 ## weapon plays what the player's own weapon did in a tick: the bits of
@@ -262,7 +298,7 @@ func _spatial_player() -> AudioStreamPlayer3D:
 	return player
 
 
-func _player(stream: AudioStreamWAV, volume: float) -> AudioStreamPlayer:
+func _player(stream: AudioStream, volume: float) -> AudioStreamPlayer:
 	var player := AudioStreamPlayer.new()
 	player.stream = stream
 	player.volume_db = linear_to_db(volume * _volume)

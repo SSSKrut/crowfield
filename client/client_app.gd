@@ -414,6 +414,7 @@ func _load_map(map_name: String) -> Variant:
 	_map_collision = scene.build_collision(get_world_3d().space)
 	map_view = MapView.new(scene)
 	add_child(map_view)
+	sounds.start_ambience(scene)
 	return scene
 
 
@@ -851,6 +852,7 @@ func _process(delta: float) -> void:
 	bodies.update(delta)
 	_charge("bodies")
 	_update_camera(feet)
+	sounds.update_ambience(camera.global_position, delta)
 	var local_footing := own != null and _first_person() and _focused and not menu.visible and _reconnect_since < 0
 	var footfall := view_model.footing(delta, feet, own != null and own.grounded,
 		speed / rules.movement.sprint_speed, local_footing)
