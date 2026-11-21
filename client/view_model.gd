@@ -26,6 +26,9 @@ const FIELD_OF_VIEW := 58.0
 const AIM_TIME := 0.15
 const RECOIL_TIME := 0.06
 const FLASH_TIME := 0.05
+const FULL_HD_PIXELS := 1920.0 * 1080.0
+
+enum Footfall { NONE, STEP, LAND }
 ## A soldier holds its weapon at its right side, at the height of the chest and
 ## somewhat forward, along its aim.
 const HELD_SCALE := 0.94
@@ -52,6 +55,7 @@ var aim := 0.0
 ## sun is the light of the world, which the overlay copies; without one the
 ## overlay is lit from LIGHT.
 var sun: DirectionalLight3D
+var performance_mode := false
 ## overlay shows the weapon in hand over the world; layer holds it.
 var overlay: SubViewportContainer
 var layer: CanvasLayer
@@ -76,8 +80,13 @@ var _flash_core: MeshInstance3D
 var _flash_flame: MeshInstance3D
 var _flash_light: OmniLight3D
 var _shown := WeaponTuning.Kind.NONE
-## The walk sways the model: _bob is its phase, _stride its strength.
-var _bob := 0.0
+## One unit of step phase is one footfall. The weapon follows the same cadence.
+var _step_phase := 0.0
+var _foot_position := Vector3.INF
+var _was_grounded := false
+var _air_time := 0.0
+var _air_peak := 0.0
+var _landing_dip := 0.0
 var _stride := 0.0
 var _sway := Vector2.ZERO
 var _sprint := 0.0
@@ -157,9 +166,12 @@ func _ready() -> void:
 	_viewport.own_world_3d = true
 	_viewport.transparent_bg = true
 	_viewport.gui_disable_input = true
-	_viewport.msaa_3d = Viewport.MSAA_4X
-	_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	_viewport.msaa_3d = Viewport.MSAA_2X if performance_mode else Viewport.MSAA_4X
+	_viewport.render_target_update_mode = SubViewport.UPDATE_WHEN_VISIBLE
 	overlay.add_child(_viewport)
+	if performance_mode:
+		overlay.resized.connect(_update_overlay_resolution)
+		_update_overlay_resolution()
 	var environment := Environment.new()
 	environment.background_mode = Environment.BG_CLEAR_COLOR
 	environment.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
@@ -208,6 +220,13 @@ func _ready() -> void:
 	_flash_light.omni_range = 0.83
 	_flash_light.visible = false
 	_viewport.add_child(_flash_light)
+
+
+## The alpha overlay is a separate render target from the scaled world. At
+## large window sizes, keep its projection and spend fewer samples on it.
+func _update_overlay_resolution() -> void:
+	var pixels := overlay.size.x * overlay.size.y
+	overlay.stretch_shrink = maxi(1, ceili(sqrt(pixels / FULL_HD_PIXELS)))
 
 
 static func _mesh_part(mesh: Mesh, parent: Node) -> MeshInstance3D:
@@ -265,6 +284,47 @@ func fired(turn: float) -> void:
 	_flash_turn = turn
 
 
+## footing uses the drawn feet, so a blocked movement key or a stationary
+## correction cannot roll the gait forward. Reset the sample after a discontinuity
+## such as spawning, focus loss or switching away from the first-person view.
+func footing(delta: float, feet: Vector3, grounded: bool, speed: float, active: bool) -> Footfall:
+	if not active:
+		_foot_position = Vector3.INF
+		return Footfall.NONE
+	var offset := feet - _foot_position
+	_foot_position = feet
+	if not offset.is_finite() or offset.length_squared() > pow(maxf(0.9, delta * 12.0), 2):
+		_step_phase = 0.0
+		_air_time = 0.0
+		_air_peak = feet.y
+		_was_grounded = grounded
+		_landing_dip = 0.0
+		return Footfall.NONE
+	if not grounded:
+		if _was_grounded:
+			_air_peak = feet.y - offset.y
+			_air_time = 0.0
+		_air_peak = maxf(_air_peak, feet.y)
+		_air_time += delta
+		_was_grounded = false
+		return Footfall.NONE
+	if not _was_grounded:
+		_was_grounded = true
+		var fall := _air_peak - feet.y
+		if _air_time >= 0.10 and fall >= 0.18:
+			_landing_dip = clampf(fall * 0.052, 0.009, 0.026)
+			_step_phase = 0.0
+			return Footfall.LAND
+		return Footfall.NONE
+	if speed < 0.04:
+		return Footfall.NONE
+	var stride_length := lerpf(0.80, 2.0, clampf(speed, 0.0, 1.0))
+	var next := _step_phase + Vector2(offset.x, offset.z).length() / stride_length
+	var planted := floori(next) > floori(_step_phase)
+	_step_phase = fposmod(next, 2.0)
+	return Footfall.STEP if planted else Footfall.NONE
+
+
 ## update moves the model for a frame. speed is the soldier's share of the
 ## sprint speed; look is how far the view turned this frame, in radians: yaw
 ## to the right, pitch up.
@@ -273,11 +333,11 @@ func update(delta: float, aiming: bool, sprinting: bool, grounded: bool, speed: 
 	aim = minf(1.0, aim + rate) if aiming else maxf(0.0, aim - rate)
 	var stride := minf(1.0, speed) if grounded else 0.0
 	_stride += (stride - _stride) * minf(1.0, delta * 8)
-	_bob += delta * (5 + 6 * speed)
+	_landing_dip *= exp(-delta / 0.115)
 	_sprint += ((1.0 if sprinting else 0.0) - _sprint) * minf(1.0, delta * 10)
-	for i in 2:
-		var target := clampf(-look[i] * 0.6, -0.04, 0.04)
-		_sway[i] += (target - _sway[i]) * minf(1.0, delta * 12)
+	var eye_turn := look / maxf(1.0, delta * 60.0)
+	var target := (-eye_turn * 0.45).clamp(Vector2(-0.032, -0.032), Vector2(0.032, 0.032))
+	_sway = _sway.lerp(target, 1.0 - exp(-delta * 15.0))
 	_recoil *= exp(-delta / RECOIL_TIME)
 	_flash = maxf(0.0, _flash - delta)
 
@@ -290,16 +350,17 @@ func place(camera: Camera3D, kind: int, action: int, progress: float) -> bool:
 	if shape == null:
 		return false
 	var calm := 1 - 0.85 * aim
+	var phase := PI * _step_phase
 	var offset := shape.hip + (shape.aim - shape.hip) * aim
 	offset += Vector3(
-		0.012 * _stride * sin(_bob) * calm + _sway.x * calm,
-		-0.01 * _stride * absf(cos(_bob)) * calm + _sway.y * calm,
+		0.012 * _stride * sin(phase) * calm + _sway.x * calm,
+		(-0.009 * _stride * absf(cos(phase)) + _sway.y - _landing_dip) * calm,
 		-shape.kick_back * _recoil * (1 - 0.5 * aim))
 	offset += Vector3(-0.03, -0.06, -0.06) * _sprint
 	var pitch := shape.kick_pitch * _recoil * calm - 0.45 * _sprint
 	# Sprinting carries the weapon across the body, muzzle down and left.
 	var yaw := -0.55 * _sprint
-	var roll := (_sway.x * -0.5 + 0.018 * sin(_bob) * _stride) * calm + 0.34 * _sprint
+	var roll := (_sway.x * -0.5 + 0.018 * sin(phase) * _stride) * calm + 0.34 * _sprint
 	match action:
 		Arsenal.Action.EQUIPPING:
 			var lower := (1 - progress) * (1 - progress)

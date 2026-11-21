@@ -42,6 +42,8 @@ func take(events: Array, own: int, sounds: Object) -> void:
 			var mark := HurtMark.new()
 			mark.yaw = event.yaw * (TAU / 256.0) + PI
 			hurt.append(mark)
+			if flash <= 0.0 and sounds != null:
+				sounds.take_damage()
 			flash = HURT_FLASH
 		elif event is Messages.Death:
 			var line := FeedLine.new()
