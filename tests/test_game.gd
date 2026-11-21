@@ -68,13 +68,11 @@ func test_ray_enters_capsules_and_spheres() -> void:
 func test_hitboxes_follow_the_soldier() -> void:
 	for yaw in [0.0, PI / 2, PI, -2.5]:
 		var position := Vector3(3, 0.5, -10)
-		for c in [[1.6, 0.0, Hitboxes.Zone.HEAD], [1.05, 0.0, Hitboxes.Zone.TORSO], [0.7, 0.0, Hitboxes.Zone.TORSO],
-				[0.3, 0.26, Hitboxes.Zone.LIMB], [0.6, 1.2, Hitboxes.Zone.NONE]]:
+		for c in [[1.64, 0.0, Hitboxes.Zone.HEAD], [1.05, 0.0, Hitboxes.Zone.TORSO],
+				[0.3, 0.118, Hitboxes.Zone.LIMB], [1.70, 0.22, Hitboxes.Zone.NONE],
+				[0.6, 1.2, Hitboxes.Zone.NONE]]:
 			var sideways := absf(sin(yaw)) > 0.9
-			# From the side the arm covers the lower body, and the legs stand one
-			# behind the other.
-			if sideways and c[0] == 0.7:
-				continue
+			# Seen from the side, the legs stand one behind the other.
 			var origin := Vector3(3 + c[1], 0.5 + c[0], 0)
 			if sideways and c[2] == Hitboxes.Zone.LIMB:
 				origin.x = 3

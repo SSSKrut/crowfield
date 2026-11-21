@@ -42,10 +42,9 @@ const SEARCH_TICKS := 6 * Game.TICK_RATE
 const ALERT_TICKS := 3 * Game.TICK_RATE
 const REACTION := Vector2(0.22, 0.45)
 const TURN_SPEED := deg_to_rad(400.0)
-## AIM_HEIGHT is the middle of the body, under the big head, that a bot aims
-## at; HEAD_HEIGHT where it looks for a head over cover.
-const AIM_HEIGHT := 0.8
-const HEAD_HEIGHT := 1.45
+## Aim at the infantry chest and check for a visible helmet over cover.
+const AIM_HEIGHT := 1.17
+const HEAD_HEIGHT := 1.64
 ## The aim error starts at ACQUIRE_ERROR on a new target and settles towards
 ## STEADY_ERROR in about SETTLE seconds, wandering by NOISE every tick. Each
 ## bot has a hand of its own: its errors are its skill times these.

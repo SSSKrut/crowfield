@@ -1,10 +1,8 @@
 class_name Hitboxes
 ## The hitboxes of every soldier, human or bot (ARCHITECTURE.md, 6.9), in a
 ## space at its feet where X points to its right, Y up and Z forward. They are
-## procedural: no animation runs on the server. They follow the robot of the
-## prototype standing idle, a cartoon with a head as wide as its shoulders are
-## long and forearms held forward: a capsule across the head, one for the
-## body, and the legs, upper arms and forearms with the hands.
+## procedural, using the infantry soldier's ready pose. Animation runs on the
+## client; the same capsules are used for server hits and visible impacts.
 
 ## Zone is the part of a soldier a shot hit; the damage depends on it.
 enum Zone { NONE, HEAD, TORSO, LIMB }
@@ -13,14 +11,14 @@ const ZONE_NAMES := ["none", "head", "torso", "limb"]
 ## Each hitbox is a capsule from A to B of a radius; a sphere when A and B are
 ## the same point.
 const A := [
-	Vector3(-0.17, 1.45, 0), Vector3(0, 0.82, 0), Vector3(-0.26, 0.1, 0), Vector3(0.26, 0.1, 0),
-	Vector3(-0.25, 0.94, 0), Vector3(0.25, 0.94, 0), Vector3(-0.36, 0.72, 0), Vector3(0.36, 0.72, 0),
+	Vector3(0, 1.60, 0.006), Vector3(0, 1.03, 0), Vector3(-0.118, 0.12, 0.038), Vector3(0.118, 0.12, 0.038),
+	Vector3(-0.23, 1.415, 0), Vector3(0.23, 1.415, 0), Vector3(-0.20, 1.22, 0.22), Vector3(0.255, 1.155, 0.105),
 ]
 const B := [
-	Vector3(0.17, 1.45, 0), Vector3(0, 0.88, 0), Vector3(-0.26, 0.55, 0), Vector3(0.26, 0.55, 0),
-	Vector3(-0.36, 0.72, 0), Vector3(0.36, 0.72, 0), Vector3(-0.6, 0.45, 0.55), Vector3(0.6, 0.45, 0.55),
+	Vector3(0, 1.69, 0.006), Vector3(0, 1.31, 0), Vector3(-0.118, 0.84, 0.019), Vector3(0.118, 0.84, 0.019),
+	Vector3(-0.20, 1.22, 0.22), Vector3(0.255, 1.155, 0.105), Vector3(0.075, 1.215, 0.515), Vector3(0.085, 1.205, 0.26),
 ]
-const RADII := [0.35, 0.29, 0.1, 0.1, 0.08, 0.08, 0.15, 0.15]
+const RADII := [0.118, 0.21, 0.105, 0.105, 0.082, 0.082, 0.069, 0.069]
 const ZONES := [Zone.HEAD, Zone.TORSO, Zone.LIMB, Zone.LIMB, Zone.LIMB, Zone.LIMB, Zone.LIMB, Zone.LIMB]
 
 ## COUNT is how many hitboxes a soldier has.
