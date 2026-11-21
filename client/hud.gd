@@ -22,6 +22,7 @@ const RED := Color8(230, 41, 55)
 const YELLOW := Color8(253, 249, 0)
 const PANEL := Color8(14, 24, 29, 222)
 const PANEL_EDGE := Color8(121, 146, 149, 112)
+const INK := Color8(12, 17, 21, 235)
 ## BASELINE is where text sits below its top, as a share of its size.
 const BASELINE := 0.8
 
@@ -97,69 +98,77 @@ func _draw() -> void:
 
 
 func _draw_match() -> void:
-	var center := Vector2(size.x / 2.0, 18 * _scale)
-	var blue := team_color(Game.Team.BLUE).lightened(0.30)
-	var red := team_color(Game.Team.RED).lightened(0.30)
+	var center := Vector2(size.x / 2.0, 16 * _scale)
+	var blue := team_color(Game.Team.BLUE).lightened(0.40)
+	var red := team_color(Game.Team.RED).lightened(0.40)
 	var show_bearings := has_soldier and not dead and match_state.result == MatchState.Result.ACTIVE
-	var footer := 97 if show_bearings else 79
-	_box(center, -183, 0, 366, footer, PANEL)
-	_box(center, -183, 0, 366, 1, PANEL_EDGE)
 	var clock := "%d:%02d" % [match_state.seconds / 60, match_state.seconds % 60]
-	_text("BLUE", center + Vector2(-167, 11) * _scale, 15, blue, _DISPLAY)
-	_text("RED", center + Vector2(167 * _scale - _measure("RED", 15, _DISPLAY), 11 * _scale), 15, red, _DISPLAY)
-	_centered(str(match_state.blue_score), center + Vector2(-98, 4) * _scale, 32, WHITE, _DISPLAY)
-	_centered(str(match_state.red_score), center + Vector2(98, 4) * _scale, 32, WHITE, _DISPLAY)
-	_centered(clock, center + Vector2(0, 6) * _scale, 26, WHITE, _DISPLAY)
-	_box(center, -183, 36, 366, 1, PANEL_EDGE)
+	_box(center, -93, -1, 186, 27, Color8(14, 24, 29, 170))
+	_centered(str(match_state.blue_score), center + Vector2(-61, -2) * _scale, 29, blue, _DISPLAY)
+	_centered(str(match_state.red_score), center + Vector2(61, -2) * _scale, 29, red, _DISPLAY)
+	_centered(clock, center + Vector2(0, 0) * _scale, 26, WHITE, _DISPLAY)
+	var kills := "%d %s" % [match_state.kills, "kill" if match_state.kills == 1 else "kills"]
+	_text(kills, center + Vector2(105, 5) * _scale, 17, WHITE, _DISPLAY)
 	for index in map_scene.flags.size():
 		var flag := match_state.flags[index]
-		var x := (index - 1) * 122
-		var tint := GOLD if flag.contested else team_colors.get(flag.owner, LIGHT_GRAY) as Color
-		_box(center, x - 53, 38, 106, 2, tint)
-		_centered(map_scene.flags[index].name, center + Vector2(x, 45) * _scale, 16, WHITE)
-		var status := "NEUTRAL" if flag.owner == Game.Team.NONE else Game.team_name(flag.owner).to_upper()
-		var status_tint := tint
+		var zone := map_scene.flags[index]
+		var x := (index - (map_scene.flags.size() - 1) * 0.5) * 108
+		var tint: Color = team_colors.get(flag.owner, LIGHT_GRAY)
+		var status_tint := tint.lightened(0.40)
+		var status := ""
 		if flag.contested:
-			status = "CONTESTED"
+			status = "Contested"
+			status_tint = GOLD
 		elif flag.challenger != Game.Team.NONE and flag.progress > 0:
-			status_tint = team_color(flag.challenger)
-			if flag.owner == team and team != Game.Team.NONE:
-				status = "LOSING %d%%" % flag.progress
+			if flag.owner == team:
+				status = "Losing %d%%" % flag.progress
 				status_tint = GOLD
 			else:
-				status = "%s TAKING %d%%" % [Game.team_name(flag.challenger).to_upper(), flag.progress]
-		_centered(status, center + Vector2(x, 62) * _scale, 12, status_tint.lightened(0.30), _DISPLAY)
-		if show_bearings:
-			_draw_flag_bearing(map_scene.flags[index], center + Vector2(x, 84) * _scale)
-	_box(center, -48, footer + 2, 96, 22, PANEL)
-	_centered("%d KILLS" % match_state.kills, center + Vector2(0, footer + 4) * _scale, 16, WHITE, _DISPLAY)
+				status = "%s +%d%%" % [Game.team_name(flag.challenger), flag.progress]
+				status_tint = team_color(flag.challenger).lightened(0.40)
+		var name_width := _measure(zone.name, 19, _DISPLAY) / _scale
+		var name_x := x - (name_width + 10) / 2
+		_box(center, name_x - 1, 39, 7, 7, INK)
+		_box(center, name_x, 40, 5, 5, tint.lightened(0.20))
+		_text(zone.name, center + Vector2(name_x + 10, 28) * _scale, 19, WHITE, _DISPLAY)
+		if not status.is_empty():
+			_centered(status, center + Vector2(x, 51) * _scale, 16, status_tint, _DISPLAY)
+		else:
+			var owner := "Neutral" if flag.owner == Game.Team.NONE else Game.team_name(flag.owner).capitalize()
+			if show_bearings and not zone.contains_flag_position(feet):
+				_draw_flag_bearing(zone, center + Vector2(x, 61) * _scale, owner)
+			else:
+				_centered(owner, center + Vector2(x, 52) * _scale, 15, WHITE, _DISPLAY)
 	if match_state.result != MatchState.Result.ACTIVE:
 		_draw_result()
 	elif has_soldier and not dead:
 		if not reinforcement.is_empty():
-			_box(center, -115, footer + 26, 230, 25, PANEL)
-			_centered(reinforcement, center + Vector2(0, footer + 30) * _scale, 16, WHITE)
+			_centered(reinforcement, center + Vector2(0, 78) * _scale, 16, WHITE)
 		_draw_capture()
 
 
 ## The arrow turns with the player, including when the flag is behind them.
-func _draw_flag_bearing(zone: MapScene.Zone, center: Vector2) -> void:
-	if zone.contains_flag_position(feet):
-		_centered("AT FLAG", center + Vector2(0, -7) * _scale, 13, LIGHT_GRAY, _DISPLAY)
-		return
+func _draw_flag_bearing(zone: MapScene.Zone, center: Vector2, owner: String) -> void:
 	var offset := zone.center - feet
 	var angle := atan2(offset.x, -offset.z) - view_yaw
 	var forward := Vector2(sin(angle), -cos(angle))
 	var side := forward.orthogonal()
-	var origin := center - Vector2(16, 0) * _scale
-	draw_colored_polygon(PackedVector2Array([
+	var meters := "%d m" % roundi(Vector2(offset.x, offset.z).length())
+	var owner_width := _measure(owner, 15, _DISPLAY)
+	var distance_width := _measure(meters, 15, _DISPLAY)
+	var x := center.x - (owner_width + distance_width + 22 * _scale) / 2.0
+	_text(owner, Vector2(x, center.y - 9 * _scale), 15, WHITE, _DISPLAY)
+	var origin := Vector2(x + owner_width + 12 * _scale, center.y)
+	var arrow := PackedVector2Array([
 		origin + forward * (6 * _scale),
 		origin + (side * 4 - forward * 4) * _scale,
 		origin + (forward * -2) * _scale,
 		origin + (-side * 4 - forward * 4) * _scale,
-	]), WHITE)
-	var meters := roundi(Vector2(offset.x, offset.z).length())
-	_text("%d m" % meters, center + Vector2(-5, -7) * _scale, 13, LIGHT_GRAY, _DISPLAY)
+	])
+	draw_colored_polygon(arrow, WHITE)
+	arrow.append(arrow[0])
+	draw_polyline(arrow, INK, maxf(1.0, _scale), true)
+	_text(meters, origin + Vector2(10, -9) * _scale, 15, WHITE, _DISPLAY)
 
 
 func _draw_capture() -> void:
@@ -215,7 +224,10 @@ func team_color(of: int) -> Color:
 ## layout expects.
 func _text(text: String, position: Vector2, font_size: int, color: Color, face: Font = _BODY) -> void:
 	var scaled := maxi(1, roundi(font_size * _scale))
-	draw_string(face, position + Vector2(0, BASELINE * scaled), text, HORIZONTAL_ALIGNMENT_LEFT, -1, scaled, color)
+	var baseline := position + Vector2(0, BASELINE * scaled)
+	var outline := Color(INK, INK.a * color.a)
+	draw_string_outline(face, baseline, text, HORIZONTAL_ALIGNMENT_LEFT, -1, scaled, maxi(2, roundi(3 * _scale)), outline)
+	draw_string(face, baseline, text, HORIZONTAL_ALIGNMENT_LEFT, -1, scaled, color)
 
 
 ## _measure is the width of text in screen pixels.
@@ -271,59 +283,47 @@ func _draw_arsenal() -> void:
 	var tuning := weapons.get_tuning(kind) if weapons != null else null
 	if tuning == null:
 		return
-	var corner := Vector2(size.x - 24 * _scale, size.y - 24 * _scale)
+	var corner := Vector2(size.x - 24 * _scale, size.y - 23 * _scale)
 	var magazine := arsenal.magazine[arsenal.current]
-	var reserve := "/ %d" % arsenal.reserve[arsenal.current]
 	var rounds := str(magazine)
-	var reserve_width := _measure(reserve, 22, _DISPLAY)
-	var rounds_width := _measure(rounds, 51, _DISPLAY)
+	var reserve := "/ %d" % arsenal.reserve[arsenal.current]
+	var reserve_width := _measure(reserve, 19, _DISPLAY)
+	var rounds_width := _measure(rounds, 34, _DISPLAY)
 	var tint := WHITE
 	if magazine == 0:
-		tint = RED
+		tint = RED.lightened(0.15)
 	elif magazine <= tuning.magazine / 4:
 		tint = ORANGE
-	_box(corner, -220, -103, 220, 103, PANEL)
-	_box(corner, -220, -103, 220, 1, PANEL_EDGE)
-	var label: String = WeaponTuning.LABELS[kind].to_upper()
-	_text(label, corner + Vector2(-206, -92) * _scale, 18, LIGHT_GRAY, _DISPLAY)
-	_text(reserve, corner + Vector2(-14 * _scale - reserve_width, -46 * _scale), 22, LIGHT_GRAY, _DISPLAY)
-	_text(rounds, corner + Vector2(-24 * _scale - reserve_width - rounds_width, -68 * _scale), 51, tint, _DISPLAY)
+	_text(reserve, corner + Vector2(-reserve_width, -19 * _scale), 19, LIGHT_GRAY, _DISPLAY)
+	_text(rounds, corner + Vector2(-reserve_width - rounds_width - 6 * _scale, -32 * _scale), 34, tint, _DISPLAY)
+
+	var label: String = WeaponTuning.LABELS[kind]
+	var label_color := LIGHT_GRAY
 	if arsenal.action != Arsenal.Action.READY:
 		var total := tuning.equip_ticks()
-		var action := "EQUIPPING"
+		label = "Equipping"
 		if arsenal.action == Arsenal.Action.RELOADING:
 			total = tuning.reload_ticks()
-			action = "RELOADING"
-		var done := 1.0 - float(arsenal.action_ticks) / maxi(1, total)
-		_box(corner, -220, -3, 220, 3, PANEL_EDGE)
-		_box(corner, -220, -3, 220 * done, 3, GOLD)
-		_text(action, corner + Vector2(-206, -22) * _scale, 14, GOLD, _DISPLAY)
-	var x := corner.x - 220 * _scale
-	for slot in Arsenal.MAX_LOADOUT:
-		var held := arsenal.weapons[slot]
-		if held == WeaponTuning.Kind.NONE:
-			continue
-		var slot_text := "%d %s" % [slot + 1, WeaponTuning.LABELS[held]]
-		var color := WHITE if slot == arsenal.current else Color8(200, 200, 200, 155)
-		x -= _measure(slot_text, 15) + 14 * _scale
-		_text(slot_text, Vector2(x, corner.y - 17 * _scale), 15, color)
+			label = "Reloading"
+		label_color = GOLD
+		var done := clampf(1.0 - float(arsenal.action_ticks) / maxi(1, total), 0.0, 1.0)
+		_box(corner, -112, 3, 112, 4, INK)
+		_box(corner, -111, 4, 110 * done, 2, GOLD)
+	_text(label, corner + Vector2(-_measure(label, 15), -50 * _scale), 15, label_color)
 
 
-## _draw_health shows the health of the own soldier in the bottom left corner,
-## and the team it fights for: the soldiers of the other colour are enemies.
+## _draw_health shows the player's health and team in the bottom left corner.
 func _draw_health() -> void:
-	var corner := Vector2(24 * _scale, size.y - 24 * _scale)
-	var label := Game.team_name(team).to_upper() + " TEAM"
-	var team_tint := team_color(team).lightened(0.32)
-	_box(corner, 0, -93, 178, 93, PANEL)
-	_box(corner, 0, -93, 178, 2, team_tint)
-	_text(label, corner + Vector2(12, -81) * _scale, 17, team_tint, _DISPLAY)
+	var corner := Vector2(24 * _scale, size.y - 23 * _scale)
 	var share := clampf(float(health) / Game.MAX_HEALTH, 0.0, 1.0)
-	var health_tint := WHITE if share >= 0.35 else ORANGE
-	_text(str(health), corner + Vector2(12, -58) * _scale, 43, health_tint, _DISPLAY)
-	_text("HEALTH", corner + Vector2(90, -32) * _scale, 14, LIGHT_GRAY, _DISPLAY)
-	_box(corner, 12, -10, 154, 3, PANEL_EDGE)
-	_box(corner, 12, -10, 154 * share, 3, team_tint if share >= 0.35 else ORANGE)
+	var tint := WHITE if share >= 0.35 else ORANGE
+	var team_tint := team_color(team).lightened(0.40)
+	var value := str(health)
+	_text(value, corner + Vector2(0, -32) * _scale, 34, tint, _DISPLAY)
+	_text("HP", corner + Vector2(_measure(value, 34, _DISPLAY) + 6 * _scale, -18 * _scale), 15, LIGHT_GRAY)
+	_box(corner, 0, 3, 78, 4, INK)
+	_box(corner, 1, 4, 76 * share, 2, team_tint if share >= 0.35 else ORANGE)
+
 
 ## _draw_death tells the dead player who killed it and when it comes back.
 func _draw_death() -> void:
