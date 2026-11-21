@@ -8,9 +8,10 @@ const MARKER_TIME := 0.25
 ## A damage indicator shows HURT_TIME, the red flash of a hit HURT_FLASH.
 const HURT_TIME := 1.5
 const HURT_FLASH := 0.25
-## The kill feed keeps FEED_LENGTH lines, each for FEED_TIME.
-const FEED_LENGTH := 5
-const FEED_TIME := 6.0
+## Keep the background feed brief. Local outcomes get time to read.
+const FEED_LENGTH := 3
+const FEED_TIME := 3.2
+const OWN_FEED_TIME := 5.0
 ## At most MAX_HURT damage indicators show at once.
 const MAX_HURT := 8
 
@@ -54,13 +55,28 @@ func take(events: Array, own: int, sounds: Object) -> void:
 			line.weapon = event.weapon
 			line.head = event.zone == Hitboxes.Zone.HEAD
 			line.own = event.killer == own or event.victim == own
-			if feed.size() == FEED_LENGTH:
-				feed.pop_front()
-			feed.append(line)
+			_add_feed_line(line)
 			if event.victim == own:
 				killed_by = "Killed by %s with the %s" % [event.killer_name, WeaponTuning.kind_name(event.weapon)]
 				if line.head:
 					killed_by += ", in the head"
+
+
+func _add_feed_line(line: FeedLine) -> void:
+	if feed.size() == FEED_LENGTH:
+		# A burst of bot combats cannot evict the player's own outcome.
+		var expired := -1
+		for index in feed.size():
+			if not feed[index].own:
+				expired = index
+				break
+		if expired >= 0:
+			feed.remove_at(expired)
+		elif line.own:
+			feed.pop_front()
+		else:
+			return
+	feed.append(line)
 
 
 func update(delta: float) -> void:
@@ -75,7 +91,7 @@ func update(delta: float) -> void:
 	var lines: Array[FeedLine] = []
 	for line in feed:
 		line.age += delta
-		if line.age < FEED_TIME:
+		if line.age < line.lifetime():
 			lines.append(line)
 	feed = lines
 
@@ -98,3 +114,8 @@ class FeedLine:
 	## own marks a death the player took part in.
 	var own := false
 	var age := 0.0
+
+
+
+	func lifetime() -> float:
+		return OWN_FEED_TIME if own else FEED_TIME

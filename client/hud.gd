@@ -371,20 +371,46 @@ func _draw_feedback() -> void:
 		tint.a = minf(1.0, 2 * f.marker / _Feedback.MARKER_TIME)
 		for corner in [Vector2(-1, -1), Vector2(1, -1), Vector2(-1, 1), Vector2(1, 1)]:
 			draw_line(center + corner * 5 * _scale, center + corner * reach * _scale, tint, 2.5 * _scale, true)
+	_draw_kill_feed()
+
+
+func _draw_kill_feed() -> void:
+	const FONT_SIZE := 16
 	var right := size.x - 24 * _scale
-	var y := 140 * _scale
-	for line in f.feed:
-		var weapon := "[" + WeaponTuning.kind_name(line.weapon).to_upper() + "]"
-		if line.head:
-			weapon += " HEADSHOT"
-		var parts := [[line.killer, team_color(line.killer_team)], ["  " + weapon + "  ", LIGHT_GRAY], [line.victim, team_color(line.victim_team)]]
-		var total := 0.0
-		for part in parts:
-			total += _measure(part[0], 18)
-		var background := Color8(120, 100, 20, 140) if line.own else PANEL
-		draw_rect(Rect2(right - total - 8 * _scale, y - 4 * _scale, total + 16 * _scale, 26 * _scale), background)
-		var x := right - total
-		for part in parts:
-			_text(part[0], Vector2(x, y), 18, part[1])
-			x += _measure(part[0], 18)
-		y += 30 * _scale
+	var y := 104 * _scale
+	var name_width := minf(104 * _scale, size.x * 0.14)
+	for line in feedback.feed:
+		var fade := smoothstep(0.0, 0.7, line.lifetime() - line.age)
+		var opacity := fade if line.own else fade * lerpf(0.90, 0.60, aim)
+		var killer := _fit_feed_name(line.killer, FONT_SIZE, name_width)
+		var victim := _fit_feed_name(line.victim, FONT_SIZE, name_width)
+		var middle := "  ›  "
+		if line.own:
+			var weapon: String = WeaponTuning.LABELS[line.weapon]
+			if not weapon.is_empty():
+				middle = "  " + weapon + (" headshot  " if line.head else "  ")
+		var killer_width := _measure(killer, FONT_SIZE)
+		var middle_width := _measure(middle, FONT_SIZE)
+		var width := killer_width + middle_width + _measure(victim, FONT_SIZE)
+		var x := right - width
+		if line.own:
+			draw_rect(Rect2(x - 7 * _scale, y - 2 * _scale, width + 12 * _scale, 21 * _scale),
+				Color(0.08, 0.11, 0.12, 0.67 * opacity))
+			draw_rect(Rect2(right + 4 * _scale, y + 2 * _scale, 2 * _scale, 13 * _scale), Color(GOLD, opacity))
+		_text(killer, Vector2(x, y), FONT_SIZE, Color(team_color(line.killer_team).lightened(0.37), opacity))
+		_text(middle, Vector2(x + killer_width, y), FONT_SIZE, Color(LIGHT_GRAY, opacity))
+		_text(victim, Vector2(x + killer_width + middle_width, y), FONT_SIZE,
+			Color(team_color(line.victim_team).lightened(0.37), opacity))
+		y += 23 * _scale
+
+
+func _fit_feed_name(label: String, font_size: int, available: float) -> String:
+	if _measure(label, font_size) <= available:
+		return label
+	var length := label.length()
+	while length > 0:
+		length -= 1
+		var shortened := label.left(length) + "…"
+		if _measure(shortened, font_size) <= available:
+			return shortened
+	return "…"
