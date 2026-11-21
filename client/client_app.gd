@@ -222,11 +222,7 @@ func _ready() -> void:
 	_build_world()
 	# Everything is loaded before connecting: once connected, the client must
 	# send a command every tick, and a stall puts its clock behind the server.
-	var character: Variant = CharacterAsset.load_asset()
-	if character is String:
-		_quit_with(character)
-		return
-	asset = character
+	asset = CharacterAsset.load_asset()
 	_build_soldiers()
 	error = _open()
 	if error != "":
@@ -1037,7 +1033,7 @@ func _update_self(delta: float, feet: Vector3, speed: float, server_own: Soldier
 		if _self_held != null:
 			add_child(_self_held)
 	if _self_held != null:
-		_self_held.transform = ViewModel.held_transform(feet, _yaw, _pitch)
+		_self_held.transform = ViewModel.held_transform(feet + _self_view.grip_shift(), _yaw, _pitch)
 
 
 ## _update_camera looks where the player aims, turned by the kick of the
@@ -1103,7 +1099,7 @@ func _update_weapon(delta: float, own: Soldier, speed: float) -> void:
 		var query := PhysicsRayQueryParameters3D.create(shot.origin, shot.origin + shot.direction * reach, Game.LAYER_STATIC | Game.LAYER_VEHICLE)
 		var hit := state.intersect_ray(query)
 		var end: Vector3 = hit["position"] if not hit.is_empty() else shot.origin + shot.direction * reach
-		var muzzle := view_model.held_muzzle(shot.weapon, _feet, _yaw, _pitch)
+		var muzzle := view_model.held_muzzle(shot.weapon, _feet + _self_view.grip_shift(), _yaw, _pitch)
 		if muzzle == Vector3.INF:
 			muzzle = camera.global_position
 		if placed:
