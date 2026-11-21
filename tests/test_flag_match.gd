@@ -116,6 +116,71 @@ func test_finished_flag_match_resets_after_the_reconnect_window() -> void:
 	_check_fresh_round(harness)
 
 
+func test_valley_human_deploys_at_home_then_reinforces_from_held_ground() -> void:
+	var harness := _reinforcement_harness()
+	var server := harness.server
+	var ford := server.scene.flags[1]
+	var flag := server.flag_match.state.flags[1]
+	for team: int in [Game.Team.BLUE, Game.Team.RED]:
+		flag.owner = team
+		var client := harness.join(Game.team_name(team))
+		var player := harness.player(client)
+		var home := server.scene.spawn_of(team)
+		var initial := server.soldiers.get_soldier(player.soldier)
+		check_equal(initial.team, team, "the players join opposite teams")
+		check(Game.horizontal_length(initial.position - home) < 6.0, "first deployment starts at home even with a held flag")
+		var old_id := initial.id
+		var returned := _return_after_death(harness, player)
+		check(returned.id != old_id and returned.alive, "reinforcement creates a fresh living soldier")
+		check(Game.horizontal_length(returned.position - ford.center) < 30.0, "holding the ford shortens the return")
+		check(signf(returned.position.z - ford.center.z) == signf(home.z - ford.center.z), "reinforcement is on the home bank")
+		check(not ford.contains_flag_position(returned.position), "reinforcements do not spawn in the capture area")
+		player.controller.teleport(returned, home)
+
+
+func test_valley_reinforcements_fall_back_for_challenged_flags_and_nearby_enemies() -> void:
+	var harness := _reinforcement_harness()
+	var server := harness.server
+	var blue := harness.player(harness.join("blue"))
+	var red := harness.player(harness.join("red"))
+	var enemy := server.soldiers.get_soldier(red.soldier)
+	var home := server.scene.spawn_of(blue.team)
+	var ford := server.scene.flags[1]
+	var flag := server.flag_match.state.flags[1]
+	flag.owner = blue.team
+
+	# Opponents can block a reinforcement without standing inside the flag.
+	var exposed := ford.center + Vector3(0, 0, 20)
+	exposed.y = server.scene.ground_at(exposed.x, exposed.z)
+	red.controller.teleport(enemy, exposed)
+	var returned := _return_after_death(harness, blue)
+	check(Game.horizontal_length(returned.position - home) < 6.0, "nearby enemies force a home deployment")
+	check(not flag.contested and flag.challenger == Game.Team.NONE, "hostile proximity is independent of capture pressure")
+
+	# A recently challenged flag is unsafe even if the attacker just died.
+	red.controller.teleport(enemy, server.scene.spawn_of(red.team))
+	flag.challenger = red.team
+	server.flag_match._capture_ticks[1] = Game.TICK_RATE
+	returned = _return_after_death(harness, blue)
+	check(Game.horizontal_length(returned.position - home) < 6.0, "an actively challenged crossing is unavailable")
+
+
+func _reinforcement_harness() -> Harness:
+	var harness := Harness.new(func(settings: ServerSettings) -> void:
+		settings.map = "valley"
+		settings.respawn_delay = 0.1)
+	cleanup(func() -> void: harness.close())
+	return harness
+
+
+static func _return_after_death(harness: Harness, player: ServerPlayer) -> Soldier:
+	var server := harness.server
+	var soldier := server.soldiers.get_soldier(player.soldier)
+	server.damage(soldier, Game.MAX_HEALTH)
+	harness.step(Game.seconds_to_ticks(server.settings.respawn_delay) + 1)
+	return server.soldiers.get_soldier(player.soldier)
+
+
 func _valley_harness() -> Harness:
 	var harness := Harness.new(func(settings: ServerSettings) -> void:
 		settings.map = "valley"

@@ -20,6 +20,20 @@ const GUNSHOTS := {
 	WeaponTuning.Kind.PISTOL: preload("res://assets/audio/pistol-shot.wav"),
 }
 
+enum Surface { FIELD, HARD, WOOD, MUD }
+const FOOTSTEPS := [
+	[preload("res://assets/audio/footing/grass-1.wav"), preload("res://assets/audio/footing/grass-2.wav"),
+		preload("res://assets/audio/footing/grass-3.wav")],
+	[preload("res://assets/audio/footing/concrete-1.wav"), preload("res://assets/audio/footing/concrete-2.wav"),
+		preload("res://assets/audio/footing/concrete-3.wav")],
+	[preload("res://assets/audio/footing/wood-1.wav"), preload("res://assets/audio/footing/wood-2.wav"),
+		preload("res://assets/audio/footing/wood-3.wav")],
+	[preload("res://assets/audio/footing/mud.wav")],
+]
+const LAND := preload("res://assets/audio/footing/land.wav")
+const STRIKE := preload("res://assets/audio/footing/strike.wav")
+const DAMAGE := preload("res://assets/audio/footing/damage.wav")
+
 var _volume := 0.0
 var _audible := false
 ## _shots holds, by weapon kind, its voices; _next the voice to play next.
@@ -36,6 +50,11 @@ var _marker: AudioStreamPlayer
 var _kill_marker: AudioStreamPlayer
 var _flag_captured: AudioStreamPlayer
 var _flag_lost: AudioStreamPlayer
+var _boots: Array[AudioStreamPlayer] = []
+var _landing: AudioStreamPlayer
+var _damage: AudioStreamPlayer
+var _step_number := 0
+var _last_impact_usec := -1000000
 
 
 ## volume is the master volume from 0 to 1.
@@ -62,6 +81,11 @@ func _init(volume: float) -> void:
 	_kill_marker = _player(_cue(875.0, 1312.5), 0.40)
 	_flag_captured = _player(_cue(440.0, 660.0), 0.31)
 	_flag_lost = _player(_cue(392.0, 294.0), 0.23)
+	for voice in 2:
+		_boots.append(_player(null, 0.23))
+	_landing = _player(LAND, 0.26)
+	_landing.pitch_scale = 0.84
+	_damage = _player(DAMAGE, 0.36)
 	for i in POSITIONAL_VOICES:
 		var player := AudioStreamPlayer3D.new()
 		# The fall with distance is the game's own, below; the engine only
@@ -106,13 +130,89 @@ func shot_at(kind: int, position: Vector3) -> void:
 	var gain := 1.0 / (1.0 + relative_distance * relative_distance)
 	if gain < QUIETEST:
 		return
+	_play_at(GUNSHOTS[kind], position, gain * SHOT_VOLUMES[kind])
+
+
+## Nearby bullet strikes add a dry localized cue. A short rate limit keeps
+## a burst from masking the shot or confirmed hits.
+func impact_at(position: Vector3) -> void:
+	if not _audible or not is_inside_tree():
+		return
+	var camera := get_viewport().get_camera_3d()
+	if camera == null:
+		return
+	var distance := camera.global_position.distance_to(position)
+	var now := Time.get_ticks_usec()
+	if distance >= 16.0 or now - _last_impact_usec < 65000:
+		return
+	_last_impact_usec = now
+	_play_at(STRIKE, position, 0.29 * (1.0 - distance / 16.0))
+
+
+func _play_at(stream: AudioStreamWAV, position: Vector3, volume: float) -> void:
 	var player := _positional[_next_positional]
 	_next_positional = (_next_positional + 1) % POSITIONAL_VOICES
-	player.stream = GUNSHOTS[kind]
+	player.stream = stream
 	player.pitch_scale = SHOT_PITCHES[_next_positional % SHOT_VOICES]
 	player.global_position = position
-	player.volume_db = linear_to_db(gain * SHOT_VOLUMES[kind] * _volume)
+	player.volume_db = linear_to_db(volume * _volume)
 	player.play()
+
+
+func footstep(feet: Vector3, scene: MapScene, landed: bool) -> void:
+	if not _audible or not is_inside_tree():
+		return
+	var surface := _surface_at(feet, scene)
+	var variants: Array = FOOTSTEPS[surface]
+	var boot := _boots[_step_number % _boots.size()]
+	boot.stream = variants[_step_number % variants.size()]
+	_step_number += 1
+	boot.pitch_scale = 0.87 if landed else SHOT_PITCHES[_step_number % SHOT_VOICES]
+	var gain := 0.36 if landed else 0.28
+	boot.volume_db = linear_to_db(gain * _volume)
+	boot.play()
+	if landed:
+		_landing.play()
+
+
+## Match walkable box tops before the terrain. This matters for a wooden
+## deck over water and for the ramps laid at an angle to the floor.
+static func _surface_at(feet: Vector3, scene: MapScene) -> Surface:
+	var surface := Surface.FIELD
+	var closest := INF
+	for box in scene.boxes:
+		if box.kind == MapScene.Kind.INVISIBLE:
+			continue
+		var offset := feet - box.transform.origin
+		var reach := box.half_extents + Vector3(0.07, 0.19, 0.07)
+		if offset.length_squared() > reach.length_squared():
+			continue
+		var local := box.transform.basis.transposed() * offset
+		if absf(local.x) > box.half_extents.x + 0.07 or absf(local.z) > box.half_extents.z + 0.07:
+			continue
+		var gap := absf(local.y - box.half_extents.y)
+		if gap > 0.19 or gap >= closest:
+			continue
+		closest = gap
+		match box.kind:
+			MapScene.Kind.WOOD, MapScene.Kind.PLANKS, MapScene.Kind.TRUNK:
+				surface = Surface.WOOD
+			MapScene.Kind.GROUND, MapScene.Kind.SANDBAG, MapScene.Kind.HAY:
+				surface = Surface.FIELD
+			_:
+				surface = Surface.HARD
+	if surface != Surface.FIELD:
+		return surface
+	for water in scene.waters:
+		var offset := feet - water.center
+		if offset.y <= 0.08 and absf(offset.x) <= water.half_extents.x and absf(offset.z) <= water.half_extents.y:
+			return Surface.MUD
+	return surface
+
+
+func take_damage() -> void:
+	if _audible and is_inside_tree():
+		_damage.play()
 
 
 ## A kill has its own confirmation so it is recognizable in a firefight.

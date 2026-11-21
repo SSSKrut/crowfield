@@ -28,7 +28,13 @@ const COLORS := {
 	MapScene.Kind.HAY: Color8(159, 143, 83),
 	MapScene.Kind.BLUE_CLOTH: Color8(60, 110, 220),
 	MapScene.Kind.RED_CLOTH: Color8(210, 70, 60),
+	MapScene.Kind.MASONRY: Color8(174, 183, 174),
+	MapScene.Kind.SLATE: Color8(133, 147, 151),
+	MapScene.Kind.COBBLES: Color8(159, 150, 127),
 }
+const MASONRY_DETAIL := preload("res://assets/valley/old_stone_wall-diff.jpg")
+const SLATE_DETAIL := preload("res://assets/valley/roof_slates_02-diff.jpg")
+const COBBLE_DETAIL := preload("res://assets/valley/cobblestone_01-diff.jpg")
 const PROTOTYPE_COLORS := {MapScene.Kind.GROUND: Color8(115, 125, 115), MapScene.Kind.WOOD: Color8(145, 130, 105)}
 const PROP_TINTS := [Color8(255, 161, 0), Color8(102, 191, 255), Color8(255, 109, 194)]
 
@@ -317,6 +323,12 @@ func _box_material(kind: int, color: Color) -> StandardMaterial3D:
 	if cloth or scene.terrain == null:
 		return _material(color, 0.0 if cloth else 0.6, _fine)
 	match kind:
+		MapScene.Kind.MASONRY:
+			return _material(color, 0.50, MASONRY_DETAIL)
+		MapScene.Kind.SLATE:
+			return _material(color, 0.72, SLATE_DETAIL)
+		MapScene.Kind.COBBLES:
+			return _material(color, 0.60, COBBLE_DETAIL)
 		MapScene.Kind.PLASTER:
 			return _material(color, 0.48, PLASTER_DETAIL)
 		MapScene.Kind.ROCK, MapScene.Kind.CONCRETE:

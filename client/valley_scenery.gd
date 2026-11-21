@@ -3,6 +3,7 @@ extends Node3D
 ## Client-only detail for Valley. Cover, pathfinding and capture positions
 ## continue to use the original map geometry.
 
+const ROUTE_FONT := preload("res://assets/type/BarlowCondensed-Bold.ttf")
 const GRASS_SHADER := preload("res://assets/valley/grass.gdshader")
 const RIDGE_SAMPLES := 96
 const GRASS_TILE := 18
@@ -22,6 +23,7 @@ func _init(map: MapScene, wear: PackedFloat32Array) -> void:
 	_build_woodland()
 	_build_ground_cover(wear)
 	_build_structure_details()
+	_build_gate_signs()
 
 
 ## The ridges sit outside the playable terrain, with near vertices below the
@@ -181,12 +183,11 @@ static func _fir_mesh() -> ArrayMesh:
 
 
 static func _foliage_triangle(mesh: SurfaceTool, a: Vector3, b: Vector3, c: Vector3) -> void:
-	var center := (a + b + c) / 3.0
-	var shade := 0.79 + 0.23 * sin(center.x * 12.7 + center.y * 7.1 + center.z * 16.9) ** 2
-	mesh.set_color(Color(shade, shade, shade))
-	mesh.add_vertex(a)
-	mesh.add_vertex(b)
-	mesh.add_vertex(c)
+	for point in [a, b, c]:
+		var grain := sin(point.x * 9.1 + point.y * 5.2 + point.z * 12.5)
+		var shade := 0.88 + 0.075 * grain
+		mesh.set_color(Color(shade, shade, shade))
+		mesh.add_vertex(point)
 
 
 func _build_ground_cover(wear: PackedFloat32Array) -> void:
@@ -226,7 +227,8 @@ func _building_footprints() -> PackedByteArray:
 	var half := _terrain.half_size()
 	result.resize(side * side)
 	for box in _scene.boxes:
-		if box.kind not in [MapScene.Kind.ROOF, MapScene.Kind.WOOD, MapScene.Kind.TRUNK, MapScene.Kind.CONCRETE, MapScene.Kind.SANDBAG, MapScene.Kind.PLASTER, MapScene.Kind.PLANKS, MapScene.Kind.METAL, MapScene.Kind.ROCK]:
+		if box.kind not in [MapScene.Kind.ROOF, MapScene.Kind.WOOD, MapScene.Kind.TRUNK, MapScene.Kind.CONCRETE, MapScene.Kind.SANDBAG, MapScene.Kind.PLASTER, MapScene.Kind.PLANKS, MapScene.Kind.METAL, MapScene.Kind.ROCK, MapScene.Kind.MASONRY,
+				MapScene.Kind.SLATE, MapScene.Kind.COBBLES]:
 			continue
 		var at := box.transform.origin
 		var reach := int(ceil(Vector2(box.half_extents.x, box.half_extents.z).length())) + 2
@@ -303,7 +305,9 @@ func _build_structure_details() -> void:
 						Vector3(0.11, 0.036, depth), finish)
 			MapScene.Kind.PLASTER:
 				_dress_plaster(box, trims, colors)
-			MapScene.Kind.CONCRETE:
+			MapScene.Kind.CONCRETE, MapScene.Kind.MASONRY:
+				if box.kind == MapScene.Kind.MASONRY:
+					_dress_plaster(box, trims, colors)
 				# A ledge sits on the full-length, narrow bridge parapets.
 				if depth > 18.0 and width < 0.55 and height < 1.15:
 					_trim(trims, colors, box, Vector3(0.0, height / 2.0 - 0.038, 0.0),
@@ -371,8 +375,9 @@ static func _dress_plaster(box: MapScene.Box, trims: Array[Transform3D], colors:
 	if half.z > 0.19:
 		return
 	var at := box.transform.origin
-	var window_sill := half.y > 0.6 and half.y < 0.7 and half.x < 0.62
-	var lintel := at.y > 3.3 and half.y <= 0.51
+	var bottom := at.y - half.y
+	var window_sill := bottom < ValleyMap.VILLAGE_LEVEL - 0.18 and half.y > 0.6 and half.y < 0.7 and half.x < 0.62
+	var lintel := bottom > ValleyMap.VILLAGE_LEVEL + 1.8 and half.y <= 0.64
 	for side: float in [-1.0, 1.0]:
 		if window_sill:
 			_trim(trims, colors, box, Vector3(0.0, half.y - 0.04, side * half.z),
@@ -392,6 +397,27 @@ static func _trim(transforms: Array[Transform3D], colors: Array[Color], box: Map
 		at: Vector3, size: Vector3, color: Color) -> void:
 	transforms.append(box.transform * Transform3D(Basis().scaled_local(size), at))
 	colors.append(color)
+
+
+## Read these at the gate, at the scale of the actual boards.
+func _build_gate_signs() -> void:
+	for side: float in [-1.0, 1.0]:
+		var turn := 0.0 if side > 0.0 else PI
+		for lane: float in [-1.0, 1.0]:
+			var label := Label3D.new()
+			label.text = "‹  CUSTOMS" if lane < 0.0 else "PINE RIDGE  ›"
+			label.font = ROUTE_FONT
+			label.font_size = 35
+			label.pixel_size = 0.008
+			label.outline_size = 3
+			label.modulate = Color8(241, 220, 171)
+			label.outline_modulate = Color8(45, 41, 33)
+			label.visibility_range_end = 31.0
+			var marking := Vector3(lane * ValleyMap.ROUTE_POST_X,
+				ValleyMap.BASE_LEVEL + ValleyMap.ROUTE_BOARD_Y + 0.01, ValleyMap.ROUTE_POST_Z + 0.135)
+			label.position = ValleyMap.BASE * side + marking.rotated(Vector3.UP, turn)
+			label.rotation.y = turn
+			add_child(label)
 
 
 static func _plant_material() -> StandardMaterial3D:

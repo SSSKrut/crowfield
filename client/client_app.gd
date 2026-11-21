@@ -15,6 +15,9 @@ extends Node3D
 ## left asks to end the game: the player chose to leave, with an empty
 ## message, or the game failed, with the reason.
 signal left(message: String)
+signal replay_requested
+
+var allow_solo_replay := false
 
 const RECONNECT_WINDOW := 60.0
 const HELP_LINES := [
@@ -112,6 +115,8 @@ var _buttons := 0
 var _feet := Vector3.ZERO
 var _fallen := 0
 var _view_soldier_id := 0
+var _reinforcement := ""
+var _reinforcement_until := 0
 ## _momentum is the velocity the own soldier was last predicted with.
 var _momentum := Vector3.ZERO
 var _debug := false
@@ -372,9 +377,9 @@ func _build_world() -> void:
 	world_environment.environment = preload("res://assets/sky/valley_environment.tres")
 	add_child(world_environment)
 	sun = DirectionalLight3D.new()
-	sun.rotation = Vector3(-0.58, 0.84, 0)
-	sun.light_color = Color(1.0, 0.91, 0.78)
-	sun.light_energy = 0.92
+	sun.rotation = Vector3(-0.39, 0.89, 0)
+	sun.light_color = Color(1.0, 0.91, 0.79)
+	sun.light_energy = 0.88
 	sun.shadow_enabled = true
 	if settings["graphics"] == "performance":
 		sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
@@ -420,6 +425,7 @@ func _build_soldiers() -> void:
 	add_child(sounds)
 	view_model = ViewModel.new()
 	view_model.sun = sun
+	view_model.performance_mode = settings["graphics"] == "performance"
 	add_child(view_model)
 	hud = Hud.new()
 	var layer := CanvasLayer.new()
@@ -431,6 +437,7 @@ func _build_soldiers() -> void:
 	menu = GAME_MENU.instantiate()
 	menu.visible = false
 	menu.resumed.connect(_close_menu)
+	menu.replayed.connect(_replay_round)
 	menu.left.connect(func() -> void: _quit_with(""))
 	var menu_layer := CanvasLayer.new()
 	menu_layer.layer = 2
@@ -612,6 +619,11 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if not _captured:
 		return
+	if event is InputEventKey and event.pressed and not event.echo and event.keycode in [KEY_ENTER, KEY_KP_ENTER]:
+		if _can_replay():
+			_replay_round()
+			get_viewport().set_input_as_handled()
+			return
 	if event.is_echo():
 		# Godot also updates held actions from key repeat events.
 		for action in HELD_ACTIONS:
@@ -656,6 +668,17 @@ func _unhandled_input(event: InputEvent) -> void:
 		soldier_views.knock_down(camera.global_position)
 
 
+func _can_replay() -> bool:
+	return allow_solo_replay and not _failed and session != null and _reconnect_since < 0 		and settings["host"] == "" and settings["connect"] == "" and session.match_state != null 		and session.match_state.result != MatchState.Result.ACTIVE
+
+
+func _replay_round() -> void:
+	if _can_replay():
+		_failed = true
+		_update_native_input_scope()
+		replay_requested.emit()
+
+
 ## _open_menu shows the game menu and frees the cursor; the soldier stands
 ## still meanwhile.
 func _open_menu() -> void:
@@ -663,7 +686,7 @@ func _open_menu() -> void:
 	_reset_gameplay_input()
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	menu.about = _about()
-	menu.open()
+	menu.open(_can_replay())
 	_update_native_input_scope()
 	_input_trace.event(Time.get_ticks_usec(), {"type": "menu", "open": true})
 
@@ -824,6 +847,11 @@ func _process(delta: float) -> void:
 	bodies.update(delta)
 	_charge("bodies")
 	_update_camera(feet)
+	var local_footing := own != null and _first_person() and _focused and not menu.visible and _reconnect_since < 0
+	var footfall := view_model.footing(delta, feet, own != null and own.grounded,
+		speed / rules.movement.sprint_speed, local_footing)
+	if footfall != ViewModel.Footfall.NONE:
+		sounds.footstep(feet, scene, footfall == ViewModel.Footfall.LAND)
 	_update_weapon(delta, own, speed)
 	effects.update(delta)
 	_charge("weapon")
@@ -1164,6 +1192,8 @@ func _update_weapon(delta: float, own: Soldier, speed: float) -> void:
 	var placed := false
 	if _first_person():
 		view_model.show_weapon(arsenal.weapon(), soldier_views.tint(_team()))
+		if not _shots.is_empty():
+			view_model.fired(_noise(_shots[-1].direction))
 		placed = view_model.place(camera, arsenal.weapon(), arsenal.action, clampf(progress, 0, 1))
 	else:
 		view_model.hide_weapon()
@@ -1178,8 +1208,9 @@ func _update_weapon(delta: float, own: Soldier, speed: float) -> void:
 			muzzle = camera.global_position
 		if placed:
 			muzzle = view_model.muzzle_in_world(camera)
-			view_model.fired(_noise(shot.direction))
-		effects.shot(muzzle, end, not hit.is_empty())
+		effects.shot(muzzle, end, not hit.is_empty(), hit.get("normal", Vector3.ZERO))
+		if not hit.is_empty():
+			sounds.impact_at(end)
 		sounds.weapon(shot.weapon, Arsenal.EVENT_FIRED)
 	sounds.weapon(arsenal.weapon(), _events & ~Arsenal.EVENT_FIRED)
 	_shots.clear()
@@ -1220,9 +1251,11 @@ func _follow_life() -> void:
 	if scene.name == "valley" and not dead and player.soldier != 0 and player.soldier != _view_soldier_id:
 		var deployed := session.local_soldier()
 		if deployed != null:
-			_view_soldier_id = player.soldier
 			_yaw = PI if deployed.team == Game.Team.RED else 0.0
 			_pitch = 0.0
+			if _fallen != 0:
+				_face_reinforcement(deployed)
+			_view_soldier_id = player.soldier
 	if dead and _fallen != player.soldier:
 		# The body falls where the server has it dead, which everyone else sees,
 		# not where the prediction ran on to, with the momentum it had.
@@ -1239,6 +1272,22 @@ func _follow_life() -> void:
 		_ragdoll = false
 		feedback.killed_by = ""
 		_self_view.stand_up()
+
+
+## A forward respawn is inside the approaches to the held crossings. The
+## home gate is farther away. Turn toward the nearest crossing on arrival.
+func _face_reinforcement(soldier: Soldier) -> void:
+	var best: MapScene.Zone
+	var nearest := 30.0
+	for zone in scene.flags:
+		var distance := Game.horizontal_length(zone.center - soldier.position)
+		if distance < nearest:
+			best = zone
+			nearest = distance
+	if best != null:
+		_yaw = Game.yaw_of(best.center - soldier.position)
+		_reinforcement = "Reinforced near " + best.name
+		_reinforcement_until = Time.get_ticks_msec() + 4000
 
 
 func _reset() -> void:
@@ -1391,6 +1440,8 @@ func _update_match_hud(state: MatchState, feet: Vector3, team: int) -> void:
 			sounds.flag_changed(captured)
 	hud.team = team
 	hud.match_state = state
+	hud.replay_available = _can_replay()
+	hud.reinforcement = _reinforcement if Time.get_ticks_msec() < _reinforcement_until else ""
 	hud.map_scene = scene
 	hud.feet = feet
 	if map_view != null and state != previous:

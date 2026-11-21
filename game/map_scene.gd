@@ -6,7 +6,7 @@ extends RefCounted
 ## own that nothing collides with: tree crowns, bushes and water.
 
 ## Kind tells the client how to draw a box; the simulation does not care.
-enum Kind { GROUND, CONCRETE, PLASTER, ROOF, WOOD, PLANKS, SANDBAG, ROCK, METAL, TRUNK, HAY, BLUE_CLOTH, RED_CLOTH, INVISIBLE }
+enum Kind { GROUND, CONCRETE, PLASTER, ROOF, WOOD, PLANKS, SANDBAG, ROCK, METAL, TRUNK, HAY, BLUE_CLOTH, RED_CLOTH, INVISIBLE, MASONRY, SLATE, COBBLES }
 
 const MAPS := ["valley", "prototype"]
 

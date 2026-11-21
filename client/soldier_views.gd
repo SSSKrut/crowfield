@@ -192,9 +192,11 @@ func _show_shot(kind: int, remote: RemoteSoldier, grip_shift: Vector3) -> void:
 	if not hit.is_empty():
 		end = hit["position"]
 	effects.flash(muzzle)
-	effects.shot(muzzle, end, not hit.is_empty())
+	effects.shot(muzzle, end, not hit.is_empty(), hit.get("normal", Vector3.ZERO))
 	if sounds != null:
 		sounds.shot_at(kind, muzzle)
+		if not hit.is_empty():
+			sounds.impact_at(end)
 
 
 ## momentum is the velocity a soldier that dies at velocity falls with.

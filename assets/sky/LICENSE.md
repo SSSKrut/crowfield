@@ -1,5 +1,5 @@
 # Valley sky
 
-[Kloppenheim 06 (Pure Sky)](https://polyhaven.com/a/kloppenheim_06_puresky)
-by Greg Zaal (photography) and Jarod Guest (sky edit). Downloaded as the
-2K Radiance HDR image from Poly Haven under [CC0](https://polyhaven.com/license).
+[Citrus Orchard Road (Pure Sky)](https://polyhaven.com/a/citrus_orchard_road_puresky)
+by Dimitrios Savva (photography) and Jarod Guest (processing). Downloaded as
+the 2K Radiance HDR image from Poly Haven under [CC0](https://polyhaven.com/license).

@@ -83,7 +83,7 @@ layout_mode = 2
 theme_override_colors/font_color = Color(0.72, 0.78, 0.77, 1)
 theme_override_font_sizes/font_size = 17
 unique_name_in_owner = true
-text = "Capture and hold the river flags to score."
+text = "Hold crossings to score and open forward reinforcements."
 autowrap_mode = 3
 
 [node name="Gap" type="Control" parent="Center/Panel/Rows"]
