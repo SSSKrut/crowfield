@@ -855,7 +855,7 @@ func _process(delta: float) -> void:
 	_update_weapon(delta, own, speed)
 	effects.update(delta)
 	_charge("weapon")
-	soldier_views.update(session, delta, camera)
+	soldier_views.update(session, delta, camera, scene)
 	soldier_views.aim(feet + Vector3(0, rules.movement.eye_height, 0), Game.view_direction(_yaw, _pitch), rules.movement.center_height())
 	var aimed := 0
 	var aimed_updates := 0
