@@ -16,6 +16,7 @@ var player: AnimationPlayer
 var body: MeshInstance3D
 var clip := CharacterAsset.Clip.IDLE
 var flinch: FlinchModifier
+var grounded_feet: GroundedFeet
 ## ragdoll is the ragdoll of the pool while the soldier falls; fallen tells
 ## it lies as a ragdoll or a frozen body.
 var ragdoll: Ragdoll
@@ -37,6 +38,10 @@ func setup(character: CharacterAsset, model: Node3D) -> void:
 	flinch = FlinchModifier.new()
 	flinch.setup(asset)
 	skeleton.add_child(flinch)
+	grounded_feet = GroundedFeet.new()
+	grounded_feet.setup(asset)
+	grounded_feet.active = false
+	skeleton.add_child(grounded_feet)
 	player.play(CharacterAsset.CLIPS[clip])
 
 
@@ -95,6 +100,13 @@ func set_detail(full: bool) -> void:
 		player.callback_mode_process = mode
 
 
+## Supply terrain for a grounded detail pose. Airborne and coarse poses use
+## their authored leg motion, and retain no correction from the last frame.
+func set_foot_terrain(terrain: Terrain) -> void:
+	grounded_feet.terrain = terrain
+	grounded_feet.active = terrain != null and not fallen
+
+
 ## hit makes a standing soldier flinch from a hit on a ragdoll part by a shot
 ## travelling along direction.
 func hit(part: int, direction: Vector3) -> void:
@@ -112,6 +124,9 @@ func fall(pool: RagdollPool, velocity: Vector3, strike: Strike) -> bool:
 		return false
 	player.active = false
 	flinch.active = false
+	if grounded_feet.active:
+		grounded_feet.place_boots()
+		grounded_feet.active = false
 	_base_locals.clear()
 	for i in skeleton.get_bone_count():
 		_base_locals.append(skeleton.get_bone_pose(i))

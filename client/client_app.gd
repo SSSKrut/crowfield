@@ -1125,6 +1125,7 @@ func _update_self(delta: float, feet: Vector3, speed: float, server_own: Soldier
 	if not _ragdoll:
 		_self_view.face(feet, _yaw)
 		_self_view.animate(delta, speed)
+		_self_view.set_foot_terrain(scene.terrain if shown and server_own.grounded else null)
 	_self_view.update_fall(delta)
 	_self_view.set_tint(soldier_views.tint(_team()))
 	var kind := WeaponTuning.Kind.NONE

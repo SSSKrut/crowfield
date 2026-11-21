@@ -4,6 +4,55 @@ extends TestCase
 ## soldiers drawn in the past.
 
 
+func test_grounded_boots_lift_only_leg_pose_on_a_slope() -> void:
+	var tree := Engine.get_main_loop() as SceneTree
+	await tree.process_frame
+	var asset := CharacterAsset.load_asset()
+	var view := asset.instantiate()
+	tree.root.add_child(view)
+	cleanup(view.free)
+	view.face(Vector3.ZERO, 0.0)
+	view.player.seek(0.0, true)
+	var ground := Terrain.create(6, func(x: float, z: float) -> float: return 0.75 * x + 0.24 * z)
+	var skeleton := view.skeleton
+	var highest_foot: int = asset.bones["Foot.R"]
+	var hip: int = asset.bones["Hips"]
+	var hand: int = asset.bones["Palm1.R"]
+	var hip_pose := skeleton.get_bone_global_pose(hip)
+	var hand_pose := skeleton.get_bone_global_pose(hand)
+	var rig := RagdollRig.build(asset, skeleton)
+	var initial := skeleton.global_transform * skeleton.get_bone_global_pose(highest_foot)
+	var before := GroundedFeet.sole_contact(initial, ground)
+	check(before.y < ground.height_at(before.x, before.z) - 0.055, "the uphill boot begins below the test slope")
+
+	view.set_foot_terrain(ground)
+	check(view.grounded_feet.active, "the visual modifier follows grounded detail")
+	view.grounded_feet.place_boots()
+	var applied := skeleton.global_transform * skeleton.get_bone_global_pose(highest_foot)
+	var after := GroundedFeet.sole_contact(applied, ground)
+	check(after.y > ground.height_at(after.x, after.z) - 0.015, "the boot clears the slope to the sole tolerance")
+	check(before.distance_squared_to(Vector3(after.x, before.y, after.z)) < 0.000004, "boot retains its horizontal contact")
+	check(initial.basis.is_equal_approx(applied.basis), "boot keeps its pitch and roll")
+	check_equal(skeleton.get_bone_global_pose(hip), hip_pose, "pelvis has the current animation")
+	check_equal(skeleton.get_bone_global_pose(hand), hand_pose, "weapon hand has the current animation")
+
+	view.set_foot_terrain(null)
+	check(not view.grounded_feet.active, "airborne and coarse models skip the correction")
+
+	view.player.seek(0.0, true)
+	view.set_foot_terrain(ground)
+	var pool := RagdollPool.new(rig, view.get_world_3d().space)
+	var fall := view.fall(pool, Vector3.ZERO, CharacterView.Strike.new(-1, Vector3.ZERO, Vector3.ZERO))
+	if check(fall, "an adjusted soldier still enters the ragdoll pool"):
+		var boot := RagdollRig.Part.FOOT_RIGHT
+		var frozen := view.ragdoll.transforms()[boot] * rig.parts[boot].to_part.affine_inverse()
+		check(frozen.is_equal_approx(applied), "ragdoll inherits the adjusted boot at death")
+		check(not view.grounded_feet.active, "ground correction ends at the ragdoll transition")
+		view.stand_up()
+		check_equal(pool.lent(), 0, "standing up returns the ragdoll to the pool")
+	pool.close()
+
+
 func test_valley_ambience_tracks_the_water_and_respects_mute() -> void:
 	var root := (Engine.get_main_loop() as SceneTree).root
 	await root.get_tree().process_frame
