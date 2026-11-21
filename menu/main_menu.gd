@@ -52,7 +52,7 @@ func _position_panel() -> void:
 func _on_map_selected(index: int) -> void:
 	var valley: bool = MapScene.MAPS[index] == "valley"
 	%Mode.text = "VALLEY  /  FLAG CONTROL" if valley else "PRACTICE RANGE"
-	%Subtitle.text = "Capture and hold the river flags to score." if valley else "Practice movement and combat."
+	%Subtitle.text = "Hold crossings to score and open forward reinforcements." if valley else "Practice movement and combat."
 	%Solo.text = "Play Valley solo" if valley else "Play practice map solo"
 
 
