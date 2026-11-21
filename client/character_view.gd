@@ -74,9 +74,9 @@ func animate(delta: float, speed: float) -> void:
 		CharacterAsset.Clip.IDLE:
 			player.speed_scale = 1.0
 		CharacterAsset.Clip.WALKING:
-			player.speed_scale = clampf(speed / 5.0, 0.25, 1.2)
+			player.speed_scale = clampf(speed / 4.25, 0.25, 1.4)
 		CharacterAsset.Clip.RUNNING:
-			player.speed_scale = clampf(speed / 8.0, 0.75, 1.25)
+			player.speed_scale = clampf(speed / 6.65, 0.85, 1.4)
 
 
 ## grip_shift keeps the held weapon with the animated trigger hand.
