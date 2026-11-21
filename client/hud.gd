@@ -55,6 +55,7 @@ var jumps := 0
 var reconnect_lines: PackedStringArray = []
 var match_state: MatchState
 var replay_available := false
+var reinforcement := ""
 var map_scene: MapScene
 var feet := Vector3.ZERO
 
@@ -135,6 +136,9 @@ func _draw_match() -> void:
 	if match_state.result != MatchState.Result.ACTIVE:
 		_draw_result()
 	elif has_soldier and not dead:
+		if not reinforcement.is_empty():
+			_box(center, -115, footer + 26, 230, 25, PANEL)
+			_centered(reinforcement, center + Vector2(0, footer + 30) * _scale, 16, WHITE)
 		_draw_capture()
 
 

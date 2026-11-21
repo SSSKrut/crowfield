@@ -115,6 +115,8 @@ var _buttons := 0
 var _feet := Vector3.ZERO
 var _fallen := 0
 var _view_soldier_id := 0
+var _reinforcement := ""
+var _reinforcement_until := 0
 ## _momentum is the velocity the own soldier was last predicted with.
 var _momentum := Vector3.ZERO
 var _debug := false
@@ -1240,9 +1242,11 @@ func _follow_life() -> void:
 	if scene.name == "valley" and not dead and player.soldier != 0 and player.soldier != _view_soldier_id:
 		var deployed := session.local_soldier()
 		if deployed != null:
-			_view_soldier_id = player.soldier
 			_yaw = PI if deployed.team == Game.Team.RED else 0.0
 			_pitch = 0.0
+			if _fallen != 0:
+				_face_reinforcement(deployed)
+			_view_soldier_id = player.soldier
 	if dead and _fallen != player.soldier:
 		# The body falls where the server has it dead, which everyone else sees,
 		# not where the prediction ran on to, with the momentum it had.
@@ -1259,6 +1263,22 @@ func _follow_life() -> void:
 		_ragdoll = false
 		feedback.killed_by = ""
 		_self_view.stand_up()
+
+
+## A forward respawn is inside the approaches to the held crossings. The
+## home gate is farther away. Turn toward the nearest crossing on arrival.
+func _face_reinforcement(soldier: Soldier) -> void:
+	var best: MapScene.Zone
+	var nearest := 30.0
+	for zone in scene.flags:
+		var distance := Game.horizontal_length(zone.center - soldier.position)
+		if distance < nearest:
+			best = zone
+			nearest = distance
+	if best != null:
+		_yaw = Game.yaw_of(best.center - soldier.position)
+		_reinforcement = "Reinforced near " + best.name
+		_reinforcement_until = Time.get_ticks_msec() + 4000
 
 
 func _reset() -> void:
@@ -1412,6 +1432,7 @@ func _update_match_hud(state: MatchState, feet: Vector3, team: int) -> void:
 	hud.team = team
 	hud.match_state = state
 	hud.replay_available = _can_replay()
+	hud.reinforcement = _reinforcement if Time.get_ticks_msec() < _reinforcement_until else ""
 	hud.map_scene = scene
 	hud.feet = feet
 	if map_view != null and state != previous:
