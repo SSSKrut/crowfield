@@ -204,6 +204,51 @@ func _check_fresh_round(harness: Harness) -> void:
 	check_equal(next.snapshot.match_state.result, MatchState.Result.ACTIVE, "the next player receives the new round")
 
 
+func test_valley_bot_casualties_reinforce_only_safe_local_ground() -> void:
+	var settings := ServerSettings.new()
+	settings.map = "valley"
+	settings.bots = 2
+	settings.bot_ai = false
+	settings.seed = 9
+	settings.respawn_delay = 0.001
+	var server: Server = Server.create(settings, Rules.new())
+	cleanup(func() -> void: server.close())
+	server.flag_match.started = true
+	var blue := server.bots.bots[0]
+	var red := server.bots.bots[1]
+	var ford := server.scene.flags[1]
+	var flag := server.flag_match.state.flags[1]
+	var home := server.scene.spawn_of(Game.Team.BLUE)
+	var soldier := server.soldiers.get_soldier(blue.soldier)
+	check(Game.horizontal_length(soldier.position - home) < 6.0, "initial bot deployment starts at home")
+	flag.owner = Game.Team.BLUE
+
+	var away := _return_bot_after_death(server, blue, server.scene.flags[0].center)
+	check(Game.horizontal_length(away.position - home) < 6.0, "a casualty in another lane returns to base")
+
+	var returned := _return_bot_after_death(server, blue, ford.center)
+	check(Game.horizontal_length(returned.position - ford.center) < Bots.REINFORCEMENT_RANGE, "a local casualty returns near the held ford")
+	check(signf(returned.position.z - ford.center.z) == signf(home.z - ford.center.z), "reinforcement stays on the home bank")
+	check(not ford.contains_flag_position(returned.position), "reinforcement cannot spawn inside the capture area")
+
+	flag.contested = true
+	returned = _return_bot_after_death(server, blue, ford.center)
+	check(Game.horizontal_length(returned.position - home) < 6.0, "contested ground forces the bot back to base")
+
+	var enemy := server.soldiers.get_soldier(red.soldier)
+	enemy.position = ford.center + Vector3(0, 0, 20)
+	returned = _return_bot_after_death(server, blue, ford.center)
+	check(Game.horizontal_length(returned.position - home) < 6.0, "an enemy near the site forces the bot back to base")
+
+
+static func _return_bot_after_death(server: Server, bot: Bots.Bot, at: Vector3) -> Soldier:
+	var soldier := server.soldiers.get_soldier(bot.soldier)
+	soldier.position = at
+	server.damage(soldier, Game.MAX_HEALTH)
+	server.step()
+	return server.soldiers.get_soldier(bot.soldier)
+
+
 func test_valley_bots_fight_for_all_crossings_in_the_opening() -> void:
 	var settings := ServerSettings.new()
 	settings.map = "valley"
