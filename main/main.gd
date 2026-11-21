@@ -67,7 +67,7 @@ func _play(arguments: PackedStringArray, from_menu: bool) -> void:
 	var app := ClientApp.create(arguments)
 	app.allow_solo_replay = from_menu
 	app.replay_requested.connect(func() -> void:
-		app.tree_exited.connect(func() -> void: _play.call_deferred(arguments, true), CONNECT_ONE_SHOT)
+		app.tree_exited.connect(func() -> void: _play.call_deferred(arguments, from_menu), CONNECT_ONE_SHOT)
 		app.queue_free())
 	app.left.connect(func(message: String) -> void:
 		app.queue_free()

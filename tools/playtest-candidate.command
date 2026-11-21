@@ -21,4 +21,4 @@ run_dir="$(mktemp -d "$runs/comparison-$(date -u +%Y%m%dT%H%M%SZ)-XXXXXX")"
 printf 'seed=%s\nbots=24\nmap=valley\n' "$seed" > "$run_dir/scenario.txt"
 printf 'Run files are in %s\n' "$run_dir"
 exec "$executable" --log-file "$run_dir/godot.log" -- client \
-	-map=valley -bots=24 "-seed=$seed" "-dev-capture-dir=$run_dir" -name=Playtester -config-dir=
+	-map=valley -bots=24 -solo-replay "-seed=$seed" "-dev-capture-dir=$run_dir" -name=Playtester -config-dir=
