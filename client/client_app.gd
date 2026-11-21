@@ -15,6 +15,9 @@ extends Node3D
 ## left asks to end the game: the player chose to leave, with an empty
 ## message, or the game failed, with the reason.
 signal left(message: String)
+signal replay_requested
+
+var allow_solo_replay := false
 
 const RECONNECT_WINDOW := 60.0
 const HELP_LINES := [
@@ -431,6 +434,7 @@ func _build_soldiers() -> void:
 	menu = GAME_MENU.instantiate()
 	menu.visible = false
 	menu.resumed.connect(_close_menu)
+	menu.replayed.connect(_replay_round)
 	menu.left.connect(func() -> void: _quit_with(""))
 	var menu_layer := CanvasLayer.new()
 	menu_layer.layer = 2
@@ -612,6 +616,11 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if not _captured:
 		return
+	if event is InputEventKey and event.pressed and not event.echo and event.keycode in [KEY_ENTER, KEY_KP_ENTER]:
+		if _can_replay():
+			_replay_round()
+			get_viewport().set_input_as_handled()
+			return
 	if event.is_echo():
 		# Godot also updates held actions from key repeat events.
 		for action in HELD_ACTIONS:
@@ -656,6 +665,17 @@ func _unhandled_input(event: InputEvent) -> void:
 		soldier_views.knock_down(camera.global_position)
 
 
+func _can_replay() -> bool:
+	return allow_solo_replay and not _failed and session != null and _reconnect_since < 0 		and settings["host"] == "" and settings["connect"] == "" and session.match_state != null 		and session.match_state.result != MatchState.Result.ACTIVE
+
+
+func _replay_round() -> void:
+	if _can_replay():
+		_failed = true
+		_update_native_input_scope()
+		replay_requested.emit()
+
+
 ## _open_menu shows the game menu and frees the cursor; the soldier stands
 ## still meanwhile.
 func _open_menu() -> void:
@@ -663,7 +683,7 @@ func _open_menu() -> void:
 	_reset_gameplay_input()
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	menu.about = _about()
-	menu.open()
+	menu.open(_can_replay())
 	_update_native_input_scope()
 	_input_trace.event(Time.get_ticks_usec(), {"type": "menu", "open": true})
 
@@ -1391,6 +1411,7 @@ func _update_match_hud(state: MatchState, feet: Vector3, team: int) -> void:
 			sounds.flag_changed(captured)
 	hud.team = team
 	hud.match_state = state
+	hud.replay_available = _can_replay()
 	hud.map_scene = scene
 	hud.feet = feet
 	if map_view != null and state != previous:

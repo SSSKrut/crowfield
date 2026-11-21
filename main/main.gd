@@ -65,6 +65,10 @@ func _show_menu(message: String) -> void:
 func _play(arguments: PackedStringArray, from_menu: bool) -> void:
 	OS.low_processor_usage_mode = false
 	var app := ClientApp.create(arguments)
+	app.allow_solo_replay = from_menu
+	app.replay_requested.connect(func() -> void:
+		app.tree_exited.connect(func() -> void: _play.call_deferred(arguments, true), CONNECT_ONE_SHOT)
+		app.queue_free())
 	app.left.connect(func(message: String) -> void:
 		app.queue_free()
 		if message != "" and not from_menu:

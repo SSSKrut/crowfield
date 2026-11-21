@@ -54,6 +54,7 @@ var jumps := 0
 ## reconnect_lines tell of a lost connection; empty while there is none.
 var reconnect_lines: PackedStringArray = []
 var match_state: MatchState
+var replay_available := false
 var map_scene: MapScene
 var feet := Vector3.ZERO
 
@@ -193,7 +194,8 @@ func _draw_result() -> void:
 	_centered(title, center + Vector2(0, -74) * _scale, 56, tint, _DISPLAY)
 	_centered("%d – %d   ·   %d kills" % [match_state.blue_score, match_state.red_score, match_state.kills],
 		center + Vector2(0, 0) * _scale, 22, WHITE)
-	_centered("Esc  Match menu", center + Vector2(0, 47) * _scale, 16, LIGHT_GRAY)
+	var action := "Enter  Play again    ·    Esc  Match menu" if replay_available else "Esc  Match menu"
+	_centered(action, center + Vector2(0, 47) * _scale, 16, LIGHT_GRAY)
 
 
 func _centered(text: String, center: Vector2, font_size: int, color: Color, face: Font = _BODY) -> void:
