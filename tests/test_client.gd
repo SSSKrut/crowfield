@@ -4,6 +4,42 @@ extends TestCase
 ## soldiers drawn in the past.
 
 
+func test_valley_ambience_tracks_the_water_and_respects_mute() -> void:
+	var root := (Engine.get_main_loop() as SceneTree).root
+	await root.get_tree().process_frame
+	var sounds := Sounds.new(1.0)
+	var muted := Sounds.new(0.0)
+	root.add_child(sounds)
+	root.add_child(muted)
+	cleanup(func() -> void:
+		sounds.free()
+		muted.free())
+	sounds.start_ambience(MapScene.prototype())
+	check(sounds.get_node_or_null("ValleyWind") == null, "the practice map has no wind loop")
+	check(sounds.get_node_or_null("ValleyRiver") == null, "the practice map has no river loop")
+	var valley := MapScene.named("valley")
+	muted.start_ambience(valley)
+	check_equal(muted.get_child_count(), 0, "muted games create no audio players")
+
+	sounds.start_ambience(valley)
+	var wind := sounds.get_node_or_null("ValleyWind") as AudioStreamPlayer
+	var river := sounds.get_node_or_null("ValleyRiver") as AudioStreamPlayer3D
+	if not check(wind != null and river != null, "Valley has both ambient voices"):
+		return
+	check((wind.stream as AudioStreamOggVorbis).loop, "wind loops")
+	check((river.stream as AudioStreamOggVorbis).loop, "river loops")
+	var voices := sounds.get_child_count()
+	sounds.start_ambience(valley)
+	check_equal(sounds.get_child_count(), voices, "starting twice keeps just one pair of voices")
+	var x := 42.0
+	var source := Vector3(x, valley.waters[0].center.y, ValleyMap.river_z(x))
+	sounds.update_ambience(source + Vector3(0, 2, 4), 1.0)
+	check_equal(river.global_position, source, "river follows the meandering water line")
+	check(river.volume_db > -20.0, "river plays at the bank")
+	sounds.update_ambience(source + Vector3(0, 2, 50), 1.0)
+	check(river.volume_db <= -79.0, "the river falls silent away from water")
+
+
 func test_embedded_clock_ignores_time_spent_loading_the_map() -> void:
 	var tree := Engine.get_main_loop() as SceneTree
 	await tree.process_frame
