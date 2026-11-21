@@ -24,7 +24,7 @@ if [[ ! "$seed" =~ ^[1-9][0-9]{0,8}$ ]] || (( $# > 2 )); then
 	exit 2
 fi
 executable="$candidate"
-if [[ "$candidate" == *.app ]]; then
+if [[ -d "$candidate" ]]; then
 	executable="$candidate/Contents/MacOS/Crowfield"
 fi
 if [[ ! -f "$executable" || ! -x "$executable" ]]; then
