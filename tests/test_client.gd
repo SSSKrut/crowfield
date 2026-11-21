@@ -89,6 +89,45 @@ func test_valley_ambience_tracks_the_water_and_respects_mute() -> void:
 	check(river.volume_db <= -79.0, "the river falls silent away from water")
 
 
+func test_reload_audio_tracks_visible_contacts_without_repeating() -> void:
+	var tree := Engine.get_main_loop() as SceneTree
+	await tree.process_frame
+	var sounds := Sounds.new(1.0)
+	tree.root.add_child(sounds)
+	cleanup(sounds.free)
+	var rifle := WeaponTuning.Kind.ASSAULT_RIFLE
+	var ready := Arsenal.Action.READY
+	var reload := Arsenal.Action.RELOADING
+	var release := ViewModel.RELOAD_RELEASE_PROGRESS
+	var seat := ViewModel.RELOAD_SEAT_PROGRESS
+	sounds.weapon(rifle, Arsenal.EVENT_RELOAD_STARTED)
+	check(not sounds._magazine_out.playing, "start alone no longer makes the release sound")
+	sounds.update_reload(rifle, reload, release - 0.01, Arsenal.EVENT_RELOAD_STARTED)
+	check(not sounds._magazine_out.playing, "a cue waits for the visible contact")
+	sounds.update_reload(rifle, reload, release, 0)
+	check(sounds._magazine_out.playing, "extraction plays at its animation contact")
+	sounds._magazine_out.stop()
+	sounds.update_reload(rifle, reload, release - 0.03, 0)
+	sounds.update_reload(rifle, reload, release + 0.02, 0)
+	check(not sounds._magazine_out.playing, "rewinding through a predicted contact stays quiet")
+	sounds.update_reload(rifle, reload, seat, 0)
+	check(sounds._magazine_in.playing, "seating plays before the action completes")
+	sounds._magazine_in.stop()
+	sounds.update_reload(rifle, ready, 0.0, Arsenal.EVENT_RELOADED)
+	sounds.update_reload(rifle, reload, seat + 0.05, 0)
+	check(not sounds._magazine_in.playing, "a correction across completion cannot repeat the seating click")
+	sounds.weapon(rifle, Arsenal.EVENT_RELOADED)
+	check(not sounds._magazine_in.playing, "completion no longer plays a second click")
+
+	sounds.update_reload(rifle, reload, seat + 0.08, Arsenal.EVENT_RELOAD_STARTED)
+	check(sounds._magazine_in.playing and not sounds._magazine_out.playing, "a skipped interval plays its latest contact")
+	sounds._magazine_in.stop()
+	sounds.update_reload(rifle, reload, release, Arsenal.EVENT_RELOAD_STARTED)
+	check(sounds._magazine_out.playing, "a subsequent reload cues its own release")
+	sounds.update_reload(WeaponTuning.Kind.PISTOL, Arsenal.Action.EQUIPPING, seat, Arsenal.EVENT_EQUIP_STARTED)
+	check(not sounds._magazine_in.playing, "an interrupted reload has no scheduled seating cue")
+
+
 func test_remote_shots_behind_cover_filter_and_reuse_voices() -> void:
 	var tree := Engine.get_main_loop() as SceneTree
 	await tree.process_frame

@@ -1186,6 +1186,7 @@ func _update_weapon(delta: float, own: Soldier, speed: float) -> void:
 		_shots.clear()
 		_events = 0
 		view_model.hide_weapon()
+		sounds.update_reload(WeaponTuning.Kind.NONE, Arsenal.Action.READY, 0.0, 0)
 		return
 	var held := _buttons & InputCommand.AIM != 0
 	var aiming := held and arsenal.action == Arsenal.Action.READY
@@ -1196,13 +1197,14 @@ func _update_weapon(delta: float, own: Soldier, speed: float) -> void:
 	var tuning := rules.weapons.get_tuning(arsenal.weapon())
 	if tuning != null:
 		var total := tuning.reload_ticks() if arsenal.action == Arsenal.Action.RELOADING else tuning.equip_ticks()
-		progress = 1 - (arsenal.action_ticks - _alpha) / maxi(1, total)
+		progress = clampf(1 - (arsenal.action_ticks - _alpha) / maxi(1, total), 0.0, 1.0)
+	sounds.update_reload(arsenal.weapon(), arsenal.action, progress, _events)
 	var placed := false
 	if _first_person():
 		view_model.show_weapon(arsenal.weapon(), soldier_views.tint(_team()))
 		if not _shots.is_empty():
 			view_model.fired(_noise(_shots[-1].direction))
-		placed = view_model.place(camera, arsenal.weapon(), arsenal.action, clampf(progress, 0, 1))
+		placed = view_model.place(camera, arsenal.weapon(), arsenal.action, progress)
 	else:
 		view_model.hide_weapon()
 	var state := get_world_3d().direct_space_state
