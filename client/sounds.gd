@@ -18,6 +18,8 @@ const SHOT_COVER_RAYS_PER_FRAME := 8
 const SHOT_COVER_GAIN := 0.60
 const COVER_FILTER_HZ := 1500.0
 const DIRECT_FILTER_HZ := 5000.0
+
+enum ReloadContact { NONE, RELEASE, SEAT }
 const WIND := preload("res://assets/audio/ambience/wind.ogg")
 const RIVER := preload("res://assets/audio/ambience/river.ogg")
 
@@ -58,6 +60,8 @@ var _remote_step_number := 0
 var _dry: AudioStreamPlayer
 var _magazine_out: AudioStreamPlayer
 var _magazine_in: AudioStreamPlayer
+var _reload_weapon := WeaponTuning.Kind.NONE
+var _reload_contact := ReloadContact.NONE
 var _equip: AudioStreamPlayer
 ## _marker ticks when a shot of the player hurt someone.
 var _marker: AudioStreamPlayer
@@ -153,12 +157,26 @@ func weapon(kind: int, events: int) -> void:
 		voice.play()
 	if events & Arsenal.EVENT_DRY_FIRE:
 		_dry.play()
-	if events & Arsenal.EVENT_RELOAD_STARTED:
-		_magazine_out.play()
-	if events & Arsenal.EVENT_RELOADED:
-		_magazine_in.play()
 	if events & Arsenal.EVENT_EQUIP_STARTED:
 		_equip.play()
+
+
+## Follow the displayed reload pose. A backward prediction correction may
+## revisit a contact, so retain the latest cue until a new reload or weapon.
+func update_reload(kind: int, action: int, progress: float, events: int) -> void:
+	if not _audible or not is_inside_tree():
+		return
+	if kind != _reload_weapon or events & Arsenal.EVENT_RELOAD_STARTED:
+		_reload_weapon = kind
+		_reload_contact = ReloadContact.NONE
+	if action != Arsenal.Action.RELOADING:
+		return
+	if progress >= ViewModel.RELOAD_SEAT_PROGRESS and _reload_contact < ReloadContact.SEAT:
+		_reload_contact = ReloadContact.SEAT
+		_magazine_in.play()
+	elif progress >= ViewModel.RELOAD_RELEASE_PROGRESS and _reload_contact < ReloadContact.RELEASE:
+		_reload_contact = ReloadContact.RELEASE
+		_magazine_out.play()
 
 
 ## shot_at plays another soldier's shot from where it was fired, quieter with
