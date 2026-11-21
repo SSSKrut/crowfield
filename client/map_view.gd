@@ -13,6 +13,7 @@ const DIRT_DETAIL := preload("res://assets/valley/dirt_aerial_02-diff.jpg")
 const ROCK_DETAIL := preload("res://assets/valley/rocky_terrain_02-diff.jpg")
 const PLASTER_DETAIL := preload("res://assets/valley/painted_plaster_wall-diff.jpg")
 const PLANK_DETAIL := preload("res://assets/valley/wood_planks_dirt-diff.jpg")
+const SANDBAG_CANVAS := preload("res://assets/valley/sandbag-canvas.png")
 
 const COLORS := {
 	MapScene.Kind.GROUND: Color8(115, 125, 115),
@@ -21,7 +22,7 @@ const COLORS := {
 	MapScene.Kind.ROOF: Color8(110, 119, 109),
 	MapScene.Kind.WOOD: Color8(156, 128, 89),
 	MapScene.Kind.PLANKS: Color8(137, 119, 88),
-	MapScene.Kind.SANDBAG: Color8(135, 131, 100),
+	MapScene.Kind.SANDBAG: Color8(116, 105, 75),
 	MapScene.Kind.ROCK: Color8(137, 142, 128),
 	MapScene.Kind.METAL: Color8(77, 91, 78),
 	MapScene.Kind.TRUNK: Color8(81, 70, 53),
@@ -286,10 +287,7 @@ func _build_boxes() -> void:
 		var shades: Array[Color] = []
 		var box_mesh: Mesh = unit
 		if kind == MapScene.Kind.SANDBAG and scene.terrain != null:
-			var bag := SphereMesh.new()
-			bag.radial_segments = 12
-			bag.rings = 4
-			box_mesh = bag
+			box_mesh = _sandbag_mesh()
 			for box in boxes:
 				_stack_sandbags(box, transforms, shades)
 		else:
@@ -335,7 +333,11 @@ func _box_material(kind: int, color: Color) -> StandardMaterial3D:
 		MapScene.Kind.WOOD, MapScene.Kind.PLANKS, MapScene.Kind.TRUNK:
 			return _material(color, 0.55, PLANK_DETAIL)
 		MapScene.Kind.SANDBAG:
-			return _material(color, 1.8, _fine)
+			var canvas := _material(color, 0.0)
+			canvas.albedo_texture = SANDBAG_CANVAS
+			canvas.roughness = 1.0
+			canvas.texture_repeat = false
+			return canvas
 		MapScene.Kind.METAL, MapScene.Kind.ROOF:
 			var metal := _material(color, 0.66, _fine)
 			metal.roughness = 0.83
@@ -349,8 +351,55 @@ static func _surface_shade(index: int, kind: int) -> Color:
 	return Color(shade, shade, shade)
 
 
-## Alternate course joints within the original cover silhouette. The
-## spheres overlap slightly, giving filled bags a rounded profile.
+## Four cross sections form the filled body and pinched, stitched end.
+## The UV runs from the folded end along the length and around the sack.
+static func _sandbag_mesh() -> ArrayMesh:
+	const SIDES := 12
+	# Length from the center, relative height, and relative depth.
+	const PROFILE := [Vector3(-0.5, 0.54, 0.64), Vector3(-0.37, 1.0, 0.95),
+		Vector3(0.37, 0.98, 1.0), Vector3(0.5, 0.26, 0.73)]
+	var surface := SurfaceTool.new()
+	surface.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for section in PROFILE.size() - 1:
+		var a: Vector3 = PROFILE[section]
+		var b: Vector3 = PROFILE[section + 1]
+		for side in SIDES:
+			var start := float(side) / SIDES
+			var end := float(side + 1) / SIDES
+			_sandbag_vertex(surface, a, start)
+			_sandbag_vertex(surface, a, end)
+			_sandbag_vertex(surface, b, start)
+			_sandbag_vertex(surface, a, end)
+			_sandbag_vertex(surface, b, end)
+			_sandbag_vertex(surface, b, start)
+	for section in [0, PROFILE.size() - 1]:
+		var at: Vector3 = PROFILE[section]
+		for side in SIDES:
+			var start := float(side) / SIDES
+			var end := float(side + 1) / SIDES
+			surface.set_normal(Vector3(signf(at.x), 0, 0))
+			surface.set_uv(Vector2(at.x + 0.5, 0.5))
+			surface.add_vertex(Vector3(at.x, 0, 0))
+			_sandbag_vertex(surface, at, end if section == 0 else start)
+			_sandbag_vertex(surface, at, start if section == 0 else end)
+	surface.index()
+	return surface.commit()
+
+
+static func _sandbag_vertex(surface: SurfaceTool, section: Vector3, around: float) -> void:
+	var angle := TAU * fposmod(around, 1.0)
+	var y := sin(angle)
+	var z := cos(angle)
+	var x := section.x
+	surface.set_uv(Vector2(x + 0.5, around))
+	var shoulder := smoothstep(0.37, 0.5, absf(x)) * signf(x)
+	surface.set_normal(Vector3(1.3 * shoulder, y, z).normalized())
+	# Broader flats than an ellipse let the courses settle together.
+	surface.add_vertex(Vector3(x, 0.5 * section.y * signf(y) * pow(absf(y), 0.62),
+		0.5 * section.z * signf(z) * pow(absf(z), 0.62)))
+
+
+## Overlap the courses enough for the visual cover to match the collision wall.
 static func _stack_sandbags(box: MapScene.Box, transforms: Array[Transform3D], shades: Array[Color]) -> void:
 	var half := box.half_extents
 	var rows := maxi(2, roundi(half.y * 2.0 / 0.27))
@@ -367,7 +416,8 @@ static func _stack_sandbags(box: MapScene.Box, transforms: Array[Transform3D], s
 				continue
 			var size := Vector3((right - left) * 1.13, step * 1.24, half.z * 2.0)
 			var center := Vector3((left + right) / 2.0, y, sin(float(column) * 2.6 + row) * 0.017)
-			transforms.append(box.transform * Transform3D(Basis().scaled_local(size), center))
+			var facing := Basis(Vector3.UP, PI) if (row + column) % 2 == 0 else Basis.IDENTITY
+			transforms.append(box.transform * Transform3D(facing.scaled_local(size), center))
 			shades.append(_surface_shade(transforms.size(), MapScene.Kind.SANDBAG))
 
 
