@@ -2,7 +2,12 @@
 
 ## Prepare a session
 
-The organizer supplies the same standalone Crowfield candidate to everyone and records its revision. Put `Crowfield.app` and `playtest-candidate.command` in the same folder. Open the launcher when it is Crowfield's turn. It starts Valley with 24 bots and seed 5, and prints where it saves a local gameplay trace. The exported app includes the engine.
+The organizer supplies the same Crowfield revision to everyone. Extract the archive for your platform and keep the game and `playtest-candidate.command` together.
+
+- **macOS** Open `playtest-candidate.command` beside `Crowfield.app`.
+- **Linux x86_64** In a terminal, run `./playtest-candidate.command` beside `crowfield.x86_64`.
+
+The launcher starts Valley with 24 bots, seed 5, and the Compatibility renderer. It prints where it saves a local gameplay trace. The extracted game includes the engine.
 
 Use the current stable Ravenfield in stock Point Match on the map named by the organizer. Use the agreed bot count and play on foot. Play both games on the same setup if practical, at your normal listening level. Record the two versions, settings, and the order assigned by the organizer. The organizer should alternate which game comes first across five to eight participants.
 
