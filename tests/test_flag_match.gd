@@ -139,19 +139,34 @@ func _check_fresh_round(harness: Harness) -> void:
 	check_equal(next.snapshot.match_state.result, MatchState.Result.ACTIVE, "the next player receives the new round")
 
 
-func test_valley_bots_capture_a_flag() -> void:
+func test_valley_bots_fight_for_all_crossings_in_the_opening() -> void:
 	var settings := ServerSettings.new()
 	settings.map = "valley"
 	settings.bots = 24
 	settings.seed = 9
 	var server: Server = Server.create(settings, Rules.new())
 	cleanup(func() -> void: server.close())
-	server.flag_match.started = true
-	for tick in 65 * Game.TICK_RATE:
+	var first_bot := server.soldiers.at(0)
+	var rally_position := first_bot.position
+	for tick in Game.TICK_RATE / 2:
 		server.step()
-		if server.flag_match.state.blue_score + server.flag_match.state.red_score > 0:
+	check_equal(first_bot.position, rally_position, "the squad waits while the player is connecting")
+	server.flag_match.started = true
+	var approached := [false, false, false]
+	var contested := false
+	var captured := false
+	for tick in 20 * Game.TICK_RATE:
+		server.step()
+		for index in server.flag_match.state.flags.size():
+			var flag := server.flag_match.state.flags[index]
+			approached[index] = approached[index] or flag.contested or flag.progress > 0 or flag.owner != Game.Team.NONE
+			contested = contested or flag.contested
+			captured = captured or flag.owner != Game.Team.NONE
+		if not approached.has(false) and contested and captured:
 			return
-	fail("no team held a flag and scored in 65 s")
+	check(not approached.has(false), "both bridges and the ford all see activity within the opening")
+	check(contested, "enemy squads contest a flag within the opening")
+	check(captured, "some squad secures territory within the opening")
 
 
 static func _soldier(soldiers: SoldierSet, team: int, position: Vector3) -> Soldier:

@@ -120,5 +120,7 @@ func test_soldiers_appear_on_the_ground_of_their_base() -> void:
 			var at := server.spawn_point(team, server.random)
 			var flat := Vector2(at.x - zone.center.x, at.z - zone.center.z).length()
 			check(flat <= zone.radius + 0.5, "a %s soldier appears %.1f m from its base" % [Game.team_name(team), flat])
+			check(absf(at.x) + server.rules.movement.capsule_radius < ValleyMap.GATE_HALF_WIDTH,
+				"%s deploys directly behind the gate" % Game.team_name(team))
 			var down := server.cast_ray(at + Vector3(0, 0.3, 0), Vector3.DOWN, 1.0, Game.LAYER_STATIC)
 			check(down >= 0.25 and down <= 0.35, "a %s soldier appears %.2f m above the ground at %s" % [Game.team_name(team), 0.3 - down, at])

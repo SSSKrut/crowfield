@@ -18,6 +18,10 @@ const FORD_BED := -1.75
 const WATER_LEVEL := -1.55
 const RIVER_HALF_WIDTH := 10.0
 const BASE := Vector3(0, 0, 76)
+## Deploy just behind the gate and within its straight approach.
+const MUSTER := Vector3(0, 0, 67)
+const MUSTER_RADIUS := 3.2
+const GATE_HALF_WIDTH := 4.0
 const VILLAGE := Vector3(-40, 0, 30)
 const HILL := Vector3(58, 0, 44)
 const KNOLL := Vector3(-66, 0, 54)
@@ -71,8 +75,8 @@ func _build() -> MapScene:
 		_flats.append(Flat.new(bridge + Vector2(0, 14), 4, 9, BANK_LEVEL))
 		_flats.append(Flat.new(bridge - Vector2(0, 14), 4, 9, BANK_LEVEL))
 	_scene.terrain = Terrain.create(SIZE, _height)
-	_scene.set_zone(Game.Team.BLUE, _on_ground(BASE), 8)
-	_scene.set_zone(Game.Team.RED, _on_ground(-BASE), 8)
+	_scene.set_zone(Game.Team.BLUE, _on_ground(MUSTER), MUSTER_RADIUS)
+	_scene.set_zone(Game.Team.RED, _on_ground(-MUSTER), MUSTER_RADIUS)
 	_roads()
 	for sign: float in [1.0, -1.0]:
 		var turn := 0.0 if sign > 0 else PI
@@ -191,7 +195,6 @@ func _wall(origin: Vector3, turn: float, a: Vector2, b: Vector2, level: float, h
 ## _base is a camp behind sandbags, facing north: huts, crates, a flag and a
 ## watch platform with a ramp.
 func _base(origin: Vector3, turn: float) -> void:
-	const GATE_HALF_WIDTH := 4.0
 	const FLANK_COVER_WIDTH := 2.4
 	var level := BASE_LEVEL
 	for side: float in [-1.0, 1.0]:
