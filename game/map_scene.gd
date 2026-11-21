@@ -33,6 +33,11 @@ class Zone:
 		center = at
 		radius = size
 
+
+	## The bridge flag can be captured from the deck, but not the water below.
+	func contains_flag_position(at: Vector3) -> bool:
+		return absf(at.y - center.y) <= 1.4 and Vector2(at.x - center.x, at.z - center.z).length_squared() <= radius * radius
+
 ## Plant is a tree or a bush the client draws. A tree has a trunk among the
 ## boxes; its crown and a bush stop nothing.
 class Plant:
@@ -55,6 +60,8 @@ var spheres: Array[Sphere] = []
 var zones: Array[Zone] = [null, null, null]
 ## objectives are the places of the map worth fighting for, where bots go.
 var objectives: Array[Zone] = []
+## Flags ordered by their positions from west to east. Empty on sandbox maps.
+var flags: Array[Zone] = []
 var trees: Array[Plant] = []
 var bushes: Array[Plant] = []
 var waters: Array[Water] = []
@@ -195,6 +202,15 @@ func hash_value() -> int:
 		digest.start(HashingContext.HASH_SHA256)
 		digest.update(terrain.bytes())
 		bytes.append_array(digest.finish())
+	for flag in flags:
+		bytes.append_array(flag.name.to_utf8_buffer())
+		bytes.append(0)
+		var at := bytes.size()
+		bytes.resize(at + 16)
+		bytes.encode_float(at, flag.center.x)
+		bytes.encode_float(at + 4, flag.center.y)
+		bytes.encode_float(at + 8, flag.center.z)
+		bytes.encode_float(at + 12, flag.radius)
 	_hash = Game.fnv64(bytes)
 	_hashed = true
 	return _hash

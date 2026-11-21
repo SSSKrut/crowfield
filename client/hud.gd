@@ -50,6 +50,9 @@ var net_graph: NetGraph
 var jumps := 0
 ## reconnect_lines tell of a lost connection; empty while there is none.
 var reconnect_lines: PackedStringArray = []
+var match_state: MatchState
+var map_scene: MapScene
+var feet := Vector3.ZERO
 
 var _font: Font
 var _scale := 1.0
@@ -84,6 +87,74 @@ func _draw() -> void:
 	if not reconnect_lines.is_empty():
 		for i in reconnect_lines.size():
 			_text(reconnect_lines[i], Vector2(18, 160 + 28 * i) * _scale, 22, ORANGE)
+	if match_state != null and map_scene != null:
+		_draw_match()
+
+
+func _draw_match() -> void:
+	var center := Vector2(size.x / 2.0, 20 * _scale)
+	_box(center, -185, 0, 370, 82, Color8(21, 26, 24, 226))
+	var clock := "%d:%02d" % [match_state.seconds / 60, match_state.seconds % 60]
+	_centered("BLUE  %d" % match_state.blue_score, center + Vector2(-122, 10) * _scale, 20, team_color(Game.Team.BLUE).lightened(0.27))
+	_centered(clock, center + Vector2(0, 10) * _scale, 20, WHITE)
+	_centered("%d  RED" % match_state.red_score, center + Vector2(122, 10) * _scale, 20, team_color(Game.Team.RED).lightened(0.27))
+	for index in map_scene.flags.size():
+		var flag := match_state.flags[index]
+		var x := (index - 1) * 122
+		var tint := GOLD if flag.contested else team_colors.get(flag.owner, LIGHT_GRAY) as Color
+		_box(center, x - 56, 37, 112, 3, tint)
+		_centered(map_scene.flags[index].name, center + Vector2(x, 45) * _scale, 16, WHITE)
+		var status := "Contested" if flag.contested else ("Neutral" if flag.owner == Game.Team.NONE else Game.team_name(flag.owner).capitalize())
+		_centered(status, center + Vector2(x, 64) * _scale, 13, tint.lightened(0.25))
+	var kills := "KILLS  %d" % match_state.kills
+	_box(center, -66, 84, 132, 26, Color8(21, 26, 24, 226))
+	_centered(kills, center + Vector2(0, 89) * _scale, 16, WHITE)
+	if match_state.result != MatchState.Result.ACTIVE:
+		_draw_result()
+	elif has_soldier and not dead:
+		_draw_capture()
+
+
+func _draw_capture() -> void:
+	for index in map_scene.flags.size():
+		var zone := map_scene.flags[index]
+		if not zone.contains_flag_position(feet):
+			continue
+		var flag := match_state.flags[index]
+		var label := "Holding " + zone.name
+		if flag.contested:
+			label = zone.name + " contested"
+		elif flag.challenger == team or flag.owner != team:
+			label = "Capturing " + zone.name
+		var center := Vector2(size.x / 2.0, size.y * 0.70)
+		_box(center, -142, 0, 284, 38, Color8(21, 26, 24, 226))
+		_centered(label, center + Vector2(0, 8) * _scale, 19, WHITE)
+		if flag.challenger != Game.Team.NONE:
+			_box(center, -130, 31, 260, 3, Color8(255, 255, 255, 65))
+			_box(center, -130, 31, 260.0 * flag.progress / 100.0, 3, GOLD if flag.contested else team_color(flag.challenger))
+		break
+
+
+func _draw_result() -> void:
+	var center := size / 2.0
+	var title := "Round drawn"
+	var tint := WHITE
+	match match_state.result:
+		MatchState.Result.BLUE:
+			title = "Blue wins"
+			tint = team_color(Game.Team.BLUE).lightened(0.3)
+		MatchState.Result.RED:
+			title = "Red wins"
+			tint = team_color(Game.Team.RED).lightened(0.3)
+	_box(center, -232, -89, 464, 178, Color8(21, 26, 24, 244))
+	_centered(title, center + Vector2(0, -64) * _scale, 42, tint)
+	_centered("%d – %d   ·   %d kills" % [match_state.blue_score, match_state.red_score, match_state.kills],
+		center + Vector2(0, 0) * _scale, 22, WHITE)
+	_centered("Esc  Match menu", center + Vector2(0, 47) * _scale, 16, LIGHT_GRAY)
+
+
+func _centered(text: String, center: Vector2, font_size: int, color: Color) -> void:
+	_text(text, center - Vector2(_measure(text, font_size) / 2.0, 0), font_size, color)
 
 
 func team_color(of: int) -> Color:

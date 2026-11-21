@@ -36,6 +36,7 @@ var snapshot_interval := 3
 var match_seed := 0
 var navigation: Navigation
 var bots: Bots
+var flag_match: FlagMatch
 ## random places the soldiers of players in the zones of their teams.
 var random := RandomNumberGenerator.new()
 var grid := SoldierGrid.new(GRID_CELL_SIZE)
@@ -84,6 +85,8 @@ static func create(server_settings: ServerSettings, server_rules: Rules) -> Vari
 		server.match_seed = Crypto.new().generate_random_bytes(8).decode_s64(0)
 	server.random.seed = server.match_seed ^ 7919
 	server.navigation = Navigation.create(server.scene)
+	if server.scene.flags.size() == MatchState.FLAG_COUNT:
+		server.flag_match = FlagMatch.new(server.scene.flags)
 	server.bots = Bots.new(server)
 	server.bots.spawn_all(server_settings.bots)
 	return server
@@ -140,6 +143,8 @@ func step() -> void:
 	bots.kill()
 	profile.lap(TickProfile.System.SHOTS)
 	grid.rebuild(soldiers)
+	if flag_match != null:
+		flag_match.step(soldiers, grid)
 	profile.lap(TickProfile.System.GRID)
 	history.record(tick, soldiers)
 	profile.lap(TickProfile.System.HISTORY)
@@ -376,6 +381,7 @@ func _returning(hello: Messages.Hello) -> ServerPlayer:
 			var player := ServerPlayer.new(reservation.id, reservation.name, soldiers.slots())
 			player.token = reservation.token
 			player.team = reservation.team
+			player.kills = reservation.kills
 			return player
 	return null
 
@@ -403,6 +409,8 @@ func _ready(session: Session) -> void:
 	if not _spawn(player):
 		print("player %d could not spawn" % player.id)
 		_drop(session, "could not spawn")
+	elif flag_match != null:
+		flag_match.started = true
 
 
 ## _respawn puts a living soldier back at its spawn with full health and
@@ -459,6 +467,7 @@ func _leave(session: Session, reason: String, by_peer: bool) -> void:
 		reservation.token = player.token
 		reservation.name = player.name
 		reservation.team = player.team
+		reservation.kills = player.kills
 		reservation.until = clock.call() + settings.reconnect_window
 		reservations.append(reservation)
 	print("player %d \"%s\" left: %s" % [player.id, player.name, reason])
@@ -517,6 +526,9 @@ func _view_time(command: InputCommand) -> float:
 ## in a tick still fires its shot of that tick, so two soldiers can kill each
 ## other.
 func _resolve_shots() -> void:
+	if flag_match != null and flag_match.state.result != MatchState.Result.ACTIVE:
+		_shots.clear()
+		return
 	for pending in _shots:
 		var struck := _hitscan(pending)
 		if struck.is_empty():
@@ -613,6 +625,8 @@ func _tell_hit(pending: PendingShot, victim: Soldier, zone: int, taken: int, kil
 		_send_event(victim_player, hurt)
 	if not killed:
 		return
+	if shooter_player != null and pending.team != victim.team:
+		shooter_player.kills = mini(shooter_player.kills + 1, MatchState.MAX_KILLS)
 	var death := Messages.Death.new()
 	death.tick = tick
 	death.victim = victim.id
@@ -721,6 +735,7 @@ class Reservation:
 	var name := ""
 	var team := 0
 	var until := 0.0
+	var kills := 0
 
 
 ## PendingShot is a shot fired this tick, resolved once every soldier has

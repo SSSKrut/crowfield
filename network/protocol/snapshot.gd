@@ -16,6 +16,8 @@ const _REMOVED_COUNT_BITS := 8
 var sequence := 0
 var server_tick := 0
 var player := PlayerState.new()
+## Null for a map without a round objective.
+var match_state: MatchState
 ## soldiers are in ascending slot order, which keeps their identifiers short.
 ## SnapshotPacker builds them so.
 var soldiers: Array[SoldierRecord] = []
@@ -40,7 +42,8 @@ func type() -> int:
 
 ## fixed_bits is the size of everything but the soldier records.
 func fixed_bits() -> int:
-	return 8 + 16 + 32 + player.bits() + _SOLDIER_COUNT_BITS + _REMOVED_COUNT_BITS + 16 * removed.size()
+	var match_bits := match_state.bits() if match_state != null else 0
+	return 8 + 16 + 32 + player.bits() + 1 + match_bits + _SOLDIER_COUNT_BITS + _REMOVED_COUNT_BITS + 16 * removed.size()
 
 
 func write(w: BitWriter) -> String:
@@ -51,6 +54,10 @@ func write(w: BitWriter) -> String:
 	var error := player.validate()
 	if error != "":
 		return error
+	if match_state != null:
+		error = match_state.validate()
+		if error != "":
+			return error
 	# The records are built from checked states (SoldierState.create) or
 	# decoded and checked; only their order is checked here.
 	var previous := -1
@@ -65,6 +72,9 @@ func write(w: BitWriter) -> String:
 	w.write_bits(sequence, 16)
 	w.write_bits(server_tick, 32)
 	player.write(w)
+	w.write_bits(int(match_state != null), 1)
+	if match_state != null:
+		match_state.write(w)
 	if not out_states.is_empty():
 		w.write_bits(out_states.size(), _SOLDIER_COUNT_BITS)
 		previous = -1
@@ -93,6 +103,10 @@ func read(r: BitReader) -> void:
 	sequence = r.read_bits(16)
 	server_tick = r.read_bits(32)
 	player.read(r)
+	match_state = null
+	if r.read_bits(1) != 0:
+		match_state = MatchState.new()
+		match_state.read(r)
 	soldiers.clear()
 	removed.resize(0)
 	var count := r.read_bits(_SOLDIER_COUNT_BITS)
