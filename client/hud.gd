@@ -114,7 +114,7 @@ func _draw_match() -> void:
 		var zone := map_scene.flags[index]
 		var x := (index - (map_scene.flags.size() - 1) * 0.5) * 108
 		var tint: Color = team_colors.get(flag.owner, LIGHT_GRAY)
-		var status_tint := tint.lightened(0.40)
+		var status_tint := WHITE
 		var status := ""
 		if flag.contested:
 			status = "Contested"
@@ -131,14 +131,13 @@ func _draw_match() -> void:
 		_box(center, name_x - 1, 39, 7, 7, INK)
 		_box(center, name_x, 40, 5, 5, tint.lightened(0.20))
 		_text(zone.name, center + Vector2(name_x + 10, 28) * _scale, 19, WHITE, _DISPLAY)
-		if not status.is_empty():
-			_centered(status, center + Vector2(x, 51) * _scale, 16, status_tint, _DISPLAY)
+		var changing := not status.is_empty()
+		if not changing:
+			status = "Neutral" if flag.owner == Game.Team.NONE else Game.team_name(flag.owner).capitalize()
+		if show_bearings and not zone.contains_flag_position(feet):
+			_draw_flag_bearing(zone, center + Vector2(x, 61) * _scale, status, status_tint, not changing)
 		else:
-			var owner := "Neutral" if flag.owner == Game.Team.NONE else Game.team_name(flag.owner).capitalize()
-			if show_bearings and not zone.contains_flag_position(feet):
-				_draw_flag_bearing(zone, center + Vector2(x, 61) * _scale, owner)
-			else:
-				_centered(owner, center + Vector2(x, 52) * _scale, 15, WHITE, _DISPLAY)
+			_centered(status, center + Vector2(x, 52) * _scale, 15, status_tint, _DISPLAY)
 	if match_state.result != MatchState.Result.ACTIVE:
 		_draw_result()
 	elif has_soldier and not dead:
@@ -148,17 +147,20 @@ func _draw_match() -> void:
 
 
 ## The arrow turns with the player, including when the flag is behind them.
-func _draw_flag_bearing(zone: MapScene.Zone, center: Vector2, owner: String) -> void:
+func _draw_flag_bearing(zone: MapScene.Zone, center: Vector2, label: String, tint: Color, show_distance: bool) -> void:
 	var offset := zone.center - feet
 	var angle := atan2(offset.x, -offset.z) - view_yaw
 	var forward := Vector2(sin(angle), -cos(angle))
 	var side := forward.orthogonal()
-	var meters := "%d m" % roundi(Vector2(offset.x, offset.z).length())
-	var owner_width := _measure(owner, 15, _DISPLAY)
-	var distance_width := _measure(meters, 15, _DISPLAY)
-	var x := center.x - (owner_width + distance_width + 22 * _scale) / 2.0
-	_text(owner, Vector2(x, center.y - 9 * _scale), 15, WHITE, _DISPLAY)
-	var origin := Vector2(x + owner_width + 12 * _scale, center.y)
+	var label_width := _measure(label, 15, _DISPLAY)
+	var tail_width := 18 * _scale
+	var meters := ""
+	if show_distance:
+		meters = "%d m" % roundi(Vector2(offset.x, offset.z).length())
+		tail_width = _measure(meters, 15, _DISPLAY) + 22 * _scale
+	var x := center.x - (label_width + tail_width) / 2.0
+	_text(label, Vector2(x, center.y - 9 * _scale), 15, tint, _DISPLAY)
+	var origin := Vector2(x + label_width + 12 * _scale, center.y)
 	var arrow := PackedVector2Array([
 		origin + forward * (6 * _scale),
 		origin + (side * 4 - forward * 4) * _scale,
@@ -168,7 +170,8 @@ func _draw_flag_bearing(zone: MapScene.Zone, center: Vector2, owner: String) -> 
 	draw_colored_polygon(arrow, WHITE)
 	arrow.append(arrow[0])
 	draw_polyline(arrow, INK, maxf(1.0, _scale), true)
-	_text(meters, origin + Vector2(10, -9) * _scale, 15, WHITE, _DISPLAY)
+	if show_distance:
+		_text(meters, origin + Vector2(10, -9) * _scale, 15, WHITE, _DISPLAY)
 
 
 func _draw_capture() -> void:
