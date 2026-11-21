@@ -39,8 +39,12 @@ func _ready() -> void:
 
 
 func _position_panel() -> void:
-	# Leave the right side of the Valley panorama visible on wider windows.
-	%Center.anchor_right = clampf(550.0 / maxf(size.x, 1.0), 0.46, 1.0)
+	# Keep the entire menu reachable in a short window and leave the view open on the right.
+	var layout := %Center as CenterContainer
+	layout.anchor_right = clampf(550.0 / maxf(size.x, 1.0), 0.46, 1.0)
+	layout.pivot_offset = Vector2(size.x * layout.anchor_right, size.y) * 0.5
+	var factor := minf(size.x / 440.0, size.y / 550.0)
+	layout.scale = Vector2.ONE * clampf(factor, 0.25, 1.0)
 
 
 func _on_map_selected(index: int) -> void:
