@@ -21,7 +21,7 @@ func _init(configure: Callable = Callable(), rules: Rules = null) -> void:
 	var made: Variant = Server.create(settings, rules if rules != null else Rules.new())
 	assert(made is Server, str(made))
 	server = made
-	server.clock = func() -> float: return float(server.tick) / Game.TICK_RATE
+	server.clock = server.tick_time
 	server.add_listener(listener)
 
 

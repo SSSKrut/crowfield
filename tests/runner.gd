@@ -34,7 +34,7 @@ static func run(filter: String = "") -> int:
 			errors.messages.clear()
 			var case: TestCase = script.new()
 			var clock := Time.get_ticks_msec()
-			case.call(name)
+			await case.call(name)
 			case.run_cleanups()
 			var elapsed := Time.get_ticks_msec() - clock
 			for message in errors.messages:
@@ -53,6 +53,9 @@ static func run(filter: String = "") -> int:
 				for failure in case.failures:
 					printerr("       ", failure)
 	OS.remove_logger(errors)
+	if filter != "" and passed == 0 and failed == 0:
+		printerr("FAIL no tests matched filter %s" % filter)
+		failed += 1
 	print("%d passed, %d failed in %.1f s" % [passed, failed, (Time.get_ticks_msec() - started) / 1000.0])
 	return failed
 

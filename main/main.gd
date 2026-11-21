@@ -15,6 +15,7 @@ extends Node
 ## lists the flags.
 
 const MENU := preload("res://menu/main_menu.tscn")
+const MENU_FPS := 30
 
 
 func _ready() -> void:
@@ -32,7 +33,7 @@ func _ready() -> void:
 			_show_menu("")
 		"test":
 			var filter := arguments[0] if arguments.size() > 0 else ""
-			var failed := TestRunner.run(filter)
+			var failed := await TestRunner.run(filter)
 			get_tree().quit(1 if failed > 0 else 0)
 		"server":
 			add_child(DedicatedServer.create(arguments))
@@ -48,6 +49,8 @@ func _ready() -> void:
 
 
 func _show_menu(message: String) -> void:
+	OS.low_processor_usage_mode = true
+	Engine.max_fps = MENU_FPS
 	var menu: MainMenu = MENU.instantiate()
 	menu.message = message
 	menu.play.connect(func(arguments: PackedStringArray) -> void:
@@ -60,12 +63,16 @@ func _show_menu(message: String) -> void:
 ## the game ends; one started by flags ends the program when the game fails,
 ## for scripts that check how it ended.
 func _play(arguments: PackedStringArray, from_menu: bool) -> void:
+	OS.low_processor_usage_mode = false
 	var app := ClientApp.create(arguments)
 	app.left.connect(func(message: String) -> void:
 		app.queue_free()
 		if message != "" and not from_menu:
 			printerr(message)
 			get_tree().quit(1)
+			return
+		if app.settings.get("exit-on-leave", false):
+			get_tree().quit()
 			return
 		_show_menu(message), CONNECT_DEFERRED)
 	add_child(app)

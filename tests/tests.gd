@@ -4,5 +4,5 @@ extends Node
 
 
 func _ready() -> void:
-	var failed := TestRunner.run()
+	var failed := await TestRunner.run()
 	get_tree().quit(1 if failed > 0 else 0)

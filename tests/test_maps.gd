@@ -86,6 +86,27 @@ func test_navigation_reaches_every_place() -> void:
 			check(to.distance_to(place.center) < place.radius + 2, "the %s lies off the mesh, at %s from %s" % [place.name, to, place.center])
 
 
+## Both base gates let a soldier walk straight through the side of the opening.
+func test_valley_base_gate_stays_open() -> void:
+	var scene := _valley()
+	var space := PhysicsServer3D.space_create()
+	var collision := scene.build_collision(space)
+	var controller := CharacterController.new(space, MovementTuning.new())
+	cleanup(func() -> void:
+		controller.close()
+		MapScene.free_collision(collision)
+		PhysicsServer3D.free_rid(space))
+	for side: float in [1.0, -1.0]:
+		var x := side * 2.5
+		var z := side * 64.0
+		var soldier := Soldier.new()
+		controller.teleport(soldier, Vector3(x, scene.ground_at(x, z), z))
+		var yaw := -0.0125 if side > 0.0 else PI - 0.0125
+		for tick in 2 * Game.TICK_RATE:
+			controller.step(soldier, InputCommand.create(tick, 1.0, 0.0, yaw, 0.0, 0))
+		check(soldier.position.z * side < 56.0, "base gate at z=%.0f stopped a player at %s" % [z, soldier.position])
+
+
 ## Soldiers appear on the ground inside the zone of their team, not in a box.
 func test_soldiers_appear_on_the_ground_of_their_base() -> void:
 	var settings := ServerSettings.new()

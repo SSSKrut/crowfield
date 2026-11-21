@@ -20,8 +20,19 @@ const RECONNECT_WINDOW := 60.0
 const HELP_LINES := [
 	"WASD move | Space jump | Shift sprint | LMB fire | RMB aim | R reload | 1-3, wheel weapon",
 	"K ragdoll | Backspace respawn | L knock down nearest | F1 physics | F2 network | F3 camera | Esc menu",
+	"F4 save playtest state | Shift+F4 save state and screenshot",
 ]
+enum PlaytestCapture { NONE, STATE, IMAGE }
+const PLAYTEST_DIR := "user://playtests"
+const FRAME_DIAGNOSTIC_WINDOW_USEC := 1000000
 const GAME_MENU := preload("res://menu/game_menu.tscn")
+const PlaytestTrace := preload("res://client/playtest_trace.gd")
+const NATIVE_INPUT_EXTENSION := "res://.godot/playtest-native/native-input.gdextension"
+const NATIVE_INPUT_PATH_ENV := "CROWFIELD_NATIVE_INPUT_PATH"
+const NATIVE_INPUT_GAMEPLAY_ENV := "CROWFIELD_NATIVE_INPUT_GAMEPLAY"
+const MOVE_ACTIONS := ["move_forward", "move_back", "move_left", "move_right"]
+const HELD_ACTIONS := MOVE_ACTIONS + ["jump", "sprint", "fire", "aim"]
+const TRACE_ACTIONS := HELD_ACTIONS + ["reload", "weapon_1", "weapon_2", "weapon_3", "weapon_next", "weapon_previous"]
 const VIRTUAL_INTERFACES := ["lo", "docker", "br-", "veth", "virbr"]
 
 var settings := {}
@@ -66,11 +77,20 @@ var _pitch := 0.0
 var _look := Vector2.ZERO
 var _mouse := Vector2.ZERO
 var _captured := false
-## The slot the player chose. Fire and reload pressed between two ticks are
-## kept for the next one, so that a short click counts.
+var _focused := true
+## Latest non-repeat keyboard transition for each movement action.
+var _movement_key_events := {}
+var _input_trace := PlaytestTrace.new()
+var _native_input_loaded := false
+var _gameplay_capture_marker := ""
+var _gameplay_capture_marked := false
 var _weapon := 0
+## Keep short gameplay presses until the next command.
+var _jump_pressed := false
 var _fire_pressed := false
 var _reload_pressed := false
+## Keep a keyboard movement tap even when key-up arrives before the next tick.
+var _movement_pressed := {}
 ## What the weapons did in the ticks of this frame: shots to show once the
 ## camera is placed, and events to sound.
 var _shots: Array[Shot] = []
@@ -94,9 +114,14 @@ var _net_window := 0.0
 var _net_bytes := 0
 var _net_rate := 0.0
 var _frames := 0
+var _frame_started_usec := -1
+var _last_frame_usec := 0
+var _frame_window_started_usec := 0
+var _frame_window_longest_usec := 0
+var _previous_frame_window_longest_usec := 0
+var _frame_warmup := 1.0
 var _frame_stats := FrameStats.new()
 var _report := FrameStats.new()
-var _report_elapsed := 0.0
 var _knockdowns := 0
 ## _reconnect is the restoring of a lost connection to a remote server.
 var _reconnect_since := -1.0
@@ -110,6 +135,10 @@ var _failed := false
 ## microseconds: the part of the client, and the embedded server's ticks.
 var _profile := {}
 var _lap := 0
+var _capture_requested := PlaytestCapture.NONE
+var _capture_writer: Thread
+var _capture_notice := ""
+var _capture_notice_until := 0
 
 
 static func create(arguments: PackedStringArray) -> ClientApp:
@@ -123,6 +152,9 @@ static func define_flags(flags: Flags) -> void:
 	flags.define("width", ProjectSettings.get_setting("display/window/size/viewport_width"), "window width")
 	flags.define("height", ProjectSettings.get_setting("display/window/size/viewport_height"), "window height")
 	flags.define("frames", 0, "close after this many frames")
+	flags.define("exit-on-leave", false, "close the game when leaving a match")
+	flags.define("dev-capture-dir", "", "write gameplay.jsonl to this development run directory")
+	flags.define("dev-native-input", false, "record local macOS movement key timing when the dev monitor is available")
 	flags.define("screenshot", "", "save a screenshot on the final frame")
 	flags.define("demo", false, "walk and trigger the ragdoll automatically")
 	flags.define("movement", false, "run and jump toward the ramp automatically")
@@ -163,10 +195,19 @@ func _ready() -> void:
 	if error != "":
 		_quit_with(error)
 		return
-	for name in ["width", "height", "frames", "screenshot", "demo", "movement", "shoot", "cycles", "debug", "tuning",
+	for name in ["width", "height", "frames", "exit-on-leave", "dev-capture-dir", "dev-native-input", "screenshot", "demo", "movement", "shoot", "cycles", "debug", "tuning",
 			"weapons", "volume", "name", "netsim", "host", "connect", "fingerprint", "config-dir", "map", "bots", "bot-ai",
 			"bot-deaths", "respawn-delay", "stats", "overview", "netgraph", "max-fps", "knockdowns", "sensitivity", "fov"]:
 		settings[name] = flags.get_value(name)
+	if settings["dev-capture-dir"] != "":
+		var trace_error := _input_trace.start_run(settings["dev-capture-dir"], Time.get_ticks_usec())
+		if trace_error != OK:
+			_quit_with("could not open gameplay trace: " + error_string(trace_error))
+			return
+		if OS.get_name() == "macOS" and DisplayServer.get_name() != "headless":
+			_gameplay_capture_marker = ProjectSettings.globalize_path(settings["dev-capture-dir"].path_join(".gameplay-captured-pid"))
+		if settings["dev-native-input"]:
+			_start_native_input_trace(settings["dev-capture-dir"])
 	var loaded: Variant = Rules.load_files(settings["tuning"], settings["weapons"])
 	if loaded is String:
 		_quit_with(loaded)
@@ -194,8 +235,42 @@ func _ready() -> void:
 	_debug = settings["debug"]
 	_net_graph = settings["netgraph"]
 	_captured = settings["frames"] == 0
-	if _captured:
+	var window := get_window()
+	_focused = DisplayServer.get_name() == "headless" or window.has_focus()
+	window.focus_entered.connect(_set_window_focus.bind(true))
+	window.focus_exited.connect(_set_window_focus.bind(false))
+	_reset_gameplay_input()
+	if _captured and _focused:
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	_update_native_input_scope()
+
+
+func _start_native_input_trace(directory: String) -> void:
+	if OS.get_name() != "macOS" or not FileAccess.file_exists(NATIVE_INPUT_EXTENSION):
+		return
+	OS.set_environment(NATIVE_INPUT_PATH_ENV, ProjectSettings.globalize_path(directory.path_join("native-input.jsonl")))
+	var status := GDExtensionManager.load_extension(NATIVE_INPUT_EXTENSION)
+	_native_input_loaded = status == GDExtensionManager.LOAD_STATUS_OK
+	if not _native_input_loaded:
+		OS.unset_environment(NATIVE_INPUT_PATH_ENV)
+		push_warning("Native input timing unavailable (load status %d)." % status)
+
+
+func _update_native_input_scope() -> void:
+	var active := _captured and _focused and session != null and _reconnect_since < 0 and not _failed
+	if _native_input_loaded:
+		OS.set_environment(NATIVE_INPUT_GAMEPLAY_ENV, "1" if active else "0")
+	if _gameplay_capture_marker.is_empty() or active == _gameplay_capture_marked:
+		return
+	if active:
+		var marker := FileAccess.open(_gameplay_capture_marker, FileAccess.WRITE)
+		if marker == null:
+			return
+		marker.store_line(str(OS.get_process_id()))
+		marker.close()
+	else:
+		DirAccess.remove_absolute(_gameplay_capture_marker)
+	_gameplay_capture_marked = active
 
 
 func _setup_window() -> void:
@@ -282,6 +357,8 @@ func _load_map(map_name: String) -> Variant:
 func _build_soldiers() -> void:
 	effects = Effects.new()
 	add_child(effects)
+	if RenderingServer.get_current_rendering_method() == "gl_compatibility":
+		effects.warm_up(camera)
 	sounds = Sounds.new(settings["volume"])
 	add_child(sounds)
 	view_model = ViewModel.new()
@@ -405,6 +482,15 @@ func _join(conn: Conn, token: PackedByteArray = PackedByteArray()) -> void:
 
 
 func _exit_tree() -> void:
+	if _gameplay_capture_marked:
+		DirAccess.remove_absolute(_gameplay_capture_marker)
+	if _native_input_loaded:
+		OS.unset_environment(NATIVE_INPUT_GAMEPLAY_ENV)
+		OS.unset_environment(NATIVE_INPUT_PATH_ENV)
+		GDExtensionManager.unload_extension(NATIVE_INPUT_EXTENSION)
+	_input_trace.finish_run(Time.get_ticks_usec())
+	if _capture_writer != null and _capture_writer.is_started():
+		_capture_writer.wait_to_finish()
 	if session != null:
 		session.close()
 		if session.conn is ENetTransport.Client:
@@ -421,10 +507,37 @@ func _exit_tree() -> void:
 	MapScene.free_collision(_map_collision)
 
 
+func _input(event: InputEvent) -> void:
+	if session == null or not _focused or not _captured or event.is_echo():
+		return
+	if not (event is InputEventKey or event is InputEventMouseButton):
+		return
+	for action in TRACE_ACTIONS:
+		if event.is_action(action):
+			var now := Time.get_ticks_usec()
+			if action in MOVE_ACTIONS and event is InputEventKey:
+				if event.is_pressed():
+					_movement_pressed[action] = true
+				_movement_key_events[action] = [event.is_pressed(), now / 1000]
+				_input_trace.event(now, {
+					"type": "movement_key",
+					"action": action,
+					"pressed": event.is_pressed(),
+					"action_pressed": Input.is_action_pressed(action),
+					"godot_physical_pressed": _movement_physical_pressed(action),
+				})
+				continue
+			_input_trace.event(now, {
+				"type": "gameplay_action",
+				"action": action,
+				"pressed": event.is_pressed(),
+			})
+
+
 ## _unhandled_input takes the actions of the input map (Project Settings →
 ## Input Map) that happen at a press; the held ones _command reads every tick.
 func _unhandled_input(event: InputEvent) -> void:
-	if _failed:
+	if _failed or not _focused:
 		return
 	if event.is_action_pressed("menu"):
 		if menu.visible:
@@ -434,8 +547,16 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if not _captured:
 		return
+	if event.is_echo():
+		# Godot also updates held actions from key repeat events.
+		for action in HELD_ACTIONS:
+			if Input.is_action_just_pressed_by_event(action, event):
+				Input.action_release(action)
+		return
 	if event is InputEventMouseMotion:
-		_mouse += event.relative
+		_mouse += event.screen_relative
+	elif event.is_action_pressed("jump"):
+		_jump_pressed = true
 	elif event.is_action_pressed("fire"):
 		_fire_pressed = true
 	elif event.is_action_pressed("weapon_previous"):
@@ -456,6 +577,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		_net_graph = not _net_graph
 	elif event.is_action_pressed("toggle_camera"):
 		_third_person = not _third_person
+	elif event.is_action_pressed("capture_playtest", false, true):
+		_request_capture(PlaytestCapture.STATE)
+	elif event.is_action_pressed("capture_playtest_image", false, true):
+		_request_capture(PlaytestCapture.IMAGE)
 	elif event.is_action_pressed("debug_ragdoll"):
 		var own := _own_soldier()
 		if own != null:
@@ -470,15 +595,38 @@ func _unhandled_input(event: InputEvent) -> void:
 ## still meanwhile.
 func _open_menu() -> void:
 	_captured = false
+	_reset_gameplay_input()
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	menu.about = _about()
 	menu.open()
+	_update_native_input_scope()
+	_input_trace.event(Time.get_ticks_usec(), {"type": "menu", "open": true})
 
 
 func _close_menu() -> void:
 	menu.visible = false
 	_captured = true
-	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	_reset_gameplay_input()
+	if _focused:
+		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	_update_native_input_scope()
+	_input_trace.event(Time.get_ticks_usec(), {"type": "menu", "open": false})
+
+
+func _set_window_focus(focused: bool) -> void:
+	_focused = focused
+	_reset_gameplay_input()
+	if _captured:
+		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED if focused else Input.MOUSE_MODE_VISIBLE
+	_update_native_input_scope()
+	_input_trace.event(Time.get_ticks_usec(), {"type": "focus", "focused": focused})
+
+
+func _reset_gameplay_input() -> void:
+	_mouse = Vector2.ZERO
+	_clear_pressed()
+	for action in HELD_ACTIONS:
+		Input.action_release(action)
 
 
 ## _about tells what game this is, for the game menu: on a host, the
@@ -524,6 +672,11 @@ func _turn_wheel(step: int) -> void:
 func _process(delta: float) -> void:
 	if _failed:
 		return
+	_sample_frame()
+	_input_trace.flush_if_due(Time.get_ticks_usec())
+	if _capture_writer != null and _capture_writer.is_started() and not _capture_writer.is_alive():
+		var result: Dictionary = _capture_writer.wait_to_finish()
+		_show_capture_result(result.path, result.error, result.with_image)
 	var sensitivity: float = settings["sensitivity"]
 	var pitch := clampf(_pitch - _mouse.y * sensitivity, -1.45, 1.45)
 	_look = Vector2(_mouse.x * sensitivity, pitch - _pitch)
@@ -534,10 +687,8 @@ func _process(delta: float) -> void:
 	if knock:
 		_knockdowns += 1
 		soldier_views.knock_down(camera.global_position)
-	_frame_stats.add(delta)
-	_log_stats(delta)
 	delta = minf(delta, 0.1)
-	_lap = Time.get_ticks_usec()
+	_lap = Time.get_ticks_usec() if _frame_warmup <= 0 and settings["stats"] > 0 else 0
 	if not _connect(delta):
 		return
 	# The automatic scenarios count their time from the first frame in play.
@@ -555,6 +706,11 @@ func _process(delta: float) -> void:
 		_events |= result.events
 		if result.has(Arsenal.EVENT_FIRED):
 			_shots.append(result.shot)
+			_input_trace.event(Time.get_ticks_usec(), {
+				"type": "shot",
+				"command_tick": command.tick,
+				"weapon": WeaponTuning.kind_name(result.shot.weapon),
+			})
 	_alpha = _accumulator / session.tick_duration()
 	_charge("ticks")
 	var updated := false
@@ -591,7 +747,7 @@ func _process(delta: float) -> void:
 	var server_own := session.local_soldier()
 	if own != null:
 		feet = predictor.drawn(_alpha)
-		speed = Game.horizontal_length(own.velocity)
+		speed = predictor.achieved_speed
 		_momentum = own.velocity
 	elif server_own != null:
 		# Dead, or not yet predicted: where the server has the soldier.
@@ -601,7 +757,7 @@ func _process(delta: float) -> void:
 	bodies.update(delta)
 	_charge("bodies")
 	_update_camera(feet)
-	_update_weapon(delta, own)
+	_update_weapon(delta, own, speed)
 	effects.update(delta)
 	_charge("weapon")
 	soldier_views.update(session, delta, camera)
@@ -616,6 +772,12 @@ func _process(delta: float) -> void:
 	_draw_debug(own != null)
 	_update_hud(feet, own)
 	_charge("hud")
+	_sample_input_trace()
+	if _capture_requested != PlaytestCapture.NONE:
+		var with_image := _capture_requested == PlaytestCapture.IMAGE
+		_capture_requested = PlaytestCapture.NONE
+		if _captured and _focused and _reconnect_since < 0:
+			_capture_playtest(with_image)
 	_frames += 1
 	if settings["screenshot"] != "" and _frames == settings["frames"]:
 		get_viewport().get_texture().get_image().save_png(settings["screenshot"])
@@ -649,7 +811,8 @@ func _connect(_delta: float) -> bool:
 		_connector = null
 	if _handshake == null:
 		return false
-	_handshake.poll()
+	var local_tick := _local.server.tick if _local != null and _conditions.is_none() else -1
+	_handshake.poll(local_tick)
 	if _handshake.failed():
 		_quit_with(_handshake.error)
 		return false
@@ -659,6 +822,7 @@ func _connect(_delta: float) -> bool:
 	session = _handshake.session
 	_handshake = null
 	predictor.join(session.welcome.match_seed)
+	_trace_match()
 	return true
 
 
@@ -691,10 +855,10 @@ func _command() -> InputCommand:
 		_weapon = drill[0]
 		buttons = drill[1]
 		_pitch = -0.08
-	elif _captured:
-		forward = Input.get_axis("move_back", "move_forward")
-		right = Input.get_axis("move_left", "move_right")
-		if Input.is_action_pressed("jump"):
+	elif _captured and _focused:
+		forward = _movement_strength("move_forward") - _movement_strength("move_back")
+		right = _movement_strength("move_right") - _movement_strength("move_left")
+		if Input.is_action_pressed("jump") or _jump_pressed:
 			buttons |= InputCommand.JUMP
 		if Input.is_action_pressed("sprint"):
 			buttons |= InputCommand.SPRINT
@@ -704,12 +868,104 @@ func _command() -> InputCommand:
 			buttons |= InputCommand.AIM
 		if _reload_pressed:
 			buttons |= InputCommand.RELOAD
-	_fire_pressed = false
-	_reload_pressed = false
+	_clear_pressed()
 	_buttons = buttons
 	var command := InputCommand.create(0, forward, right, yaw, _pitch, buttons)
 	command.weapon = _weapon
 	return command
+
+
+func _movement_strength(action: StringName) -> float:
+	return 1.0 if _movement_pressed.has(action) else Input.get_action_strength(action)
+
+
+func _clear_pressed() -> void:
+	_jump_pressed = false
+	_fire_pressed = false
+	_reload_pressed = false
+	_movement_pressed.clear()
+
+
+func _input_diagnostics() -> Dictionary:
+	var command: InputCommand = session.history.back() if not session.history.is_empty() else null
+	var predicted := predictor.soldier.velocity
+	var authoritative := session.player.velocity
+	return {
+		"window_focused": _focused,
+		"mouse_captured": Input.mouse_mode == Input.MOUSE_MODE_CAPTURED,
+		"movement_keys": _movement_key_diagnostics(),
+		"command": {
+			"tick": command.tick,
+			"forward": command.forward_axis(),
+			"right": command.right_axis(),
+			"buttons": command.buttons,
+		} if command != null else null,
+		"predicted_horizontal_velocity": [predicted.x, predicted.z] if predictor.started else null,
+		"predicted_achieved_horizontal_speed": predictor.achieved_speed if predictor.started else null,
+		"server_horizontal_velocity": [authoritative.x, authoritative.z] if session.player.processed else null,
+		"server_processed_tick": session.player.last_processed_tick if session.player.processed else null,
+	}
+
+
+func _movement_key_diagnostics() -> Dictionary:
+	var states := {}
+	var now := Time.get_ticks_msec()
+	for action in MOVE_ACTIONS:
+		var transition: Array = _movement_key_events.get(action, [])
+		states[action] = {
+			"action_pressed": Input.is_action_pressed(action),
+			"godot_physical_pressed": _movement_physical_pressed(action),
+			"last_key_pressed": transition[0] if not transition.is_empty() else null,
+			"last_key_age_ms": now - transition[1] if not transition.is_empty() else null,
+		}
+	return states
+
+
+func _movement_physical_pressed(action: StringName) -> Variant:
+	var pressed: Variant = null
+	for binding in InputMap.action_get_events(action):
+		if binding is InputEventKey and binding.physical_keycode != KEY_NONE:
+			pressed = pressed == true or Input.is_physical_key_pressed(binding.physical_keycode)
+	return pressed
+
+
+func _sample_input_trace() -> void:
+	var now := Time.get_ticks_usec()
+	if not _input_trace.frame(now, _last_frame_usec, _look):
+		return
+	var command: InputCommand = session.history.back() if not session.history.is_empty() else null
+	var predicted := predictor.soldier.position
+	var authoritative := session.player.position
+	var arsenal := _arsenal()
+	var armed := arsenal != null and arsenal.weapon() != WeaponTuning.Kind.NONE
+	_input_trace.sample(now, {
+		"command_tick": command.tick if command != null else null,
+		"forward": command.forward_axis() if command != null else null,
+		"right": command.right_axis() if command != null else null,
+		"buttons": command.buttons if command != null else null,
+		"server_processed_tick": session.player.last_processed_tick if session.player.processed else null,
+		"predicted_position": [predicted.x, predicted.y, predicted.z] if predictor.started else null,
+		"predicted_achieved_horizontal_speed": predictor.achieved_speed if predictor.started else null,
+		"server_position": [authoritative.x, authoritative.y, authoritative.z] if session.player.processed else null,
+		"window_focused": _focused,
+		"gameplay_captured": _captured and _focused,
+		"yaw_radians": _yaw,
+		"pitch_radians": _pitch,
+		"last_frame_ms": _last_frame_usec / 1000.0,
+		"health": session.player.health if session.player.processed else null,
+		"soldier": session.player.soldier if session.player.processed else null,
+		"weapon": WeaponTuning.kind_name(arsenal.weapon()) if armed else null,
+		"magazine": arsenal.magazine[arsenal.current] if armed else null,
+	})
+
+
+func _trace_match() -> void:
+	_update_native_input_scope()
+	_input_trace.event(Time.get_ticks_usec(), {
+		"type": "match",
+		"map": session.welcome.map,
+		"match_seed": str(session.welcome.match_seed),
+	})
 
 
 ## _shooting_drill is the input of -shoot at a time: bursts of the assault
@@ -818,7 +1074,7 @@ func _update_camera(feet: Vector3) -> void:
 ## _update_weapon moves the weapon in hand for the frame and shows what the
 ## weapons did in its ticks: a shot's flash, tracer and hole where the
 ## client's own world says it struck, and the sounds.
-func _update_weapon(delta: float, own: Soldier) -> void:
+func _update_weapon(delta: float, own: Soldier, speed: float) -> void:
 	var arsenal := _arsenal()
 	if arsenal == null:
 		_shots.clear()
@@ -827,7 +1083,6 @@ func _update_weapon(delta: float, own: Soldier) -> void:
 		return
 	var held := _buttons & InputCommand.AIM != 0
 	var aiming := held and arsenal.action == Arsenal.Action.READY
-	var speed := Game.horizontal_length(own.velocity)
 	var sprinting := _buttons & InputCommand.SPRINT != 0 and not held and _buttons & InputCommand.FIRE == 0 \
 		and speed > rules.movement.walk_speed
 	view_model.update(delta, aiming, sprinting, own.grounded, speed / rules.movement.sprint_speed, _look)
@@ -896,12 +1151,14 @@ func _follow_life() -> void:
 		# The body falls where the server has it dead, which everyone else sees,
 		# not where the prediction ran on to, with the momentum it had.
 		_fallen = player.soldier
+		_input_trace.event(Time.get_ticks_usec(), {"type": "death", "soldier": player.soldier})
 		var feet := _feet
 		var own := session.local_soldier()
 		if own != null:
 			feet = own.position
 		_die(feet, SoldierViews.momentum(_momentum))
 	elif not dead and _fallen != 0 and player.soldier != _fallen:
+		_input_trace.event(Time.get_ticks_usec(), {"type": "respawn", "soldier": player.soldier})
 		_fallen = 0
 		_ragdoll = false
 		feedback.killed_by = ""
@@ -931,6 +1188,7 @@ func _lose(reason: String) -> void:
 	_lost_token = session.token()
 	session.abandon()
 	_reconnect_since = ClientSession._now()
+	_update_native_input_scope()
 	_reconnect_reason = reason
 	_reconnect_attempts = 0
 	_reconnect_next = 0.0
@@ -969,6 +1227,7 @@ func _poll_reconnect() -> void:
 	predictor.join(session.welcome.match_seed)
 	_reconnect_since = -1.0
 	_accumulator = 0.0
+	_trace_match()
 	print("reconnected as player %d" % session.welcome.player)
 
 
@@ -1010,6 +1269,8 @@ func _update_hud(feet: Vector3, own: Soldier) -> void:
 			session.soldiers.size()])
 	else:
 		lines.append(_status + "…")
+	if _capture_notice != "" and Time.get_ticks_msec() < _capture_notice_until:
+		lines.append(_capture_notice)
 	hud.lines = lines
 	var arsenal := _arsenal()
 	hud.arsenal = arsenal
@@ -1037,34 +1298,145 @@ func _update_hud(feet: Vector3, own: Soldier) -> void:
 	hud.queue_redraw()
 
 
+func _request_capture(kind: PlaytestCapture) -> void:
+	if _capture_writer == null and session != null and _reconnect_since < 0:
+		_capture_requested = kind
+		_capture_notice = ""
+
+
+## Save the state of this frame, optionally with the corresponding rendered image.
+func _capture_playtest(with_image: bool) -> void:
+	_capture_writer = Thread.new()
+	var image: Image
+	if with_image:
+		await RenderingServer.frame_post_draw
+		if _failed or not _focused or not _captured or _reconnect_since >= 0:
+			_capture_writer = null
+			return
+		image = get_viewport().get_texture().get_image()
+		if image == null or image.is_empty():
+			_show_capture_result("", ERR_UNAVAILABLE, true)
+			return
+	var soldier := _own_soldier()
+	if soldier == null:
+		soldier = session.local_soldier()
+	var arsenal := _arsenal()
+	var weapon: Dictionary = {}
+	if arsenal != null and arsenal.weapon() != WeaponTuning.Kind.NONE:
+		weapon = {
+			"kind": WeaponTuning.kind_name(arsenal.weapon()),
+			"magazine": arsenal.magazine[arsenal.current],
+			"reserve": arsenal.reserve[arsenal.current],
+		}
+	var direction := -camera.global_basis.z
+	var state := {
+		"map": session.welcome.map,
+		"match_seed": str(session.welcome.match_seed),
+		"session_tick": session.tick,
+		"server_tick": session.server_tick,
+		"position": [_feet.x, _feet.y, _feet.z],
+		"view": {
+			"direction": [direction.x, direction.y, direction.z],
+			"fov_degrees": camera.fov,
+			"first_person": _first_person(),
+		},
+		"weapon": weapon if not weapon.is_empty() else null,
+		"health": session.player.health,
+		"grounded": soldier.grounded if soldier != null else null,
+		"fps": Engine.get_frames_per_second(),
+		"last_frame_ms": _last_frame_usec / 1000.0,
+		"recent_worst_frame_ms": maxi(_frame_window_longest_usec, _previous_frame_window_longest_usec) / 1000.0,
+		"input": _input_diagnostics(),
+		"recent_input": _input_trace.snapshot(Time.get_ticks_usec()),
+	}
+	var stem := "playtest-%s-%d" % [Time.get_datetime_string_from_system(true).replace(":", ""), Time.get_ticks_usec()]
+	var path := ProjectSettings.globalize_path(PLAYTEST_DIR.path_join(stem))
+	var error := _capture_writer.start(_write_capture.bind(path, image, state), Thread.PRIORITY_LOW)
+	if error != OK:
+		_show_capture_result(path, error, with_image)
+
+
+## Only the GPU readback needs the game thread. The writer owns this image and state.
+static func _write_capture(path: String, image: Image, state: Dictionary) -> Dictionary:
+	var error := DirAccess.make_dir_recursive_absolute(path.get_base_dir())
+	if error == OK and image != null:
+		error = image.save_png(path + ".png")
+	if error == OK:
+		var file := FileAccess.open(path + ".json", FileAccess.WRITE)
+		if file == null:
+			error = FileAccess.get_open_error()
+		else:
+			file.store_string(JSON.stringify(state, "\t", true, true) + "\n")
+			file.flush()
+			error = file.get_error()
+			file.close()
+	if error != OK:
+		for extension in [".png", ".json"]:
+			if FileAccess.file_exists(path + extension):
+				DirAccess.remove_absolute(path + extension)
+	return {"path": path, "error": error, "with_image": image != null}
+
+
+func _show_capture_result(path: String, error: Error, with_image: bool) -> void:
+	_capture_writer = null
+	if error == OK:
+		var saved := "image and state" if with_image else "state"
+		_capture_notice = "Playtest %s saved to %s" % [saved, PLAYTEST_DIR]
+		print("Playtest %s saved: %s%s" % [saved, path, ".png and .json" if with_image else ".json"])
+	else:
+		_capture_notice = "Playtest capture failed: " + error_string(error)
+		push_warning(_capture_notice)
+	_capture_notice_until = Time.get_ticks_msec() + 4000
+
+
 func _charge(part: String) -> void:
+	if _lap == 0:
+		return
 	var now := Time.get_ticks_usec()
 	_profile[part] = _profile.get(part, 0) + now - _lap
 	_lap = now
 
 
-## _log_stats writes a line of frame rate, memory and ragdolls every -stats,
-## with the average time of the parts of a frame.
-func _log_stats(delta: float) -> void:
+## Measure the preceding frame from the monotonic clock so stalls count in
+## diagnostics even when the engine adjusts the simulation delta.
+func _sample_frame() -> void:
+	var now := Time.get_ticks_usec()
+	var previous_start := _frame_started_usec
+	_frame_started_usec = now
+	if previous_start < 0 or now == previous_start:
+		return
+	_last_frame_usec = now - previous_start
+	# Keep the current and previous one-second windows so F4 can catch a stall
+	# even when the key arrives on a subsequent frame.
+	var window_age := now - _frame_window_started_usec
+	if window_age >= FRAME_DIAGNOSTIC_WINDOW_USEC:
+		_previous_frame_window_longest_usec = _frame_window_longest_usec if window_age < 2 * FRAME_DIAGNOSTIC_WINDOW_USEC else 0
+		_frame_window_started_usec = now
+		_frame_window_longest_usec = 0
+	_frame_window_longest_usec = maxi(_frame_window_longest_usec, _last_frame_usec)
+	var duration := _last_frame_usec / 1000000.0
+	if _frame_warmup > 0:
+		_frame_warmup -= duration
+		if _frame_warmup <= 0 and _local != null and settings["stats"] > 0:
+			_local.server.profile = TickProfile.new()
+		return
+	_frame_stats.add(duration)
 	var interval: float = settings["stats"]
 	if interval <= 0:
 		return
-	_report.add(delta)
-	_report_elapsed += delta
-	if _report_elapsed < interval:
+	_report.add(duration)
+	if _report.total < interval:
 		return
-	var frames := maxi(1, _report.frames)
 	if _local != null:
 		_profile["server"] = _local.server.profile.total
 		_local.server.profile = TickProfile.new()
 	var parts := ""
 	for part in _profile:
-		parts += " %s=%.2fms" % [part, _profile[part] / 1000.0 / frames]
+		parts += " %s=%.2fms" % [part, _profile[part] / 1000.0 / _report.frames]
 	print("client: %s memory=%.1fMB ragdolls=%d (made %d) bodies=%d drawn=%d deaths_seen=%d |%s" % [
 		_report.describe(), OS.get_static_memory_usage() / 1048576.0, pool.lent(), pool.made(), bodies.all.size(),
 		soldier_views.drawn, soldier_views.falls, parts])
 	_report = FrameStats.new()
-	_report_elapsed = 0.0
 	_profile.clear()
 
 
@@ -1085,21 +1457,17 @@ func _finish() -> void:
 ## program ends with it when the game was started by flags.
 func _quit_with(message: String) -> void:
 	_failed = true
+	_update_native_input_scope()
 	left.emit(message)
 
 
-## FrameStats measures frame times after the first second, which loads and
-## connects.
+## FrameStats measures the average rate and longest frame of its samples.
 class FrameStats:
-	var skipped := 0.0
 	var frames := 0
 	var total := 0.0
 	var longest := 0.0
 
 	func add(delta: float) -> void:
-		if skipped < 1:
-			skipped += delta
-			return
 		frames += 1
 		total += delta
 		longest = maxf(longest, delta)

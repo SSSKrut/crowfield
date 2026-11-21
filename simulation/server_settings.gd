@@ -68,8 +68,8 @@ func validate() -> String:
 		return "max rewind %.2f s is not shorter than the history of %.2f s" % [max_rewind, float(PoseHistory.TICKS) / Game.TICK_RATE]
 	if bots < 0 or max_players + bots > SoldierSet.MAX_SOLDIERS:
 		return "at most %d soldiers fit, %d players and %d bots asked" % [SoldierSet.MAX_SOLDIERS, max_players, bots]
-	if bot_deaths < 0:
-		return "bot deaths must not be negative"
+	if not is_finite(bot_deaths) or bot_deaths < 0:
+		return "bot deaths must be finite and non-negative"
 	if scene == null and map not in MapScene.MAPS:
 		return "there is no map %s: the maps are %s" % [map, ", ".join(MapScene.MAPS)]
 	return ""

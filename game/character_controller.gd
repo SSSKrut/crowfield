@@ -117,6 +117,7 @@ func _move(soldier: Soldier, velocity: Vector3) -> void:
 	var center := soldier.position + Vector3(0, tuning.center_height(), 0)
 	var was_grounded := soldier.grounded
 	var grounded := false
+	var moving := velocity.x != 0 or velocity.z != 0
 	var motion := velocity * Game.TICK_DELTA
 	for i in _MAX_SLIDES:
 		if motion.length_squared() < 1e-12:
@@ -124,14 +125,21 @@ func _move(soldier: Soldier, velocity: Vector3) -> void:
 		if not _test(center, motion):
 			center += motion
 			break
-		center += _result.get_travel()
 		var normal := _result.get_collision_normal()
 		var rest := _result.get_remainder()
+		var travel := _result.get_travel()
 		if _is_floor(normal):
 			if motion.y <= 0:
 				grounded = true
+				if not moving:
+					# Both recovery and the slide can convert ground stick
+					# into sideways motion. At rest, settle vertically.
+					center.y += travel.y
+					break
+			center += travel
 			motion = rest.slide(normal)
 			continue
+		center += travel
 		if (was_grounded or grounded) and velocity.y <= 0:
 			var stepped := _step_up(center, rest, normal)
 			if stepped.size() > 0:
@@ -151,7 +159,8 @@ func _move(soldier: Soldier, velocity: Vector3) -> void:
 	# Going down a slope or a step, a soldier on the ground stays on it.
 	if was_grounded and not grounded and velocity.y <= 0:
 		if _test(center, Vector3(0, -tuning.step_height, 0)) and _is_floor(_result.get_collision_normal()):
-			center += _result.get_travel()
+			var travel := _result.get_travel()
+			center += travel if moving else Vector3(0, travel.y, 0)
 			grounded = true
 	if not grounded and velocity.y <= 0:
 		grounded = _test(center, Vector3(0, -_GROUND_PROBE, 0)) and _is_floor(_result.get_collision_normal())

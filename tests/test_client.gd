@@ -4,6 +4,71 @@ extends TestCase
 ## soldiers drawn in the past.
 
 
+func test_embedded_clock_ignores_time_spent_loading_the_map() -> void:
+	var tree := Engine.get_main_loop() as SceneTree
+	await tree.process_frame
+	var max_fps := Engine.max_fps
+	var mouse_mode := Input.mouse_mode
+	var client := SlowMapClient.new()
+	client.set_meta("arguments", PackedStringArray(["-map=prototype", "-volume=0", "-config-dir="]))
+	client.left.connect(fail)
+	cleanup(func() -> void:
+		client.free()
+		Engine.max_fps = max_fps
+		Input.mouse_mode = mouse_mode)
+	tree.root.add_child(client)
+	for frame in 120:
+		await tree.process_frame
+		if client.session != null and client.session.received >= 5:
+			break
+	if not check(client.session != null and client.session.received >= 5, "the embedded client did not receive sustained snapshots"):
+		return
+	check_equal(client.session.welcome.server_tick, client.map_loaded_tick, "clock seed after the blocking map load")
+	check_equal(client.session.resyncs, 0, "startup clock jumps")
+
+
+func test_embedded_clock_ignores_frame_stall_during_hello_round_trip() -> void:
+	var tree := Engine.get_main_loop() as SceneTree
+	await tree.process_frame
+	var max_fps := Engine.max_fps
+	var mouse_mode := Input.mouse_mode
+	var client := SlowHelloClient.new()
+	client.set_meta("arguments", PackedStringArray(["-map=prototype", "-volume=0", "-config-dir="]))
+	client.left.connect(fail)
+	cleanup(func() -> void:
+		client.free()
+		Engine.max_fps = max_fps
+		Input.mouse_mode = mouse_mode)
+	tree.root.add_child(client)
+	for frame in 180:
+		await tree.process_frame
+		if client.session != null and client.session.received >= 18:
+			break
+	if not check(client.stalled and client.session != null and client.session.received >= 18, "the embedded client did not recover from the stall"):
+		return
+	check_equal(client.session.resyncs, 0, "startup clock jumps after stalled hello")
+
+
+class SlowHelloClient extends ClientApp:
+	var stalled := false
+
+	func _process(delta: float) -> void:
+		super._process(delta)
+		if not stalled and _handshake != null and _handshake._sent >= 0:
+			stalled = true
+			OS.delay_msec(425)
+
+
+class SlowMapClient extends ClientApp:
+	var map_loaded_tick := -1
+
+	func _load_map(map_name: String) -> Variant:
+		OS.delay_msec(400)
+		var loaded: Variant = super._load_map(map_name)
+		map_loaded_tick = _local.server.tick
+		return loaded
+
+
 func _soldier(at: Vector3, velocity: Vector3, alive: bool = true, grounded: bool = false, yaw: float = 0.0) -> Soldier:
 	var soldier := Soldier.new()
 	soldier.position = at
@@ -169,6 +234,46 @@ func _standing(id: int, at: Vector3) -> Soldier:
 	soldier.id = id
 	soldier.health = Game.MAX_HEALTH
 	return soldier
+
+
+func test_achieved_speed_stops_at_a_wall_with_forward_held() -> void:
+	var predictor := _predictor(_space())
+	predictor.reconcile(_confirmed(0, _standing(1, Vector3(0, 0.01, -2))))
+	predictor.predict(InputCommand.create(1, 1, 0, 0, 0, 0))
+	check(predictor.achieved_speed > 4.0, "prediction measured no motion on the open floor")
+	for tick in range(2, 60):
+		predictor.predict(InputCommand.create(tick, 1, 0, 0, 0, 0))
+	check(Game.horizontal_length(predictor.soldier.velocity) > 4.0, "forward command was not still held")
+	check_near(predictor.achieved_speed, 0.0, 0.03, "visual speed while blocked")
+
+
+func test_prediction_stays_visible_when_server_is_ahead_of_the_client() -> void:
+	var predictor := _predictor(_space())
+	var confirmed := _standing(1, Vector3.ZERO)
+	predictor.reconcile(_confirmed(10, confirmed))
+	predictor.predict(InputCommand.create(11, 0, 0, 0, 0, 0))
+	predictor.reconcile(_confirmed(15, confirmed))
+	for tick in range(12, 16):
+		var result := predictor.predict(InputCommand.create(tick, 1, 0, 0, 0, InputCommand.FIRE))
+		check(predictor.started, "a late command hid the predicted soldier at tick %d" % tick)
+		check(not result.has(Arsenal.EVENT_FIRED), "a late command replayed a shot")
+		check_equal(predictor.last, 15, "prediction tick after a late command")
+	predictor.predict(InputCommand.create(16, 1, 0, 0, 0, 0))
+	check(predictor.started and predictor.last == 16, "prediction did not resume with the next new tick")
+	predictor.predict(InputCommand.create(14, 0, 0, 0, 0, 0))
+	check(not predictor.started, "a real backward clock jump did not reset prediction")
+
+
+func test_reconcile_snaps_without_replaying_a_gap_older_than_history() -> void:
+	var predictor := _predictor(_space())
+	var confirmed := _standing(1, Vector3(0, 2, 0))
+	var newest := 4 * Predictor.HISTORY
+	predictor.predict(InputCommand.create(newest, 1, 0, 0, 0, 0))
+	predictor.reconcile(_confirmed(1, confirmed))
+	check_equal(predictor.last, 1, "prediction tick after snapping")
+	check_equal(predictor.soldier.position, confirmed.position, "position after snapping")
+	predictor.predict(InputCommand.create(newest + 1, 1, 0, 0, 0, 0))
+	check_equal(predictor.last, newest + 1, "prediction tick after the next command")
 
 
 ## The server runs one command differently from the prediction; the client

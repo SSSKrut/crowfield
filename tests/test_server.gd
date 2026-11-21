@@ -44,7 +44,7 @@ func _join(server: Server, listener: Memory.MemoryListener, name: String, space:
 ## its ticks, faster than real time, so that its limits of the message rate
 ## hold as in a real game.
 func _run(server: Server, clients: Array, ticks: int) -> void:
-	server.clock = func() -> float: return float(server.tick) / Game.TICK_RATE
+	server.clock = server.tick_time
 	for i in ticks:
 		for client in clients:
 			if not client.tick():

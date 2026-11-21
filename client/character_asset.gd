@@ -168,12 +168,14 @@ func _merge(skeleton: Skeleton3D) -> void:
 			var surface_indices: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
 			for index in surface_indices:
 				indices.append(base + index)
-	# Mark the accent parts by a zero alpha; store colours linear, as the shader
-	# reads them.
+	# The shader reads sRGB in Compatibility and linear colours in Forward+.
+	# Mark the accent parts by a zero alpha in either renderer.
+	var linear_colors := RenderingServer.get_current_rendering_method() != "gl_compatibility"
 	for i in colors.size():
-		var linear := colors[i].srgb_to_linear()
-		linear.a = 0.0 if colors[i].is_equal_approx(accent) else 1.0
-		colors[i] = linear
+		var source := colors[i]
+		var color := source.srgb_to_linear() if linear_colors else source
+		color.a = 0.0 if source.is_equal_approx(accent) else 1.0
+		colors[i] = color
 	var arrays := []
 	arrays.resize(Mesh.ARRAY_MAX)
 	arrays[Mesh.ARRAY_VERTEX] = vertices

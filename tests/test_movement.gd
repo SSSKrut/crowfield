@@ -35,6 +35,29 @@ func _settle(controller: CharacterController, soldier: Soldier) -> int:
 	return Game.TICK_RATE / 2
 
 
+func _check_idle_position(made: Array, label: String, settle: bool) -> void:
+	var controller: CharacterController = made[0]
+	var soldier: Soldier = made[1]
+	var tick := _settle(controller, soldier) if settle else 0
+	var start := soldier.position
+	for i in 300:
+		controller.step(soldier, InputCommand.create(tick + i, 0, 0, 0, 0, 0))
+	var displacement := Game.horizontal_length(soldier.position - start)
+	check_near(displacement, 0.0, 0.005, label + " horizontal displacement")
+	check(soldier.grounded, label + " lost contact with the ground")
+
+
+func test_idle_stays_in_place_on_a_walkable_incline() -> void:
+	var scene := MapScene.new()
+	scene.add_box(Vector3(10, 0.25, 10), Vector3.ZERO, Basis(Vector3.BACK, deg_to_rad(20.0)))
+	_check_idle_position(_soldier(_world(scene), Vector3(0, 0.45, 0)), "20-degree incline", true)
+
+
+func test_idle_stays_in_place_at_the_valley_capture() -> void:
+	var capture := Vector3(-10.646575, 0.55354017, 42.690987)
+	_check_idle_position(_soldier(_world(MapScene.named("valley")), capture), "Valley capture", false)
+
+
 func test_walks_and_sprints() -> void:
 	var made := _soldier(_world(), Vector3(0, 0.2, 0))
 	var controller: CharacterController = made[0]
