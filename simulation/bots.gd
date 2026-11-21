@@ -74,6 +74,9 @@ const PUSH_TICKS := 3
 ## Give the first advance a job before bots settle into opportunistic fights.
 const OPENING_TICKS := 20 * Game.TICK_RATE
 const OPENING_CONTACT_RANGE := 11.0
+## Casualties can reinforce their own crossing, but cannot jump from a
+## distant fight into a held lane.
+const REINFORCEMENT_RANGE := 30.0
 ## A bot that gets nowhere in STUCK_TICKS gives up its way.
 const STUCK_TICKS := 2 * Game.TICK_RATE
 ## OPEN_CELL is the size of the cells of the map of open ground.
@@ -186,9 +189,8 @@ func reset_for_round() -> void:
 	spawn_all(count)
 
 
-## _spawn puts a bot on the map as a new soldier of the team: in the zone of
-## its team, or anywhere on a map whose zones are points.
-func _spawn(bot: Bot, team: int) -> void:
+## First deployment is at home. A casualty may return behind a safe crossing.
+func _spawn(bot: Bot, team: int, reinforcement: Vector3 = Vector3.INF) -> void:
 	var soldier := Soldier.new()
 	soldier.team = team
 	soldier.controller = Game.Controller.BOT
@@ -196,7 +198,10 @@ func _spawn(bot: Bot, team: int) -> void:
 	soldier.alive = true
 	soldier.grounded = true
 	var zone := _scene.zone_of(team)
-	if zone.radius > 0:
+	if reinforcement.is_finite():
+		soldier.position = reinforcement
+		soldier.yaw = Game.yaw_of(-reinforcement)
+	elif zone.radius > 0:
 		soldier.position = _server.spawn_point(team, _random)
 		soldier.yaw = Game.yaw_of(-zone.center)
 	else:
@@ -230,8 +235,9 @@ func respawn_dead() -> void:
 		if soldier.alive or _server.tick < bot.respawn_at:
 			continue
 		var team := soldier.team
+		var reinforcement := _server.reinforcement_point(team, soldier.position, REINFORCEMENT_RANGE)
 		_server.soldiers.remove(bot.soldier)
-		_spawn(bot, team)
+		_spawn(bot, team, reinforcement)
 
 
 ## hurt tells a bot it was hit by a shooter: it turns to look for it.

@@ -260,11 +260,13 @@ func _build_reinforcement_sites() -> void:
 			_reinforcement_sites[Vector2i(team, index)] = sites
 
 
-func _reinforcement_point(team: int, from: Vector3) -> Vector3:
-	if _reinforcement_sites.is_empty() or flag_match.state.result != MatchState.Result.ACTIVE:
+## Returns a safe site by a held crossing, optionally limited to the fight
+## the soldier was part of. All callers share the tick's ray budget.
+func reinforcement_point(team: int, from: Vector3, max_distance: float = INF) -> Vector3:
+	if _reinforcement_sites.is_empty() or not flag_match.started or flag_match.state.result != MatchState.Result.ACTIVE:
 		return Vector3.INF
 	var best := Vector3.INF
-	var best_distance := INF
+	var best_distance := max_distance * max_distance
 	for order in scene.flags.size():
 		# Mirrored priority breaks equal-distance ties consistently for both sides.
 		var index := order if team == Game.Team.BLUE else scene.flags.size() - order - 1
@@ -315,7 +317,7 @@ func _reinforcement_is_safe(team: int, point: Vector3) -> bool:
 func _spawn(player: ServerPlayer, death_position: Vector3 = Vector3.INF) -> bool:
 	if player.team == Game.Team.NONE:
 		player.team = _smaller_team()
-	var at := Vector3.INF if not death_position.is_finite() else _reinforcement_point(player.team, death_position)
+	var at := Vector3.INF if not death_position.is_finite() else reinforcement_point(player.team, death_position)
 	if not at.is_finite():
 		at = spawn_point(player.team, random)
 	var soldier := Soldier.new()
