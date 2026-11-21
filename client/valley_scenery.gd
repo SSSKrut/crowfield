@@ -375,8 +375,9 @@ static func _dress_plaster(box: MapScene.Box, trims: Array[Transform3D], colors:
 	if half.z > 0.19:
 		return
 	var at := box.transform.origin
-	var window_sill := half.y > 0.6 and half.y < 0.7 and half.x < 0.62
-	var lintel := at.y > 3.3 and half.y <= 0.51
+	var bottom := at.y - half.y
+	var window_sill := bottom < ValleyMap.VILLAGE_LEVEL - 0.18 and half.y > 0.6 and half.y < 0.7 and half.x < 0.62
+	var lintel := bottom > ValleyMap.VILLAGE_LEVEL + 1.8 and half.y <= 0.64
 	for side: float in [-1.0, 1.0]:
 		if window_sill:
 			_trim(trims, colors, box, Vector3(0.0, half.y - 0.04, side * half.z),
