@@ -12,6 +12,14 @@ const FALL_LIMIT := -10.0
 ## from each other, and the tracks of shots.
 const GRID_CELL_SIZE := 4.0
 const HELLO_TIMEOUT := 5.0
+## Reinforcement positions are on the home bank, behind the flag's capture
+## area. Search the approach before considering positions farther back.
+const REINFORCEMENT_OFFSETS := [Vector2(0, 15), Vector2(-5, 17), Vector2(5, 17),
+	Vector2(0, 20), Vector2(-10, 20), Vector2(10, 20), Vector2(0, 25)]
+const REINFORCEMENT_ENEMY_RADIUS := 16.0
+const REINFORCEMENT_SIGHT_RANGE := 65.0
+## Keep a group of simultaneous respawns from crowding a simulation tick.
+const REINFORCEMENT_RAY_BUDGET := 96
 ## Messages are limited per connection before they are decoded
 ## (ARCHITECTURE.md, 6.8), so that one client cannot crowd the simulation:
 ## input datagrams to twice the tick rate, of which an honest client sends one
@@ -53,6 +61,8 @@ var _listeners: Array[Listener] = []
 var _collision: Array[RID] = []
 var _space_state: PhysicsDirectSpaceState3D
 var _ray := PhysicsRayQueryParameters3D.new()
+var _reinforcement_sites: Dictionary[Vector2i, PackedVector3Array] = {}
+var _reinforcement_rays := REINFORCEMENT_RAY_BUDGET
 ## _shots are the shots of the current tick, resolved after every soldier acted.
 var _shots: Array[PendingShot] = []
 var _snapshots := SnapshotSender.new()
@@ -87,6 +97,8 @@ static func create(server_settings: ServerSettings, server_rules: Rules) -> Vari
 	server.navigation = Navigation.create(server.scene)
 	if server.scene.flags.size() == MatchState.FLAG_COUNT:
 		server.flag_match = FlagMatch.new(server.scene.flags)
+		if server.scene.name == "valley":
+			server._build_reinforcement_sites()
 	server.bots = Bots.new(server)
 	server.bots.spawn_all(server_settings.bots)
 	return server
@@ -213,12 +225,99 @@ func spawn_point(team: int, from: RandomNumberGenerator) -> Vector3:
 	return point
 
 
-## spawn gives a player a soldier at the spawn of its team, the team it
-## played for before.
-func _spawn(player: ServerPlayer) -> bool:
+## Precompute clear positions on the navigation mesh at server startup.
+## Ownership, enemy visibility and occupation are checked at the respawn tick.
+func _build_reinforcement_sites() -> void:
+	var capsule := CapsuleShape3D.new()
+	capsule.radius = rules.movement.capsule_radius
+	capsule.height = 2.0 * rules.movement.center_height()
+	var query := PhysicsShapeQueryParameters3D.new()
+	query.shape = capsule
+	query.collision_mask = Game.LAYER_STATIC | Game.LAYER_VEHICLE | Game.LAYER_DYNAMIC
+	for team: int in [Game.Team.BLUE, Game.Team.RED]:
+		var home := scene.spawn_of(team)
+		for index in scene.flags.size():
+			var zone := scene.flags[index]
+			var crossing := navigation.closest(zone.center)
+			var side := 1.0 if home.z > zone.center.z else -1.0
+			var sites := PackedVector3Array()
+			for offset: Vector2 in REINFORCEMENT_OFFSETS:
+				var point := zone.center + side * Vector3(offset.x, 0.0, offset.y)
+				point.y = scene.ground_at(point.x, point.z)
+				var walkable := navigation.closest(point)
+				if walkable.distance_squared_to(point) > 1.0:
+					continue
+				var down := cast_ray(walkable + Vector3.UP * 0.6, Vector3.DOWN, 1.6, Game.LAYER_STATIC)
+				if down < 0.0:
+					continue
+				walkable.y += 0.6 - down
+				query.transform = Transform3D(Basis.IDENTITY, walkable + Vector3.UP * (rules.movement.center_height() + 0.04))
+				if not _space_state.intersect_shape(query, 1).is_empty():
+					continue
+				var route := navigation.path(walkable, crossing)
+				if not route.is_empty() and route[-1].distance_squared_to(crossing) <= 1.0:
+					sites.append(walkable)
+			_reinforcement_sites[Vector2i(team, index)] = sites
+
+
+func _reinforcement_point(team: int, from: Vector3) -> Vector3:
+	if _reinforcement_sites.is_empty() or flag_match.state.result != MatchState.Result.ACTIVE:
+		return Vector3.INF
+	var best := Vector3.INF
+	var best_distance := INF
+	for order in scene.flags.size():
+		# Mirrored priority breaks equal-distance ties consistently for both sides.
+		var index := order if team == Game.Team.BLUE else scene.flags.size() - order - 1
+		var flag := flag_match.state.flags[index]
+		if flag.owner != team or flag.contested or flag.challenger != Game.Team.NONE:
+			continue
+		var distance := from.distance_squared_to(scene.flags[index].center)
+		if distance >= best_distance:
+			continue
+		for site in _reinforcement_sites[Vector2i(team, index)]:
+			if _reinforcement_is_safe(team, site):
+				best = site
+				best_distance = distance
+				break
+	return best
+
+
+func _reinforcement_is_safe(team: int, point: Vector3) -> bool:
+	var eye := Vector3.UP * rules.movement.eye_height
+	var occupancy := maxf(1.5, rules.movement.capsule_radius * 2.0)
+	for slot in soldiers.slots():
+		var soldier := soldiers.at(slot)
+		if soldier == null or not soldier.alive:
+			continue
+		var distance := Game.horizontal_length(point - soldier.position)
+		if soldier.team == team:
+			if distance < occupancy and absf(point.y - soldier.position.y) < 2.0 * rules.movement.center_height():
+				return false
+			continue
+		if distance < REINFORCEMENT_ENEMY_RADIUS:
+			return false
+		if distance > REINFORCEMENT_SIGHT_RANGE:
+			continue
+		var from := soldier.position + eye
+		for target in [point + eye, point + eye * 0.65]:
+			if _reinforcement_rays <= 0:
+				return false
+			_reinforcement_rays -= 1
+			var sight: Vector3 = target - from
+			var cover := cast_ray(from, sight.normalized(), sight.length(), Game.LAYER_STATIC | Game.LAYER_VEHICLE)
+			if cover < 0.0:
+				return false
+	return true
+
+
+## Fresh joins keep their base start. After a death, reinforce the nearest
+## friendly crossing with a safe position, or use that same base start.
+func _spawn(player: ServerPlayer, death_position: Vector3 = Vector3.INF) -> bool:
 	if player.team == Game.Team.NONE:
 		player.team = _smaller_team()
-	var at := spawn_point(player.team, random)
+	var at := Vector3.INF if not death_position.is_finite() else _reinforcement_point(player.team, death_position)
+	if not at.is_finite():
+		at = spawn_point(player.team, random)
 	var soldier := Soldier.new()
 	soldier.team = player.team
 	soldier.controller = Game.Controller.PLAYER
@@ -721,6 +820,7 @@ func damage(victim: Soldier, amount: int) -> Array:
 ## _respawn_dead brings back the soldiers whose time has come: each as a new
 ## soldier, whom clients do not mistake for the one that died.
 func _respawn_dead() -> void:
+	_reinforcement_rays = REINFORCEMENT_RAY_BUDGET
 	for player in players:
 		if player == null or player.soldier == 0:
 			continue
@@ -729,7 +829,7 @@ func _respawn_dead() -> void:
 			continue
 		soldiers.remove(player.soldier)
 		player.soldier = 0
-		_spawn(player)
+		_spawn(player, soldier.position)
 	bots.respawn_dead()
 
 
