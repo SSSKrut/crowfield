@@ -26,6 +26,8 @@ const FIELD_OF_VIEW := 58.0
 const AIM_TIME := 0.15
 const RECOIL_TIME := 0.06
 const FLASH_TIME := 0.05
+const RELOAD_RELEASE_PROGRESS := 0.22
+const RELOAD_SEAT_PROGRESS := 0.75
 const FULL_HD_PIXELS := 1920.0 * 1080.0
 
 enum Footfall { NONE, STEP, LAND }
@@ -67,6 +69,7 @@ var _shapes: Array[Shape] = []
 var _models: Array[ArrayMesh] = []
 var _held: Array[ArrayMesh] = []
 var _support_meshes: Array[ArrayMesh] = []
+var _support_sleeve_meshes: Array[ArrayMesh] = []
 var _magazine_meshes: Array[ArrayMesh] = []
 var _finishes: Array[StandardMaterial3D] = []
 var _held_material: StandardMaterial3D
@@ -75,6 +78,7 @@ var _camera: Camera3D
 var _light: DirectionalLight3D
 var _instances: Array[MeshInstance3D] = []
 var _support_hands: Array[MeshInstance3D] = []
+var _support_sleeves: Array[MeshInstance3D] = []
 var _magazines: Array[MeshInstance3D] = []
 var _flash_core: MeshInstance3D
 var _flash_flame: MeshInstance3D
@@ -111,14 +115,21 @@ func _init() -> void:
 	_shapes = _weapon_shapes()
 	_models.resize(WeaponTuning.KINDS)
 	_support_meshes.resize(WeaponTuning.KINDS)
+	_support_sleeve_meshes.resize(WeaponTuning.KINDS)
 	_magazine_meshes.resize(WeaponTuning.KINDS)
 	_held.resize(WeaponTuning.KINDS)
 	for kind in WeaponTuning.KINDS:
 		var shape := _shapes[kind]
 		if shape == null:
 			continue
-		_models[kind] = _mesh(shape.gun + shape.right_arm)
-		_support_meshes[kind] = _mesh(shape.support)
+		var elbow := shape.support_elbow
+		var upper_sleeve := _limb(elbow + Vector3(-0.060, -0.43, -0.16),
+			elbow + (shape.support_grip - elbow) * 0.08, Vector2(0.051, 0.048), SLEEVE, Finish.CANVAS)
+		var upper: Array[Piece] = shape.gun + shape.right_arm
+		upper.append(upper_sleeve)
+		_models[kind] = _mesh(upper)
+		_support_meshes[kind] = _mesh(_glove(shape.support_grip, -1.0))
+		_support_sleeve_meshes[kind] = _mesh(_sleeve(shape.support_grip, shape.support_elbow))
 		_magazine_meshes[kind] = _mesh(shape.magazine)
 		_held[kind] = _mesh(shape.gun + shape.magazine, true)
 
@@ -193,6 +204,7 @@ func _ready() -> void:
 	_viewport.add_child(_light)
 	_instances.resize(WeaponTuning.KINDS)
 	_support_hands.resize(WeaponTuning.KINDS)
+	_support_sleeves.resize(WeaponTuning.KINDS)
 	_magazines.resize(WeaponTuning.KINDS)
 	for kind in WeaponTuning.KINDS:
 		if _models[kind] == null:
@@ -201,6 +213,7 @@ func _ready() -> void:
 		root.visible = false
 		_instances[kind] = root
 		_support_hands[kind] = _mesh_part(_support_meshes[kind], root)
+		_support_sleeves[kind] = _mesh_part(_support_sleeve_meshes[kind], root)
 		_magazines[kind] = _mesh_part(_magazine_meshes[kind], root)
 	var core := SphereMesh.new()
 	core.radius = 1.0
@@ -368,9 +381,9 @@ func place(camera: Camera3D, kind: int, action: int, progress: float) -> bool:
 			pitch -= 0.7 * lower
 		Arsenal.Action.RELOADING:
 			var dip := sin(PI * progress)
-			offset += Vector3(-0.077, 0.103, 0.182) * dip
-			pitch += 0.035 * dip
-			yaw -= 0.21 * dip
+			offset += Vector3(-0.081, 0.178, 0.29) * dip
+			pitch += 0.105 * dip
+			yaw -= 0.25 * dip
 			roll += 0.82 * dip
 	var basis := Basis(Vector3.UP, -yaw) * Basis(Vector3.RIGHT, pitch) * Basis(Vector3.BACK, roll)
 	var local := Transform3D(basis, _forward(offset))
@@ -392,12 +405,27 @@ func place(camera: Camera3D, kind: int, action: int, progress: float) -> bool:
 func _reload_parts(kind: int, shape: Shape, progress: float) -> void:
 	var hand := _support_hands[kind]
 	var magazine := _magazines[kind]
-	var reach := smoothstep(0.08, 0.23, progress) * (1.0 - smoothstep(0.73, 0.97, progress))
-	var pull := smoothstep(0.22, 0.46, progress) * (1.0 - smoothstep(0.54, 0.75, progress))
+	var sleeve := _support_sleeves[kind]
+	var reach := smoothstep(0.08, RELOAD_RELEASE_PROGRESS, progress) \
+		* (1.0 - smoothstep(RELOAD_SEAT_PROGRESS, 0.97, progress))
+	var pull := smoothstep(RELOAD_RELEASE_PROGRESS, 0.44, progress) \
+		* (1.0 - smoothstep(0.55, RELOAD_SEAT_PROGRESS, progress))
 	var travel := Vector3(-0.018, -shape.magazine_throw, -0.027) * pull
 	magazine.position = _forward(travel)
 	magazine.visible = progress <= 0.44 or progress >= 0.55
-	hand.position = _forward((shape.magazine_grip - shape.support_grip) * reach + travel)
+	var motion := _forward((shape.magazine_grip - shape.support_grip) * reach + travel)
+	hand.position = motion
+	if motion == Vector3.ZERO:
+		sleeve.transform = Transform3D.IDENTITY
+		return
+	# Pivot the sleeve at the elbow while its cuff follows the glove.
+	var elbow := _forward(shape.support_elbow)
+	var rest := _forward(shape.support_grip) - elbow
+	var extended := rest + motion
+	var axis := Basis.looking_at(rest, Vector3.UP)
+	var length_scale := axis.scaled_local(Vector3(1, 1, extended.length() / rest.length())) * axis.transposed()
+	var flex := Basis(Quaternion(rest.normalized(), extended.normalized())) * length_scale
+	sleeve.transform = Transform3D(flex, elbow - flex * elbow)
 
 
 func _place_flash(visible: bool, weapon_basis: Basis) -> void:
@@ -612,7 +640,7 @@ class Shape:
 	var gun: Array[Piece] = []
 	var magazine: Array[Piece] = []
 	var right_arm: Array[Piece] = []
-	var support: Array[Piece] = []
+	var support_elbow: Vector3
 	var magazine_grip: Vector3
 	var support_grip: Vector3
 	var magazine_throw := 0.19
@@ -636,13 +664,22 @@ static func _limb(from: Vector3, to: Vector3, radius: Vector2, tint: Color, fini
 ## An overlapping cuff, reinforced knuckles and separate fingers make the
 ## glove read as a hand even at the extreme first-person camera distance.
 static func _arm(grip: Vector3, elbow: Vector3, side: float) -> Array[Piece]:
+	return _sleeve(grip, elbow) + _glove(grip, side)
+
+
+static func _sleeve(grip: Vector3, elbow: Vector3) -> Array[Piece]:
 	var wrist := grip.lerp(elbow, 0.13)
-	var pieces: Array[Piece] = [
+	return [
 		_limb(elbow, grip.lerp(elbow, 0.37), Vector2(0.047, 0.044), SLEEVE, Finish.CANVAS),
 		_limb(grip.lerp(elbow, 0.42), wrist, Vector2(0.039, 0.037), SLEEVE, Finish.CANVAS),
 		_limb(grip.lerp(elbow, 0.28), grip.lerp(elbow, 0.37), Vector2(0.040, 0.038), SLEEVE_SEAM, Finish.CANVAS),
 		_limb(grip.lerp(elbow, 0.15), grip.lerp(elbow, 0.27), Vector2(0.041, 0.039), Color.WHITE, Finish.TEAM),
 		_limb(grip.lerp(elbow, 0.06), grip.lerp(elbow, 0.15), Vector2(0.034, 0.033), GLOVE, Finish.CANVAS),
+	]
+
+
+static func _glove(grip: Vector3, side: float) -> Array[Piece]:
+	var pieces: Array[Piece] = [
 		Piece.new(grip, Vector3(0.034, 0.027, 0.045), GLOVE, Finish.CANVAS, true, -0.25),
 		Piece.new(grip + Vector3(side * 0.02, 0.016, -0.014), Vector3(0.019, 0.01, 0.032),
 			GLOVE.lightened(0.065), Finish.POLYMER, false, -0.30),
@@ -707,7 +744,7 @@ static func _carbine() -> Shape:
 	shape.support_grip = Vector3(-0.014, -0.085, 0.307)
 	shape.magazine_grip = Vector3(-0.019, -0.178, 0.107)
 	shape.right_arm = _arm(Vector3(0.004, -0.119, -0.073), Vector3(0.115, -0.28, -0.42), 1.0)
-	shape.support = _arm(shape.support_grip, Vector3(-0.18, -0.29, 0.017), -1.0)
+	shape.support_elbow = Vector3(-0.18, -0.29, 0.017)
 	shape.muzzle = Vector3(0, -0.045, 0.601)
 	shape.hip = Vector3(0.152, -0.148, 0.245)
 	shape.aim = Vector3(0, 0, 0.220)
@@ -749,7 +786,7 @@ static func _marksman() -> Shape:
 	shape.magazine_grip = Vector3(-0.024, -0.130, 0.089)
 	shape.magazine_throw = 0.15
 	shape.right_arm = _arm(Vector3(0.006, -0.120, -0.123), Vector3(0.124, -0.28, -0.47), 1.0)
-	shape.support = _arm(shape.support_grip, Vector3(-0.16, -0.28, -0.03), -1.0)
+	shape.support_elbow = Vector3(-0.16, -0.28, -0.03)
 	shape.muzzle = Vector3(0, -0.042, 0.674)
 	shape.hip = Vector3(0.159, -0.164, 0.235)
 	shape.aim = Vector3(0, 0, 0.17)
@@ -787,7 +824,7 @@ static func _sidearm() -> Shape:
 	shape.magazine_grip = Vector3(-0.020, -0.140, -0.054)
 	shape.magazine_throw = 0.18
 	shape.right_arm = _arm(Vector3(0.006, -0.077, -0.045), Vector3(0.113, -0.234, -0.408), 1.0)
-	shape.support = _arm(shape.support_grip, Vector3(-0.146, -0.232, -0.363), -1.0)
+	shape.support_elbow = Vector3(-0.146, -0.232, -0.363)
 	shape.muzzle = Vector3(0, -0.013, 0.126)
 	shape.hip = Vector3(0.105, -0.103, 0.388)
 	shape.aim = Vector3(0, -0.004, 0.36)
