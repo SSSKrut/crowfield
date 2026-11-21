@@ -8,6 +8,11 @@ extends Control
 signal play(arguments: PackedStringArray)
 
 const SETTINGS := "user://settings.cfg"
+const BASE_SENSITIVITY := 0.0025
+
+var _volume := 50.0
+var _sensitivity := 1.0
+var _fov := 75.0
 
 ## message is an error to show, of the game the player has just left.
 var message := ""
@@ -35,11 +40,12 @@ func _ready() -> void:
 
 func _position_panel() -> void:
 	# Leave the right side of the Valley panorama visible on wider windows.
-	%Center.anchor_right = clampf(565.0 / maxf(size.x, 1.0), 0.54, 1.0)
+	%Center.anchor_right = clampf(550.0 / maxf(size.x, 1.0), 0.46, 1.0)
 
 
 func _on_map_selected(index: int) -> void:
 	var valley: bool = MapScene.MAPS[index] == "valley"
+	%Mode.text = "VALLEY  /  FLAG CONTROL" if valley else "PRACTICE RANGE"
 	%Subtitle.text = "Capture and hold the river flags to score." if valley else "Practice movement and combat."
 	%Solo.text = "Play Valley solo" if valley else "Play practice map solo"
 
@@ -78,6 +84,28 @@ func _on_address_submitted(_text: String) -> void:
 	_on_join_pressed()
 
 
+func _on_settings_pressed() -> void:
+	%Volume.value = _volume
+	%Sensitivity.value = _sensitivity
+	%Fov.value = _fov
+	_display_settings()
+	%Settings.popup_centered()
+	%Volume.grab_focus()
+
+
+func _display_settings(_value: float = 0.0) -> void:
+	%VolumeValue.text = "%d%%" % %Volume.value
+	%SensitivityValue.text = "%.2f×" % %Sensitivity.value
+	%FovValue.text = "%d°" % %Fov.value
+
+
+func _on_settings_confirmed() -> void:
+	_volume = %Volume.value
+	_sensitivity = %Sensitivity.value
+	_fov = %Fov.value
+	_save()
+
+
 func _on_credits_pressed() -> void:
 	%Credits.popup_centered()
 
@@ -99,7 +127,12 @@ func _start(arguments: Array) -> void:
 		_name.grab_focus()
 		return
 	_save()
-	play.emit(PackedStringArray(["-name=" + player_name] + arguments))
+	play.emit(PackedStringArray([
+		"-name=" + player_name,
+		"-volume=%.2f" % (_volume / 100.0),
+		"-sensitivity=%.6f" % (_sensitivity * BASE_SENSITIVITY),
+		"-fov=%.0f" % _fov,
+	] + arguments))
 
 
 func _show_status(text: String) -> void:
@@ -118,6 +151,9 @@ func _load() -> void:
 		_map.selected = map_index
 	_port.value = config.get_value("host", "port", _port.value)
 	_address.text = config.get_value("join", "address", _address.text)
+	_volume = clampf(config.get_value("settings", "volume", _volume), 0.0, 100.0)
+	_sensitivity = clampf(config.get_value("settings", "sensitivity", _sensitivity), 0.25, 3.0)
+	_fov = clampf(config.get_value("settings", "fov", _fov), 55.0, 100.0)
 
 
 func _save() -> void:
@@ -127,4 +163,7 @@ func _save() -> void:
 	config.set_value("game", "map", MapScene.MAPS[_map.selected])
 	config.set_value("host", "port", int(_port.value))
 	config.set_value("join", "address", _address.text.strip_edges())
+	config.set_value("settings", "volume", _volume)
+	config.set_value("settings", "sensitivity", _sensitivity)
+	config.set_value("settings", "fov", _fov)
 	config.save(SETTINGS)

@@ -284,40 +284,15 @@ func _setup_window() -> void:
 
 
 func _build_world() -> void:
-	var sky_material := ProceduralSkyMaterial.new()
-	sky_material.sky_top_color = Color(0.29, 0.47, 0.75)
-	sky_material.sky_horizon_color = Color(0.69, 0.77, 0.86)
-	sky_material.ground_horizon_color = Color(0.69, 0.77, 0.86)
-	sky_material.ground_bottom_color = Color(0.3, 0.34, 0.3)
-	sky_material.sun_angle_max = 20.0
-	var sky := Sky.new()
-	sky.sky_material = sky_material
-	var environment := Environment.new()
-	environment.background_mode = Environment.BG_SKY
-	environment.sky = sky
-	environment.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
-	environment.ambient_light_energy = 0.55
-	environment.tonemap_mode = Environment.TONE_MAPPER_FILMIC
-	environment.fog_enabled = true
-	environment.fog_light_color = Color(0.66, 0.74, 0.84)
-	environment.fog_density = 0.0011
-	environment.fog_aerial_perspective = 0.4
-	environment.fog_sky_affect = 0.15
-	environment.ssao_enabled = true
-	environment.ssao_radius = 1.2
-	environment.ssao_intensity = 1.5
-	environment.glow_enabled = true
-	environment.glow_intensity = 0.3
-	environment.glow_hdr_threshold = 1.4
 	var world_environment := WorldEnvironment.new()
-	world_environment.environment = environment
+	world_environment.environment = preload("res://assets/sky/valley_environment.tres")
 	add_child(world_environment)
 	sun = DirectionalLight3D.new()
-	sun.rotation = Vector3(-0.8, 0.65, 0)
-	sun.light_color = Color(1.0, 0.95, 0.87)
-	sun.light_energy = 1.05
+	sun.rotation = Vector3(-0.58, 0.84, 0)
+	sun.light_color = Color(1.0, 0.91, 0.78)
+	sun.light_energy = 0.92
 	sun.shadow_enabled = true
-	sun.directional_shadow_max_distance = 140.0
+	sun.directional_shadow_max_distance = 100.0
 	add_child(sun)
 	camera = Camera3D.new()
 	camera.fov = settings["fov"]
