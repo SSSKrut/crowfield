@@ -28,6 +28,7 @@ const HELP_LINES := [
 enum PlaytestCapture { NONE, STATE, IMAGE }
 const PLAYTEST_DIR := "user://playtests"
 const FRAME_DIAGNOSTIC_WINDOW_USEC := 1000000
+const MUZZLE_SMOKE_AIM_LIMIT := 0.55
 const PERFORMANCE_MAX_PIXELS := 1600.0 * 900.0
 const PERFORMANCE_MAX_SCALE := 0.85
 const PERFORMANCE_SHADOW_DISTANCE := 45.0
@@ -853,13 +854,13 @@ func _process(delta: float) -> void:
 	_charge("bodies")
 	_update_camera(feet)
 	sounds.update_ambience(camera.global_position, delta)
-	var local_footing := own != null and _first_person() and _focused and not menu.visible and _reconnect_since < 0
+	var local_feedback := own != null and _first_person() and _focused and not menu.visible and _reconnect_since < 0
 	var footfall := view_model.footing(delta, feet, own != null and own.grounded,
-		speed / rules.movement.sprint_speed, local_footing)
+		speed / rules.movement.sprint_speed, local_feedback)
 	if footfall != ViewModel.Footfall.NONE:
 		sounds.footstep(feet, scene, footfall == ViewModel.Footfall.LAND)
 	_update_weapon(delta, own, speed)
-	effects.update(delta)
+	effects.update(delta, local_feedback and view_model.aim < MUZZLE_SMOKE_AIM_LIMIT)
 	_charge("weapon")
 	soldier_views.update(session, delta, camera, scene)
 	soldier_views.aim(feet + Vector3(0, rules.movement.eye_height, 0), Game.view_direction(_yaw, _pitch), rules.movement.center_height())
@@ -1214,6 +1215,8 @@ func _update_weapon(delta: float, own: Soldier, speed: float) -> void:
 			muzzle = camera.global_position
 		if placed:
 			muzzle = view_model.muzzle_in_world(camera)
+			if not aiming and view_model.aim < MUZZLE_SMOKE_AIM_LIMIT:
+				effects.puff_muzzle(muzzle, shot.direction)
 		effects.shot(muzzle, end, not hit.is_empty(), hit.get("normal", Vector3.ZERO))
 		if not hit.is_empty():
 			sounds.impact_at(end)

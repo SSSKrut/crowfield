@@ -35,3 +35,20 @@ func test_short_tracer_survives_its_first_frame() -> void:
 	check_equal(effects._impact_normal[0], Vector3.LEFT, "the surface normal travels with the impact")
 	effects.update(0.1)
 	check_equal(effects._tracers.visible_instance_count, 0, "the streak expires after the initial frame")
+
+
+func test_muzzle_smoke_caps_its_pool_hides_while_aiming_and_expires() -> void:
+	var effects := Effects.new()
+	cleanup(func() -> void: effects.free())
+	var initial_nodes := effects.get_child_count()
+	for shot in Effects.MAX_MUZZLE_PUFFS + 3:
+		effects.puff_muzzle(Vector3(shot, 0, 0), Vector3.FORWARD)
+	effects.update(0.1)
+	check_equal(effects.get_child_count(), initial_nodes, "a burst allocates no effect nodes")
+	check_equal(effects._muzzle_puffs.visible_instance_count, Effects.MAX_MUZZLE_PUFFS, "the pool stays bounded")
+	check_equal(effects._muzzle_puff_position[0].x, 3.0, "the oldest puffs are replaced")
+	effects.update(0.1, false)
+	check_equal(effects._muzzle_puffs.visible_instance_count, 0, "aiming hides remaining world puffs")
+	effects.update(0.31)
+	check_equal(effects._muzzle_puff_age.size(), 0, "hidden puffs still age and expire")
+	check_equal(effects._muzzle_puffs.visible_instance_count, 0, "old smoke does not return")
