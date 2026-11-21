@@ -1287,7 +1287,7 @@ func _update_hud(feet: Vector3, own: Soldier) -> void:
 	hud.dead = player.soldier != 0 and player.health == 0
 	hud.health = player.health
 	hud.respawn_ticks = player.respawn
-	hud.team = _team()
+	_update_match_hud(session.match_state if connected else null, feet, _team())
 	hud.view_yaw = _yaw
 	hud.net_graph = session.graph if connected and _net_graph else null
 	hud.jumps = session.resyncs if connected else 0
@@ -1298,6 +1298,27 @@ func _update_hud(feet: Vector3, own: Soldier) -> void:
 			"Reconnecting: attempt %d, %d s of %d" % [_reconnect_attempts, int(ClientSession._now() - _reconnect_since), int(RECONNECT_WINDOW)],
 		])
 	hud.queue_redraw()
+
+
+func _update_match_hud(state: MatchState, feet: Vector3, team: int) -> void:
+	var previous := hud.match_state
+	if state != null and previous != null and state != previous and team == hud.team and team != Game.Team.NONE:
+		var captured := false
+		var lost := false
+		for index in mini(state.flags.size(), previous.flags.size()):
+			var old_owner := previous.flags[index].owner
+			var owner := state.flags[index].owner
+			if old_owner != owner:
+				captured = captured or owner == team
+				lost = lost or old_owner == team
+		if captured or lost:
+			sounds.flag_changed(captured)
+	hud.team = team
+	hud.match_state = state
+	hud.map_scene = scene
+	hud.feet = feet
+	if map_view != null and state != previous:
+		map_view.update_flags(state)
 
 
 func _request_capture(kind: PlaytestCapture) -> void:
