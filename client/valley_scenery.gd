@@ -30,6 +30,7 @@ func _init(map: MapScene, wear: PackedFloat32Array) -> void:
 	_build_ground_cover(wear)
 	_build_structure_details()
 	_build_gate_signs()
+	add_child(CustomsScenery.new(map))
 
 
 ## The overlap starts under Valley's render terrain. From there three broken

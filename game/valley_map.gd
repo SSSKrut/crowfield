@@ -35,6 +35,20 @@ const BASE_LEVEL := 1.2
 const VILLAGE_LEVEL := 0.9
 const HILL_LEVEL := 6.2
 const BANK_LEVEL := 0.6
+const BRIDGE_HALF := 12.5
+const BRIDGE_DECK := 0.7
+const CUSTOMS_TOWER := Vector2(-13.15, -10.25)
+const CUSTOMS_WELL := Vector2(0.0, 0.15)
+const CUSTOMS_HOUSES := [
+	{ "center": Vector2(-9.8, -7.8), "footprint": Vector2(9.0, 7.5), "door": 1,
+		"height": 3.2, "pitch": 32.0, "wall": MapScene.Kind.MASONRY },
+	{ "center": Vector2(9.2, -9.0), "footprint": Vector2(6.0, 8.0), "door": 3,
+		"height": 3.0, "pitch": 24.0, "wall": MapScene.Kind.PLASTER },
+	{ "center": Vector2(-9.0, 8.0), "footprint": Vector2(5.8, 6.8), "door": 1,
+		"height": 2.65, "pitch": 29.0, "wall": MapScene.Kind.PLANKS },
+	{ "center": Vector2(10.0, 8.0), "footprint": Vector2(8.0, 6.0), "door": 3,
+		"height": 3.0, "pitch": 19.0, "wall": MapScene.Kind.PLASTER },
+]
 
 ## Flat is ground levelled for building: fully within inner, blending into the
 ## land up to outer.
@@ -308,10 +322,9 @@ func _pitched_roof(origin: Vector3, turn: float, center: Vector2, width: float, 
 ## The customs house and courtyards form a covered route to the bridge.
 func _village(origin: Vector3, turn: float) -> void:
 	var level := VILLAGE_LEVEL
-	_house(origin, turn, Vector2(-9.8, -7.8), 9.0, 7.5, 1, 3.2, 32.0, MapScene.Kind.MASONRY)
-	_house(origin, turn, Vector2(9.2, -9.0), 6.0, 8.0, 3, 3.0, 24.0, MapScene.Kind.PLASTER)
-	_house(origin, turn, Vector2(-9.0, 8.0), 5.8, 6.8, 1, 2.65, 29.0, MapScene.Kind.PLANKS)
-	_house(origin, turn, Vector2(10.0, 8.0), 8.0, 6.0, 3, 3.0, 19.0, MapScene.Kind.PLASTER)
+	for house in CUSTOMS_HOUSES:
+		var footprint: Vector2 = house.footprint
+		_house(origin, turn, house.center, footprint.x, footprint.y, house.door, house.height, house.pitch, house.wall)
 	_customs_tower(origin, turn)
 	_put(origin, turn, 0, 1, level - 0.16, Vector3(7.3, 0.19, 8.0), MapScene.Kind.COBBLES)
 	_wall(origin, turn, Vector2(-11, -1), Vector2(-4.2, -1), level - 0.12,
@@ -337,7 +350,7 @@ func _village(origin: Vector3, turn: float) -> void:
 
 ## A roofed stone well marks the courtyard and gives low cover.
 func _village_well(origin: Vector3, turn: float, level: float) -> void:
-	var center := Vector2(0.0, 0.15)
+	var center := CUSTOMS_WELL
 	for side in 8:
 		var angle := side * TAU / 8.0
 		var normal := Vector2(cos(angle), sin(angle))
@@ -357,7 +370,7 @@ func _village_well(origin: Vector3, turn: float, level: float) -> void:
 ## The attached observation tower gives the village a recognizable
 ## silhouette from the camp gate and either riverbank.
 func _customs_tower(origin: Vector3, turn: float) -> void:
-	var center := Vector2(-13.15, -10.25)
+	var center := CUSTOMS_TOWER
 	const WIDTH := 3.0
 	const HEIGHT := 6.15
 	var level := VILLAGE_LEVEL
@@ -421,14 +434,12 @@ func _wooded_approach(sign: float) -> void:
 ## _bridge is a stone bridge with parapets over the river at x.
 func _bridge(x: float) -> void:
 	var middle := river_z(x)
-	const HALF := 12.5
-	const DECK := 0.7
-	_scene.add_box(Vector3(2.2, 0.25, HALF), Vector3(x, DECK - 0.25, middle), Basis(), MapScene.Kind.CONCRETE)
+	_scene.add_box(Vector3(2.2, 0.25, BRIDGE_HALF), Vector3(x, BRIDGE_DECK - 0.25, middle), Basis(), MapScene.Kind.CONCRETE)
 	for side: float in [-1.0, 1.0]:
-		_scene.add_box(Vector3(0.2, 0.45, HALF - 1.5), Vector3(x + side * 2.0, DECK + 0.45, middle), Basis(), MapScene.Kind.MASONRY)
-		_scene.add_box(Vector3(1.2, 1.4, 0.9), Vector3(x, DECK - 1.6, middle + side * 4), Basis(), MapScene.Kind.MASONRY)
+		_scene.add_box(Vector3(0.2, 0.45, BRIDGE_HALF - 1.5), Vector3(x + side * 2.0, BRIDGE_DECK + 0.45, middle), Basis(), MapScene.Kind.MASONRY)
+		_scene.add_box(Vector3(1.2, 1.4, 0.9), Vector3(x, BRIDGE_DECK - 1.6, middle + side * 4), Basis(), MapScene.Kind.MASONRY)
 		for bank: float in [-1.0, 1.0]:
-			var head := Vector3(x + side * 2.02, DECK + 0.53, middle + bank * (HALF - 1.82))
+			var head := Vector3(x + side * 2.02, BRIDGE_DECK + 0.53, middle + bank * (BRIDGE_HALF - 1.82))
 			_scene.add_box(Vector3(0.28, 0.53, 0.37), head, Basis(), MapScene.Kind.MASONRY)
 			_scene.add_box(Vector3(0.34, 0.095, 0.43), head + Vector3(0, 0.53, 0), Basis(), MapScene.Kind.SLATE)
 

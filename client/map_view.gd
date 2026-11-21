@@ -305,7 +305,10 @@ func _build_boxes() -> void:
 					var ground := scene.terrain.height_at(position.x, position.z)
 					position.y += ValleyScenery.visual_height(ground, position.x, position.z, scene.play_area) - ground
 				transforms.append(Transform3D(basis, position))
-				shades.append(_surface_shade(i, kind))
+				var shade := _surface_shade(i, kind)
+				if scene.terrain != null:
+					shade *= CustomsScenery.surface_tint(kind, position)
+				shades.append(shade)
 		var multimesh := MultiMesh.new()
 		multimesh.transform_format = MultiMesh.TRANSFORM_3D
 		multimesh.use_colors = true
