@@ -5,15 +5,32 @@ extends RefCounted
 
 const CLIPS := [&"Idle", &"Walking", &"Running"]
 enum Clip { IDLE, WALKING, RUNNING }
-const _PERIODS := [2.2, 0.58, 0.47]
+const _PERIODS := [2.6, 0.56, 0.43]
+const _STEP_LENGTH := [0.0, 0.73, 0.91]
+const _STANCE_PORTION := [0.0, 0.61, 0.52]
 
 const _SHADER := """
 shader_type spatial;
 instance uniform vec4 team_color : source_color = vec4(0.79, 0.58, 0.22, 1.0);
 
+// The garment's UVs are skinned with the mesh. Grain stays on the fabric
+// as the limbs bend, and fades away before it aliases at a distance.
 void fragment() {
-	ALBEDO = mix(team_color.rgb, COLOR.rgb, COLOR.a);
-	ROUGHNESS = 0.86;
+	float footprint = max(length(dFdx(UV)), length(dFdy(UV)));
+	float grain_mask = 1.0 - smoothstep(0.002, 0.014, footprint);
+	float fabric = 1.0 - smoothstep(0.35, 0.66, UV2.x);
+	vec2 thread = sin(UV * vec2(749.0, 771.0));
+	float weave = 1.0 + thread.x * thread.y * 0.11 * fabric * grain_mask;
+	float panels = sin(UV.x * 13.0 + sin(UV.y * 12.0)) * sin(UV.y * 17.0);
+	float wear = 1.0 + panels * mix(0.045, 0.085, fabric);
+	float mottling = sin(UV.x * 17.0 + sin(UV.y * 11.7))
+		+ sin(UV.y * 21.4 - cos(UV.x * 13.0))
+		+ 0.5 * sin(UV.x * 28.0 + UV.y * 30.0);
+	float uniform_area = 1.0 - step(0.16, UV2.x);
+	float pattern = 1.0 - 0.145 * smoothstep(0.35, 1.05, mottling) * uniform_area;
+	ALBEDO = mix(team_color.rgb * 0.9, COLOR.rgb * pattern, COLOR.a) * weave * wear;
+	ROUGHNESS = mix(0.92, 0.58, UV2.x);
+	METALLIC = smoothstep(0.52, 1.0, UV2.x) * 0.42;
 }
 """
 
@@ -92,7 +109,7 @@ func _bone(skeleton: Skeleton3D, name: String, parent: String, position: Vector3
 ## In-place clips share the same leg phase, so switching pace preserves the
 ## stride. The shoulders stay close to the ready position as the torso turns.
 func _clip(skeleton: Skeleton3D, clip: int) -> Animation:
-	const STEPS := 16
+	const STEPS := 24
 	var animation := Animation.new()
 	animation.length = periods[clip]
 	animation.loop_mode = Animation.LOOP_LINEAR
@@ -120,20 +137,53 @@ func _clip(skeleton: Skeleton3D, clip: int) -> Animation:
 			poses["Torso_2"] = Vector3(0.12 * strength, 0.14 * strength * sin(phase), 0)
 			poses["Head_2"] = Vector3(-0.07 * strength, -0.05 * strength * sin(phase), 0)
 			for side in ["L", "R"]:
-				var stride := phase if side == "L" else phase + PI
-				var lift := maxf(-cos(stride), 0)
-				var thigh := -0.81 * strength * sin(stride)
-				var knee := (0.11 + 1.30 * lift) * strength
-				poses["UpperLeg." + side] = Vector3(thigh, 0, 0)
-				poses["LowerLeg." + side] = Vector3(knee, 0, 0)
-				poses["Foot." + side] = Vector3(-0.57 * (thigh + knee), 0, 0)
-				poses["UpperArm." + side] = Vector3(0.038 * sin(stride), 0, 0)
+				var foot_phase := fposmod(float(sample) / STEPS + (0.0 if side == "L" else 0.5), 1.0)
+				var leg := _stride(foot_phase, clip)
+				poses["UpperLeg." + side] = Vector3(leg.x, 0, 0)
+				poses["LowerLeg." + side] = Vector3(leg.y, 0, 0)
+				poses["Foot." + side] = Vector3(leg.z, 0, 0)
+				poses["UpperArm." + side] = Vector3(0.028 * sin(TAU * foot_phase), 0, 0)
 			bounce = -_sole_height(skeleton, poses)
 		animation.position_track_insert_key(position, time, hips + Vector3.UP * bounce)
 		for i in tracked.size():
 			var angles: Vector3 = poses.get(tracked[i], Vector3.ZERO)
 			animation.rotation_track_insert_key(i + 1, time, Quaternion.from_euler(angles))
 	return animation
+
+
+## The stance foot moves back along a level path at constant speed; the
+## swing foot returns in a higher curved arc. Solve both joints against the
+## desired ankle position to avoid the old simultaneous knee swivel.
+func _stride(phase: float, clip: int) -> Vector3:
+	const LENGTH := 0.401
+	const REST_PITCH := 0.070
+	var stance: float = _STANCE_PORTION[clip]
+	var reach: float = _STEP_LENGTH[clip] * 0.5
+	var running := clip == Clip.RUNNING
+	# The pelvis rises as the supporting leg comes beneath the body.
+	var other_phase := fposmod(phase + 0.5, 1.0)
+	var reach_under_load := 0.0
+	for support_phase in [phase, other_phase]:
+		if support_phase < stance:
+			reach_under_load = maxf(reach_under_load, absf(lerpf(reach, -reach, support_phase / stance)))
+	var extension := 0.789 if running else 0.783
+	var down := sqrt(extension * extension - reach_under_load * reach_under_load)
+	var forward := 0.0
+	var foot_roll := 0.0
+	if phase < stance:
+		var progress := phase / stance
+		forward = lerpf(reach, -reach, progress)
+		foot_roll = 0.16 * smoothstep(0.76, 1.0, progress)
+	else:
+		var progress := (phase - stance) / (1.0 - stance)
+		forward = lerpf(-reach, reach, smoothstep(0.0, 1.0, progress))
+		down -= sin(PI * progress) * (0.175 if running else 0.102)
+		foot_roll = lerpf(0.16, 0.0, smoothstep(0.0, 1.0, progress))
+	var distance := minf(Vector2(forward, down).length(), 2.0 * LENGTH - 0.001)
+	var opposite := acos(distance / (2.0 * LENGTH))
+	var thigh := REST_PITCH - atan2(forward, down) - opposite
+	var knee := 2.0 * (opposite - REST_PITCH)
+	return Vector3(thigh, knee, -thigh - knee + foot_roll)
 
 
 ## Shift the pelvis so the lower boot sole reaches the ground at each key.

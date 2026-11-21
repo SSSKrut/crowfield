@@ -1,0 +1,27 @@
+[gd_resource type="Environment" load_steps=4 format=3]
+
+[ext_resource type="Texture2D" path="res://assets/sky/kloppenheim_06_puresky_2k.hdr" id="1_panorama"]
+
+[sub_resource type="PanoramaSkyMaterial" id="PanoramaSkyMaterial_clouds"]
+panorama = ExtResource("1_panorama")
+energy_multiplier = 0.64
+
+[sub_resource type="Sky" id="Sky_clouds"]
+sky_material = SubResource("PanoramaSkyMaterial_clouds")
+
+[resource]
+background_mode = 2
+sky = SubResource("Sky_clouds")
+sky_rotation = Vector3(0, 0.32, 0)
+ambient_light_source = 2
+ambient_light_color = Color(0.64, 0.72, 0.77, 1)
+ambient_light_sky_contribution = 0.0
+ambient_light_energy = 0.66
+tonemap_mode = 2
+fog_enabled = true
+fog_light_color = Color(0.47, 0.55, 0.57, 1)
+fog_density = 0.0023
+fog_sky_affect = 0.08
+ssao_enabled = true
+ssao_radius = 1.25
+ssao_intensity = 1.5
