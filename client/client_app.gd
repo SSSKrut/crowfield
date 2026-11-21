@@ -358,7 +358,7 @@ func _render_diagnostics() -> Dictionary:
 		"window_px": [window_size.x, window_size.y],
 		"viewport_px": [viewport_size.x, viewport_size.y],
 		"render_scale_3d": scale,
-		"estimated_render_px_3d": [int(viewport_size.x * scale), int(viewport_size.y * scale)],
+		"estimated_render_px_3d": [roundi(viewport_size.x * scale), roundi(viewport_size.y * scale)],
 		"msaa_3d": [0, 2, 4, 8][viewport.msaa_3d],
 		"shadow_distance_m": sun.directional_shadow_max_distance,
 		"shadow_cascades": [1, 2, 4][sun.directional_shadow_mode],
