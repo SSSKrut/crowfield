@@ -255,7 +255,7 @@ visible = false
 ok_button_text = "Apply"
 
 [node name="Rows" type="GridContainer" parent="Settings"]
-custom_minimum_size = Vector2(466, 153)
+custom_minimum_size = Vector2(466, 192)
 theme_override_constants/h_separation = 18
 theme_override_constants/v_separation = 14
 columns = 3
@@ -316,6 +316,23 @@ unique_name_in_owner = true
 custom_minimum_size = Vector2(55, 0)
 layout_mode = 2
 horizontal_alignment = 2
+
+[node name="GraphicsLabel" type="Label" parent="Settings/Rows"]
+layout_mode = 2
+text = "Graphics"
+
+[node name="Graphics" type="OptionButton" parent="Settings/Rows"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+item_count = 3
+selected = 0
+popup/item_0/text = "Automatic"
+popup/item_0/id = 0
+popup/item_1/text = "Performance"
+popup/item_1/id = 1
+popup/item_2/text = "Quality"
+popup/item_2/id = 2
 
 [node name="Credits" type="AcceptDialog" parent="."]
 unique_name_in_owner = true

@@ -15,6 +15,10 @@ godot --path .
 
 На macOS проект использует рендерер Compatibility (OpenGL). На Mac с Godot в папке «Программы» вместо `godot` можно использовать `/Applications/Godot.app/Contents/MacOS/Godot`.
 
+В **Settings → Graphics** можно выбрать **Performance** или **Quality**. **Automatic** выбирает Performance на Apple Silicon. Направление и расстояние до точек видны под названиями флагов на HUD.
+
+[План игровых проверок Valley и сравнения с Ravenfield](PLAYTEST_PLAN.md).
+
 ## Управление
 
 | Действие | Клавиши |

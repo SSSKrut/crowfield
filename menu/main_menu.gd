@@ -9,10 +9,12 @@ signal play(arguments: PackedStringArray)
 
 const SETTINGS := "user://settings.cfg"
 const BASE_SENSITIVITY := 0.0025
+const GRAPHICS_MODES := ["auto", "performance", "quality"]
 
 var _volume := 50.0
 var _sensitivity := 1.0
 var _fov := 75.0
+var _graphics := "auto"
 
 ## message is an error to show, of the game the player has just left.
 var message := ""
@@ -99,6 +101,7 @@ func _on_settings_pressed() -> void:
 	%Volume.value = _volume
 	%Sensitivity.value = _sensitivity
 	%Fov.value = _fov
+	%Graphics.select(GRAPHICS_MODES.find(_graphics))
 	_display_settings()
 	%Settings.popup_centered()
 	%Volume.grab_focus()
@@ -114,6 +117,7 @@ func _on_settings_confirmed() -> void:
 	_volume = %Volume.value
 	_sensitivity = %Sensitivity.value
 	_fov = %Fov.value
+	_graphics = GRAPHICS_MODES[%Graphics.selected]
 	_save()
 
 
@@ -140,12 +144,15 @@ func _start(arguments: Array) -> void:
 		return
 	%NetworkDialog.hide()
 	_save()
-	play.emit(PackedStringArray([
+	var preferences := [
 		"-name=" + player_name,
 		"-volume=%.2f" % (_volume / 100.0),
 		"-sensitivity=%.6f" % (_sensitivity * BASE_SENSITIVITY),
 		"-fov=%.0f" % _fov,
-	] + arguments))
+	]
+	if _graphics != "auto":
+		preferences.append("-graphics=" + _graphics)
+	play.emit(PackedStringArray(preferences + arguments))
 
 
 func _show_status(text: String) -> void:
@@ -167,6 +174,9 @@ func _load() -> void:
 	_volume = clampf(config.get_value("settings", "volume", _volume), 0.0, 100.0)
 	_sensitivity = clampf(config.get_value("settings", "sensitivity", _sensitivity), 0.25, 3.0)
 	_fov = clampf(config.get_value("settings", "fov", _fov), 55.0, 100.0)
+	var graphics: String = config.get_value("settings", "graphics", _graphics)
+	if graphics in GRAPHICS_MODES:
+		_graphics = graphics
 
 
 func _save() -> void:
@@ -179,4 +189,5 @@ func _save() -> void:
 	config.set_value("settings", "volume", _volume)
 	config.set_value("settings", "sensitivity", _sensitivity)
 	config.set_value("settings", "fov", _fov)
+	config.set_value("settings", "graphics", _graphics)
 	config.save(SETTINGS)

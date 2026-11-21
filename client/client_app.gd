@@ -25,6 +25,11 @@ const HELP_LINES := [
 enum PlaytestCapture { NONE, STATE, IMAGE }
 const PLAYTEST_DIR := "user://playtests"
 const FRAME_DIAGNOSTIC_WINDOW_USEC := 1000000
+const PERFORMANCE_MAX_PIXELS := 1600.0 * 900.0
+const PERFORMANCE_MAX_SCALE := 0.85
+const PERFORMANCE_SHADOW_DISTANCE := 45.0
+const BENCHMARK_MAX_SECONDS := 120.0
+const BENCHMARK_MAX_SAMPLES := 262144
 const GAME_MENU := preload("res://menu/game_menu.tscn")
 const PlaytestTrace := preload("res://client/playtest_trace.gd")
 const NATIVE_INPUT_EXTENSION := "res://.godot/playtest-native/native-input.gdextension"
@@ -55,6 +60,11 @@ var menu: GameMenu
 var debug: DebugDraw
 var camera: Camera3D
 var sun: DirectionalLight3D
+
+var _graphics_viewport: Viewport
+var _previous_msaa := Viewport.MSAA_DISABLED
+var _previous_scale := 1.0
+var _previous_scaling_mode := Viewport.SCALING_3D_MODE_BILINEAR
 
 var _conditions: NetworkConditions
 var _handshake: Handshake
@@ -101,6 +111,7 @@ var _buttons := 0
 ## it lies dead, until a new one comes.
 var _feet := Vector3.ZERO
 var _fallen := 0
+var _view_soldier_id := 0
 ## _momentum is the velocity the own soldier was last predicted with.
 var _momentum := Vector3.ZERO
 var _debug := false
@@ -122,6 +133,8 @@ var _previous_frame_window_longest_usec := 0
 var _frame_warmup := 1.0
 var _frame_stats := FrameStats.new()
 var _report := FrameStats.new()
+var _benchmark_started_usec := -1
+var _benchmark_samples := PackedInt32Array()
 var _knockdowns := 0
 ## _reconnect is the restoring of a lost connection to a remote server.
 var _reconnect_since := -1.0
@@ -146,6 +159,10 @@ static func create(arguments: PackedStringArray) -> ClientApp:
 	app.name = "Client"
 	app.set_meta("arguments", arguments)
 	return app
+
+
+static func default_graphics_preset() -> String:
+	return "performance" if OS.get_name() == "macOS" else "quality"
 
 
 static func define_flags(flags: Flags) -> void:
@@ -176,6 +193,12 @@ static func define_flags(flags: Flags) -> void:
 	flags.define("bot-deaths", 0.0, "bots of the embedded server killed at random every second")
 	flags.define("respawn-delay", Flags.Duration.new(0), "how long the dead of the embedded server wait; 0 is the default")
 	flags.define("stats", Flags.Duration.new(0), "log frame rate, memory and ragdolls this often")
+	flags.define("graphics", default_graphics_preset(), "rendering preset: performance or quality")
+	flags.define("seed", 0, "embedded match seed; 0 picks a random one outside benchmarks")
+	flags.define("benchmark", Flags.Duration.new(0), "measure frame pacing for this long in play, then exit")
+	flags.define("benchmark-warmup", Flags.Duration.new(6), "discard this much time after the first playable frame")
+	flags.define("benchmark-path", "", "write the benchmark JSON report to this file")
+	flags.define("benchmark-route", "static", "benchmark camera: static or valley, from camp to the ford")
 	flags.define("overview", false, "watch the whole map from above")
 	flags.define("netgraph", false, "show the network graph (F2)")
 	flags.define("max-fps", 144, "frame rate cap; 0 leaves it free")
@@ -197,8 +220,25 @@ func _ready() -> void:
 		return
 	for name in ["width", "height", "frames", "exit-on-leave", "dev-capture-dir", "dev-native-input", "screenshot", "demo", "movement", "shoot", "cycles", "debug", "tuning",
 			"weapons", "volume", "name", "netsim", "host", "connect", "fingerprint", "config-dir", "map", "bots", "bot-ai",
-			"bot-deaths", "respawn-delay", "stats", "overview", "netgraph", "max-fps", "knockdowns", "sensitivity", "fov"]:
+			"bot-deaths", "respawn-delay", "stats", "overview", "netgraph", "max-fps", "knockdowns", "sensitivity", "fov",
+			"graphics", "seed", "benchmark", "benchmark-warmup", "benchmark-path", "benchmark-route"]:
 		settings[name] = flags.get_value(name)
+	if settings["graphics"] not in ["performance", "quality"]:
+		_quit_with("-graphics must be performance or quality")
+		return
+	if settings["benchmark"] > BENCHMARK_MAX_SECONDS or settings["benchmark-warmup"] > BENCHMARK_MAX_SECONDS:
+		_quit_with("-benchmark and -benchmark-warmup must each be at most %.0f seconds" % BENCHMARK_MAX_SECONDS)
+		return
+	if settings["benchmark"] > 0 and settings["frames"] > 0:
+		_quit_with("-benchmark controls when the run ends; omit -frames")
+		return
+	if settings["benchmark-route"] not in ["static", "valley"]:
+		_quit_with("-benchmark-route must be static or valley")
+		return
+	if settings["benchmark-route"] == "valley" and (settings["benchmark"] <= 0 or _map_name() != "valley"
+			or settings["connect"] != "" or settings["host"] != "" or settings["overview"]):
+		_quit_with("-benchmark-route=valley needs a solo Valley benchmark without -overview")
+		return
 	if settings["dev-capture-dir"] != "":
 		var trace_error := _input_trace.start_run(settings["dev-capture-dir"], Time.get_ticks_usec())
 		if trace_error != OK:
@@ -219,6 +259,7 @@ func _ready() -> void:
 		return
 	_conditions = conditions
 	_setup_window()
+	_setup_graphics()
 	_build_world()
 	# Everything is loaded before connecting: once connected, the client must
 	# send a command every tick, and a stall puts its clock behind the server.
@@ -230,7 +271,7 @@ func _ready() -> void:
 		return
 	_debug = settings["debug"]
 	_net_graph = settings["netgraph"]
-	_captured = settings["frames"] == 0
+	_captured = settings["frames"] == 0 and settings["benchmark"] <= 0
 	var window := get_window()
 	_focused = DisplayServer.get_name() == "headless" or window.has_focus()
 	window.focus_entered.connect(_set_window_focus.bind(true))
@@ -283,6 +324,49 @@ func _setup_window() -> void:
 		DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
 
 
+## Limit high-DPI fill rate and the extra geometry drawn for directional
+## shadows, while keeping the HUD at the viewport's native resolution.
+func _setup_graphics() -> void:
+	if settings["graphics"] != "performance" or DisplayServer.get_name() == "headless":
+		return
+	_graphics_viewport = get_viewport()
+	_previous_msaa = _graphics_viewport.msaa_3d
+	_previous_scale = _graphics_viewport.scaling_3d_scale
+	_previous_scaling_mode = _graphics_viewport.scaling_3d_mode
+	_graphics_viewport.msaa_3d = Viewport.MSAA_DISABLED
+	_graphics_viewport.scaling_3d_mode = Viewport.SCALING_3D_MODE_BILINEAR
+	_graphics_viewport.size_changed.connect(_update_render_scale)
+	_update_render_scale()
+
+
+func _update_render_scale() -> void:
+	var size := _graphics_viewport.get_texture().get_size()
+	var native_pixels := maxf(1.0, size.x * size.y)
+	_graphics_viewport.scaling_3d_scale = minf(PERFORMANCE_MAX_SCALE, sqrt(PERFORMANCE_MAX_PIXELS / native_pixels))
+
+
+func _render_diagnostics() -> Dictionary:
+	var viewport := get_viewport()
+	var window_size := DisplayServer.window_get_size()
+	var viewport_size := viewport.get_texture().get_size()
+	var scale := viewport.scaling_3d_scale
+	return {
+		"graphics": settings["graphics"],
+		"renderer": RenderingServer.get_current_rendering_method(),
+		"driver": RenderingServer.get_current_rendering_driver_name(),
+		"adapter": RenderingServer.get_video_adapter_name(),
+		"window_px": [window_size.x, window_size.y],
+		"viewport_px": [viewport_size.x, viewport_size.y],
+		"render_scale_3d": scale,
+		"estimated_render_px_3d": [roundi(viewport_size.x * scale), roundi(viewport_size.y * scale)],
+		"msaa_3d": [0, 2, 4, 8][viewport.msaa_3d],
+		"shadow_distance_m": sun.directional_shadow_max_distance,
+		"shadow_cascades": [1, 2, 4][sun.directional_shadow_mode],
+		"max_fps": Engine.max_fps,
+		"vsync": DisplayServer.window_get_vsync_mode(),
+	}
+
+
 func _build_world() -> void:
 	var world_environment := WorldEnvironment.new()
 	world_environment.environment = preload("res://assets/sky/valley_environment.tres")
@@ -292,7 +376,9 @@ func _build_world() -> void:
 	sun.light_color = Color(1.0, 0.91, 0.78)
 	sun.light_energy = 0.92
 	sun.shadow_enabled = true
-	sun.directional_shadow_max_distance = 100.0
+	if settings["graphics"] == "performance":
+		sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
+		sun.directional_shadow_max_distance = PERFORMANCE_SHADOW_DISTANCE
 	add_child(sun)
 	camera = Camera3D.new()
 	camera.fov = settings["fov"]
@@ -388,6 +474,9 @@ func _open() -> String:
 	server_settings.stats_interval = 0
 	server_settings.map = _map_name()
 	server_settings.bots = settings["bots"]
+	server_settings.seed = settings["seed"]
+	if server_settings.seed == 0 and settings["benchmark"] > 0:
+		server_settings.seed = 1
 	server_settings.bot_ai = settings["bot-ai"]
 	server_settings.bot_deaths = settings["bot-deaths"]
 	if settings["respawn-delay"] > 0:
@@ -453,6 +542,11 @@ func _join(conn: Conn, token: PackedByteArray = PackedByteArray()) -> void:
 
 
 func _exit_tree() -> void:
+	if is_instance_valid(_graphics_viewport):
+		_graphics_viewport.size_changed.disconnect(_update_render_scale)
+		_graphics_viewport.msaa_3d = _previous_msaa
+		_graphics_viewport.scaling_3d_scale = _previous_scale
+		_graphics_viewport.scaling_3d_mode = _previous_scaling_mode
 	if _gameplay_capture_marked:
 		DirAccess.remove_absolute(_gameplay_capture_marker)
 	if _native_input_loaded:
@@ -661,6 +755,8 @@ func _process(delta: float) -> void:
 	delta = minf(delta, 0.1)
 	_lap = Time.get_ticks_usec() if _frame_warmup <= 0 and settings["stats"] > 0 else 0
 	if not _connect(delta):
+		return
+	if settings["benchmark"] > 0 and _measure_benchmark_frame():
 		return
 	# The automatic scenarios count their time from the first frame in play.
 	_elapsed += delta
@@ -1026,6 +1122,9 @@ func _update_camera(feet: Vector3) -> void:
 		if tuning != null and _first_person():
 			fov *= 1 + (tuning.aim_zoom - 1) * view_model.aim
 	camera.fov = fov
+	if settings["benchmark-route"] == "valley":
+		_update_benchmark_camera()
+		return
 	var forward := Game.view_direction(yaw, pitch)
 	var eye := feet + Vector3(0, rules.movement.eye_height, 0)
 	if settings["overview"]:
@@ -1118,6 +1217,12 @@ func _die(feet: Vector3, velocity: Vector3) -> void:
 func _follow_life() -> void:
 	var player := session.player
 	var dead := player.soldier != 0 and player.health == 0
+	if scene.name == "valley" and not dead and player.soldier != 0 and player.soldier != _view_soldier_id:
+		var deployed := session.local_soldier()
+		if deployed != null:
+			_view_soldier_id = player.soldier
+			_yaw = PI if deployed.team == Game.Team.RED else 0.0
+			_pitch = 0.0
 	if dead and _fallen != player.soldier:
 		# The body falls where the server has it dead, which everyone else sees,
 		# not where the prediction ran on to, with the momentum it had.
@@ -1338,6 +1443,7 @@ func _capture_playtest(with_image: bool) -> void:
 		"health": session.player.health,
 		"grounded": soldier.grounded if soldier != null else null,
 		"fps": Engine.get_frames_per_second(),
+		"rendering": _render_diagnostics(),
 		"last_frame_ms": _last_frame_usec / 1000.0,
 		"recent_worst_frame_ms": maxi(_frame_window_longest_usec, _previous_frame_window_longest_usec) / 1000.0,
 		"input": _input_diagnostics(),
@@ -1432,6 +1538,96 @@ func _sample_frame() -> void:
 		soldier_views.drawn, soldier_views.falls, parts])
 	_report = FrameStats.new()
 	_profile.clear()
+
+
+## A fixed first-person render route cuts scene variation out of the
+## comparison: use elapsed wall time so a slower renderer sees the same views.
+## The local server and bots still play the same seeded match.
+func _update_benchmark_camera() -> void:
+	var elapsed := maxf(0.0, (_frame_started_usec - _benchmark_started_usec) / 1000000.0) if _benchmark_started_usec >= 0 else 0.0
+	var warmup: float = settings["benchmark-warmup"]
+	var phase := clampf((elapsed - warmup) / settings["benchmark"], 0.0, 1.0)
+	if elapsed < warmup:
+		phase = elapsed / warmup
+	var from := Vector3(0, 0, 70)
+	var toward := Vector3(0, 0, 14)
+	var point := from.lerp(toward, smoothstep(0.18, 0.58, phase))
+	point.y = scene.terrain.height_at(point.x, point.z) + rules.movement.eye_height
+	var yaw := 0.52 * sin(phase * TAU * 1.25)
+	camera.look_at_from_position(point, point + Game.view_direction(yaw, -0.055), Vector3.UP)
+
+
+## Measure wall time from the first playable frame instead of using engine
+## delta, which is adjusted after a stall and for a steady tick rate.
+func _measure_benchmark_frame() -> bool:
+	if _benchmark_started_usec < 0:
+		if predictor.started:
+			_benchmark_started_usec = _frame_started_usec
+		return false
+	var warmup_end := _benchmark_started_usec + roundi(settings["benchmark-warmup"] * 1000000)
+	if _frame_started_usec - _last_frame_usec >= warmup_end and _last_frame_usec > 0:
+		_benchmark_samples.append(_last_frame_usec)
+		if _benchmark_samples.size() >= BENCHMARK_MAX_SAMPLES:
+			_quit_with("benchmark exceeded the frame sample limit")
+			return true
+	if _frame_started_usec < warmup_end + roundi(settings["benchmark"] * 1000000) or _benchmark_samples.is_empty():
+		return false
+	var report := _benchmark_summary(_benchmark_samples)
+	report.merge(_render_diagnostics())
+	report.merge({
+		"map": scene.name,
+		"seed": str(session.welcome.match_seed),
+		"bots": settings["bots"],
+		"bot_ai": settings["bot-ai"],
+		"overview": settings["overview"],
+		"route": settings["benchmark-route"],
+		"fov_degrees": settings["fov"],
+		"warmup_seconds": settings["benchmark-warmup"],
+		"requested_seconds": settings["benchmark"],
+	})
+	var record := JSON.stringify(report)
+	var path: String = settings["benchmark-path"]
+	if path != "":
+		var file := FileAccess.open(path, FileAccess.WRITE)
+		if file == null:
+			_quit_with("could not write benchmark report: " + error_string(FileAccess.get_open_error()))
+			return true
+		file.store_line(record)
+		file.flush()
+		if file.get_error() != OK:
+			_quit_with("could not write benchmark report: " + error_string(file.get_error()))
+			return true
+	print("benchmark: ", record)
+	_finish()
+	return true
+
+
+static func _benchmark_summary(samples: PackedInt32Array) -> Dictionary:
+	samples.sort()
+	var count := samples.size()
+	var total := 0
+	var frames_over_33ms := 0
+	var frames_over_50ms := 0
+	for frame in samples:
+		total += frame
+		frames_over_33ms += int(frame > 33333)
+		frames_over_50ms += int(frame > 50000)
+	var tail_size := ceili(count * 0.01)
+	var tail_total := 0
+	for i in range(count - tail_size, count):
+		tail_total += samples[i]
+	return {
+		"frames": count,
+		"elapsed_seconds": total / 1000000.0,
+		"average_fps": count * 1000000.0 / total,
+		"fps_1pct_low": tail_size * 1000000.0 / tail_total,
+		"p50_ms": samples[ceili(count * 0.50) - 1] / 1000.0,
+		"p95_ms": samples[ceili(count * 0.95) - 1] / 1000.0,
+		"p99_ms": samples[ceili(count * 0.99) - 1] / 1000.0,
+		"max_ms": samples[count - 1] / 1000.0,
+		"frames_over_33ms": frames_over_33ms,
+		"frames_over_50ms": frames_over_50ms,
+	}
 
 
 func _finish() -> void:

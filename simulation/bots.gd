@@ -71,6 +71,9 @@ const DROP_HEIGHT := 1.0
 ## every PUSH_TICKS ticks.
 const SPACING := 1.2
 const PUSH_TICKS := 3
+## Give the first advance a job before bots settle into opportunistic fights.
+const OPENING_TICKS := 20 * Game.TICK_RATE
+const OPENING_CONTACT_RANGE := 11.0
 ## A bot that gets nowhere in STUCK_TICKS gives up its way.
 const STUCK_TICKS := 2 * Game.TICK_RATE
 ## OPEN_CELL is the size of the cells of the map of open ground.
@@ -138,6 +141,7 @@ var _open := PackedByteArray()
 var _cells := 0
 var _eye := 1.55
 var _aim_settle := 0.0
+var _opening_until := -1
 
 
 func _init(server: Server) -> void:
@@ -174,6 +178,7 @@ func spawn_all(how_many: int) -> void:
 
 
 func reset_for_round() -> void:
+	_opening_until = -1
 	var count := bots.size()
 	for bot in bots:
 		_server.soldiers.remove(bot.soldier)
@@ -263,6 +268,12 @@ func kill() -> void:
 ## update runs the bots for a tick: the living ones think when their turn
 ## comes, then move, aim and fire.
 func update() -> void:
+	var round := _server.flag_match
+	if _ai and _scene.name == "valley" and round != null:
+		if not round.started:
+			return
+		if _opening_until < 0:
+			_opening_until = _server.tick + OPENING_TICKS
 	_rays = RAYS_PER_TICK
 	_paths = PATHS_PER_TICK
 	if _ai:
@@ -332,6 +343,11 @@ func _look(bot: Bot, soldier: Soldier) -> int:
 	var forward := Vector2(sin(soldier.yaw), -cos(soldier.yaw))
 	var alert := _server.tick - bot.hurt_at < ALERT_TICKS
 	var cos_view := cos(VIEW_ANGLE)
+	var view_range := VIEW_RANGE
+	if bot.state == State.ADVANCE and not alert and _opening_until > _server.tick:
+		var assigned := _opening_flag(bot, soldier.team)
+		if not assigned.contains_flag_position(soldier.position):
+			view_range = OPENING_CONTACT_RANGE
 	var near_ids: Array[int] = []
 	var near_distances: Array[float] = []
 	var from := soldier.position
@@ -339,7 +355,7 @@ func _look(bot: Bot, soldier: Soldier) -> int:
 		var to := positions[k] - from
 		var flat := Vector2(to.x, to.z)
 		var distance := flat.length()
-		if distance > VIEW_RANGE:
+		if distance > view_range:
 			continue
 		if distance > NOTICE_RANGE and not alert and flat.dot(forward) < cos_view * distance:
 			continue
@@ -598,8 +614,12 @@ func _walk(bot: Bot, soldier: Soldier) -> void:
 			return
 		_paths -= 1
 		if bot.state != State.SEARCH:
-			bot.goal = _pick_goal(soldier)
-			bot.sprint = _random.randf() < 0.75
+			if _opening_until > tick:
+				bot.goal = _flag_approach(_opening_flag(bot, soldier.team))
+				bot.sprint = true
+			else:
+				bot.goal = _pick_goal(soldier)
+				bot.sprint = _random.randf() < 0.75
 		bot.path = _server.navigation.path(soldier.position, bot.goal)
 		bot.corner = 1
 		bot.progress_at = tick
@@ -689,15 +709,28 @@ func _pick_goal(soldier: Soldier) -> Vector3:
 	var zone: MapScene.Zone
 	var round := _server.flag_match
 	if _ai and round != null and round.started and round.state.result == MatchState.Result.ACTIVE:
-		zone = _flag_goal(soldier.team, round)
-		var approach := Vector2.from_angle(_random.randf() * TAU) * zone.radius * _random.randf() * 0.4
-		return _server.navigation.closest(zone.center + Vector3(approach.x, 0.5, approach.y))
+		return _flag_approach(_flag_goal(soldier.team, round))
 	if _scene.objectives.is_empty() or (_ai and _random.randf() < 0.12):
 		zone = _scene.zone_of(_enemy_of(soldier.team))
 	else:
 		zone = _scene.objectives[_random.randi_range(0, _scene.objectives.size() - 1)]
 	var offset := Vector2.from_angle(_random.randf() * TAU) * sqrt(_random.randf()) * zone.radius
 	return _server.navigation.closest(zone.center + Vector3(offset.x, 0.5, offset.y))
+
+
+func _flag_approach(zone: MapScene.Zone) -> Vector3:
+	var approach := Vector2.from_angle(_random.randf() * TAU) * zone.radius * _random.randf() * 0.4
+	return _server.navigation.closest(zone.center + Vector3(approach.x, 0.5, approach.y))
+
+
+## Each two-bot pair gets one lane. Rotate the lane order for Red as the
+## map is rotated, so the near bridge is the same job for either team.
+func _opening_flag(bot: Bot, team: int) -> MapScene.Zone:
+	var flags := _scene.flags
+	var lane := (bot.index / 2 + 1) % flags.size()
+	if team == Game.Team.RED:
+		lane = flags.size() - 1 - lane
+	return flags[lane]
 
 
 func _flag_goal(team: int, round: FlagMatch) -> MapScene.Zone:
