@@ -78,6 +78,14 @@ func _on_address_submitted(_text: String) -> void:
 	_on_join_pressed()
 
 
+func _on_credits_pressed() -> void:
+	%Credits.popup_centered()
+
+
+func _on_credit_link_clicked(url: Variant) -> void:
+	OS.shell_open(str(url))
+
+
 func _on_quit_pressed() -> void:
 	get_tree().quit()
 

@@ -201,15 +201,43 @@ autowrap_mode = 3
 [node name="QuitSeparator" type="HSeparator" parent="Center/Panel/Rows"]
 layout_mode = 2
 
-[node name="Quit" type="Button" parent="Center/Panel/Rows"]
+[node name="Footer" type="HBoxContainer" parent="Center/Panel/Rows"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="CreditsButton" type="Button" parent="Center/Panel/Rows/Footer"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Credits"
+
+[node name="Quit" type="Button" parent="Center/Panel/Rows/Footer"]
 custom_minimum_size = Vector2(0, 42)
 layout_mode = 2
+size_flags_horizontal = 3
 text = "Quit"
+
+[node name="Credits" type="AcceptDialog" parent="."]
+unique_name_in_owner = true
+title = "Asset credits"
+exclusive = true
+visible = false
+
+[node name="CreditsText" type="RichTextLabel" parent="Credits"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(440, 156)
+bbcode_enabled = true
+text = "[b]Gunshot Sounds[/b] — Vincent Sevedge (Tabasco), © 2009. Edited for Crowfield.
+[url=https://opengameart.org/content/gunshot-sounds]Source[/url] · [url=https://creativecommons.org/licenses/by/3.0/]CC BY 3.0[/url]
+
+[b]Gun Reload Sound Effects[/b] — Brian MacIntosh (BMacZero). Edited for Crowfield.
+[url=https://opengameart.org/content/gun-reload-sound-effects]Source[/url] · [url=https://creativecommons.org/publicdomain/zero/1.0/]CC0 1.0[/url]"
 
 [connection signal="pressed" from="Center/Panel/Rows/Solo" to="." method="_on_solo_pressed"]
 [connection signal="pressed" from="Center/Panel/Rows/Network/HostRow/Host" to="." method="_on_host_pressed"]
 [connection signal="text_submitted" from="Center/Panel/Rows/Network/JoinRow/Address" to="." method="_on_address_submitted"]
 [connection signal="pressed" from="Center/Panel/Rows/Network/JoinRow/Join" to="." method="_on_join_pressed"]
-[connection signal="pressed" from="Center/Panel/Rows/Quit" to="." method="_on_quit_pressed"]
+[connection signal="pressed" from="Center/Panel/Rows/Footer/Quit" to="." method="_on_quit_pressed"]
 [connection signal="item_selected" from="Center/Panel/Rows/Fields/Map" to="." method="_on_map_selected"]
 [connection signal="toggled" from="Center/Panel/Rows/NetworkToggle" to="." method="_on_network_toggled"]
+[connection signal="pressed" from="Center/Panel/Rows/Footer/CreditsButton" to="." method="_on_credits_pressed"]
+[connection signal="meta_clicked" from="Credits/CreditsText" to="." method="_on_credit_link_clicked"]
