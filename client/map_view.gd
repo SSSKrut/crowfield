@@ -82,6 +82,12 @@ func update_flags(state: MatchState) -> void:
 		_flag_labels[index].modulate = color.lightened(0.30)
 
 
+## Keep the objective names out of the first-person weapon sights.
+func set_flag_labels_visible(shown: bool) -> void:
+	for label in _flag_labels:
+		label.visible = shown
+
+
 static func _flag_color(team: int, contested: bool) -> Color:
 	if contested:
 		return Color8(242, 189, 83)

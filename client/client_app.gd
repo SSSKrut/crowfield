@@ -1409,6 +1409,8 @@ func _update_hud(feet: Vector3, own: Soldier) -> void:
 	hud.arsenal = arsenal
 	hud.fov = camera.fov
 	hud.aim = view_model.aim if _first_person() else 0.0
+	if map_view != null:
+		map_view.set_flag_labels_visible(hud.aim < 0.25)
 	hud.scoped = arsenal != null and _first_person() and view_model.scoped(arsenal.weapon())
 	if arsenal != null and own != null:
 		hud.spread = arsenal.spread(rules.weapons, _buttons & InputCommand.AIM != 0,
