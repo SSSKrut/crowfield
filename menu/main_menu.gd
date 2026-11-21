@@ -26,8 +26,19 @@ func _ready() -> void:
 	for map_name in MapScene.MAPS:
 		_map.add_item(map_name.capitalize())
 	_load()
+	_on_map_selected(_map.selected)
 	_show_status(message)
 	%Solo.grab_focus()
+
+
+func _on_map_selected(index: int) -> void:
+	var valley := MapScene.MAPS[index] == "valley"
+	%Subtitle.text = "Capture and hold the river flags to score." if valley else "Practice movement and combat."
+	%Solo.text = "Play Valley solo" if valley else "Play practice map solo"
+
+
+func _on_network_toggled(open: bool) -> void:
+	%Network.visible = open
 
 
 func _on_solo_pressed() -> void:

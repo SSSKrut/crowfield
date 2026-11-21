@@ -4,7 +4,7 @@
 [ext_resource type="Theme" path="res://menu/theme.tres" id="2_theme"]
 
 [sub_resource type="Gradient" id="Gradient_sky"]
-colors = PackedColorArray(0.36, 0.5, 0.62, 1, 0.07, 0.08, 0.1, 1)
+colors = PackedColorArray(0.2, 0.29, 0.29, 1, 0.055, 0.078, 0.082, 1)
 
 [sub_resource type="GradientTexture2D" id="GradientTexture2D_sky"]
 gradient = SubResource("Gradient_sky")
@@ -39,7 +39,7 @@ grow_horizontal = 2
 grow_vertical = 2
 
 [node name="Panel" type="PanelContainer" parent="Center"]
-custom_minimum_size = Vector2(500, 0)
+custom_minimum_size = Vector2(480, 0)
 layout_mode = 2
 
 [node name="Rows" type="VBoxContainer" parent="Center/Panel"]
@@ -48,7 +48,7 @@ theme_override_constants/separation = 12
 
 [node name="Title" type="Label" parent="Center/Panel/Rows"]
 layout_mode = 2
-theme_override_font_sizes/font_size = 44
+theme_override_font_sizes/font_size = 48
 text = "CROWFIELD"
 horizontal_alignment = 1
 
@@ -56,8 +56,10 @@ horizontal_alignment = 1
 layout_mode = 2
 theme_override_colors/font_color = Color(0.62, 0.67, 0.74, 1)
 theme_override_font_sizes/font_size = 15
-text = "Multiplayer infantry shooter prototype"
+unique_name_in_owner = true
+text = "Capture and hold the flags to score."
 horizontal_alignment = 1
+autowrap_mode = 3
 
 [node name="Gap" type="Control" parent="Center/Panel/Rows"]
 custom_minimum_size = Vector2(0, 4)
@@ -110,53 +112,65 @@ layout_mode = 2
 unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 42)
 layout_mode = 2
+theme_type_variation = &"PrimaryButton"
 text = "Play solo"
 
-[node name="HostTitle" type="Label" parent="Center/Panel/Rows"]
+[node name="NetworkToggle" type="CheckButton" parent="Center/Panel/Rows"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Play over the network"
+
+[node name="Network" type="VBoxContainer" parent="Center/Panel/Rows"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="HostTitle" type="Label" parent="Center/Panel/Rows/Network"]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.62, 0.67, 0.74, 1)
 theme_override_font_sizes/font_size = 15
-text = "Host a game: friends join your address and port"
+text = "Host a match"
 
-[node name="HostRow" type="HBoxContainer" parent="Center/Panel/Rows"]
+[node name="HostRow" type="HBoxContainer" parent="Center/Panel/Rows/Network"]
 layout_mode = 2
 theme_override_constants/separation = 10
 
-[node name="PortLabel" type="Label" parent="Center/Panel/Rows/HostRow"]
+[node name="PortLabel" type="Label" parent="Center/Panel/Rows/Network/HostRow"]
 layout_mode = 2
 text = "UDP port"
 
-[node name="Port" type="SpinBox" parent="Center/Panel/Rows/HostRow"]
+[node name="Port" type="SpinBox" parent="Center/Panel/Rows/Network/HostRow"]
 unique_name_in_owner = true
 layout_mode = 2
 min_value = 1.0
 max_value = 65535.0
 value = 7777.0
 
-[node name="Host" type="Button" parent="Center/Panel/Rows/HostRow"]
+[node name="Host" type="Button" parent="Center/Panel/Rows/Network/HostRow"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 42)
 layout_mode = 2
 size_flags_horizontal = 3
 text = "Host game"
 
-[node name="JoinTitle" type="Label" parent="Center/Panel/Rows"]
+[node name="JoinTitle" type="Label" parent="Center/Panel/Rows/Network"]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.62, 0.67, 0.74, 1)
 theme_override_font_sizes/font_size = 15
-text = "Join a game: the port defaults to 7777"
+text = "Join a server"
 
-[node name="JoinRow" type="HBoxContainer" parent="Center/Panel/Rows"]
+[node name="JoinRow" type="HBoxContainer" parent="Center/Panel/Rows/Network"]
 layout_mode = 2
 theme_override_constants/separation = 10
 
-[node name="Address" type="LineEdit" parent="Center/Panel/Rows/JoinRow"]
+[node name="Address" type="LineEdit" parent="Center/Panel/Rows/Network/JoinRow"]
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
 placeholder_text = "192.168.1.20 or host:port"
 
-[node name="Join" type="Button" parent="Center/Panel/Rows/JoinRow"]
+[node name="Join" type="Button" parent="Center/Panel/Rows/Network/JoinRow"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(130, 42)
 layout_mode = 2
@@ -179,7 +193,9 @@ layout_mode = 2
 text = "Quit"
 
 [connection signal="pressed" from="Center/Panel/Rows/Solo" to="." method="_on_solo_pressed"]
-[connection signal="pressed" from="Center/Panel/Rows/HostRow/Host" to="." method="_on_host_pressed"]
-[connection signal="text_submitted" from="Center/Panel/Rows/JoinRow/Address" to="." method="_on_address_submitted"]
-[connection signal="pressed" from="Center/Panel/Rows/JoinRow/Join" to="." method="_on_join_pressed"]
+[connection signal="pressed" from="Center/Panel/Rows/Network/HostRow/Host" to="." method="_on_host_pressed"]
+[connection signal="text_submitted" from="Center/Panel/Rows/Network/JoinRow/Address" to="." method="_on_address_submitted"]
+[connection signal="pressed" from="Center/Panel/Rows/Network/JoinRow/Join" to="." method="_on_join_pressed"]
 [connection signal="pressed" from="Center/Panel/Rows/Quit" to="." method="_on_quit_pressed"]
+[connection signal="item_selected" from="Center/Panel/Rows/Fields/Map" to="." method="_on_map_selected"]
+[connection signal="toggled" from="Center/Panel/Rows/NetworkToggle" to="." method="_on_network_toggled"]
