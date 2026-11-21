@@ -32,7 +32,7 @@ func _ready() -> void:
 
 
 func _on_map_selected(index: int) -> void:
-	var valley := MapScene.MAPS[index] == "valley"
+	var valley: bool = MapScene.MAPS[index] == "valley"
 	%Subtitle.text = "Capture and hold the river flags to score." if valley else "Practice movement and combat."
 	%Solo.text = "Play Valley solo" if valley else "Play practice map solo"
 
