@@ -173,6 +173,14 @@ func spawn_all(how_many: int) -> void:
 		_spawn(bot, Game.Team.BLUE if i % 2 == 0 else Game.Team.RED)
 
 
+func reset_for_round() -> void:
+	var count := bots.size()
+	for bot in bots:
+		_server.soldiers.remove(bot.soldier)
+	bots.clear()
+	spawn_all(count)
+
+
 ## _spawn puts a bot on the map as a new soldier of the team: in the zone of
 ## its team, or anywhere on a map whose zones are points.
 func _spawn(bot: Bot, team: int) -> void:

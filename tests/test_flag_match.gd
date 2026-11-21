@@ -1,6 +1,7 @@
 extends TestCase
 
 const FiringRange := preload("res://tests/firing_range.gd")
+const Harness := preload("res://tests/harness.gd")
 
 
 func test_flag_capture_contest_and_result() -> void:
@@ -73,6 +74,69 @@ func test_flag_match_kills_sent_to_the_shooter_only() -> void:
 	var returning := range.join("shooter", range.client.welcome.session_token)
 	range.step(4)
 	check_equal(returning.snapshot.match_state.kills, 1, "the counter survives reconnecting")
+
+
+func test_finished_flag_match_remains_until_the_last_player_leaves() -> void:
+	var harness := _valley_harness()
+	var first := harness.join("first")
+	var second := harness.join("second")
+	var server := harness.server
+	var state := server.flag_match.state
+	state.result = MatchState.Result.BLUE
+	state.blue_score = MatchState.SCORE_TO_WIN
+	state.flags[0].owner = Game.Team.BLUE
+	var old_bot := server.bots.bots[0].soldier
+
+	first.conn.close(Protocol.QUIT_REASON)
+	harness.step(4)
+	check_equal(second.snapshot.match_state.result, MatchState.Result.BLUE, "the remaining player sees the result")
+	second.conn.close("connection lost")
+	harness.step(4)
+	check_equal(server.flag_match.state.result, MatchState.Result.BLUE, "keep the result during the reconnect window")
+
+	var returned := harness.join("second", second.welcome.session_token)
+	harness.step(4)
+	check_equal(returned.snapshot.match_state.result, MatchState.Result.BLUE, "the returning player sees the result")
+	returned.conn.close(Protocol.QUIT_REASON)
+	harness.step()
+	check(server.soldiers.get_soldier(old_bot) == null, "the old bot soldier was replaced")
+	_check_fresh_round(harness)
+
+
+func test_finished_flag_match_resets_after_the_reconnect_window() -> void:
+	var harness := _valley_harness()
+	var player := harness.join("player")
+	harness.server.flag_match.state.result = MatchState.Result.RED
+	harness.server.flag_match.state.red_score = MatchState.SCORE_TO_WIN
+
+	player.conn.close("connection lost")
+	harness.step()
+	check_equal(harness.server.flag_match.state.result, MatchState.Result.RED, "pending reconnect holds the result")
+	harness.step(20)
+	_check_fresh_round(harness)
+
+
+func _valley_harness() -> Harness:
+	var harness := Harness.new(func(settings: ServerSettings) -> void:
+		settings.map = "valley"
+		settings.bots = 2
+		settings.reconnect_window = 0.25)
+	cleanup(func() -> void: harness.close())
+	return harness
+
+
+func _check_fresh_round(harness: Harness) -> void:
+	var round := harness.server.flag_match
+	check(not round.started, "the fresh round waits for a player")
+	check_equal(round.state.result, MatchState.Result.ACTIVE, "a fresh round can be played")
+	check_equal(round.state.seconds, MatchState.DURATION_SECONDS, "the full round time is restored")
+	check_equal(round.state.blue_score + round.state.red_score, 0, "scores are cleared")
+	for flag in round.state.flags:
+		check_equal(flag.owner, Game.Team.NONE, "ownership is cleared")
+	var next := harness.join("next")
+	harness.step(4)
+	check(round.started, "the next player starts the fresh round")
+	check_equal(next.snapshot.match_state.result, MatchState.Result.ACTIVE, "the next player receives the new round")
 
 
 func test_valley_bots_capture_a_flag() -> void:

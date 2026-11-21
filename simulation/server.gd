@@ -129,6 +129,8 @@ func add_listener(listener: Listener) -> void:
 func step() -> void:
 	var started := Time.get_ticks_usec()
 	profile.start()
+	_expire_reservations()
+	_reset_finished_round()
 	_handle_connections()
 	_drop_silent_sessions()
 	_respawn_dead()
@@ -471,6 +473,7 @@ func _leave(session: Session, reason: String, by_peer: bool) -> void:
 		reservation.until = clock.call() + settings.reconnect_window
 		reservations.append(reservation)
 	print("player %d \"%s\" left: %s" % [player.id, player.name, reason])
+	_reset_finished_round()
 
 
 ## _reject tells the client why before closing. The reason also travels as the
@@ -500,10 +503,27 @@ func _drop_silent_sessions() -> void:
 			_drop(session, "no hello in time")
 		elif player != null and now - player.last_input > settings.input_timeout:
 			_drop(session, "no input in time")
+
+
+func _expire_reservations() -> void:
+	if reservations.is_empty():
+		return
+	var now: float = clock.call()
 	for reservation: Reservation in reservations.duplicate():
 		if now > reservation.until:
 			print("player %d \"%s\" did not return" % [reservation.id, reservation.name])
 			reservations.erase(reservation)
+
+
+## Retain the result for connected players and those who can reconnect.
+## A fresh round waits for the next player to spawn, like the first one did.
+func _reset_finished_round() -> void:
+	if flag_match == null or flag_match.state.result == MatchState.Result.ACTIVE:
+		return
+	if not reservations.is_empty() or player_count() != 0:
+		return
+	flag_match = FlagMatch.new(scene.flags)
+	bots.reset_for_round()
 
 
 # Combat.
