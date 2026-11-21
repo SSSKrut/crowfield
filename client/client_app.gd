@@ -425,6 +425,7 @@ func _build_soldiers() -> void:
 	add_child(sounds)
 	view_model = ViewModel.new()
 	view_model.sun = sun
+	view_model.performance_mode = settings["graphics"] == "performance"
 	add_child(view_model)
 	hud = Hud.new()
 	var layer := CanvasLayer.new()
@@ -846,6 +847,11 @@ func _process(delta: float) -> void:
 	bodies.update(delta)
 	_charge("bodies")
 	_update_camera(feet)
+	var local_footing := own != null and _first_person() and _focused and not menu.visible and _reconnect_since < 0
+	var footfall := view_model.footing(delta, feet, own != null and own.grounded,
+		speed / rules.movement.sprint_speed, local_footing)
+	if footfall != ViewModel.Footfall.NONE:
+		sounds.footstep(feet, scene, footfall == ViewModel.Footfall.LAND)
 	_update_weapon(delta, own, speed)
 	effects.update(delta)
 	_charge("weapon")
@@ -1186,6 +1192,8 @@ func _update_weapon(delta: float, own: Soldier, speed: float) -> void:
 	var placed := false
 	if _first_person():
 		view_model.show_weapon(arsenal.weapon(), soldier_views.tint(_team()))
+		if not _shots.is_empty():
+			view_model.fired(_noise(_shots[-1].direction))
 		placed = view_model.place(camera, arsenal.weapon(), arsenal.action, clampf(progress, 0, 1))
 	else:
 		view_model.hide_weapon()
@@ -1200,8 +1208,9 @@ func _update_weapon(delta: float, own: Soldier, speed: float) -> void:
 			muzzle = camera.global_position
 		if placed:
 			muzzle = view_model.muzzle_in_world(camera)
-			view_model.fired(_noise(shot.direction))
-		effects.shot(muzzle, end, not hit.is_empty())
+		effects.shot(muzzle, end, not hit.is_empty(), hit.get("normal", Vector3.ZERO))
+		if not hit.is_empty():
+			sounds.impact_at(end)
 		sounds.weapon(shot.weapon, Arsenal.EVENT_FIRED)
 	sounds.weapon(arsenal.weapon(), _events & ~Arsenal.EVENT_FIRED)
 	_shots.clear()
