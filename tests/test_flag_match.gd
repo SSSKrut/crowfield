@@ -65,8 +65,8 @@ func test_flag_match_kills_sent_to_the_shooter_only() -> void:
 	var guest := range.join("guest")
 	var target := range.target(Game.Team.RED, Vector3(0, 0, -1))
 	range.step(2)
-	range.fire(Vector3(0, 1.5, -1))
-	range.fire(Vector3(0, 1.5, -1))
+	range.fire(Vector3(0, 1.64, -1))
+	range.fire(Vector3(0, 1.64, -1))
 	check_equal(range.health(target), 0, "headshots kill the target")
 	if check(range.client.snapshot.match_state != null and guest.snapshot.match_state != null, "both clients receive match state"):
 		check_equal(range.client.snapshot.match_state.kills, 1, "the shooter receives the kill")
