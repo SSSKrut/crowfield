@@ -356,11 +356,11 @@ func place(camera: Camera3D, kind: int, action: int, progress: float) -> bool:
 		0.012 * _stride * sin(phase) * calm + _sway.x * calm,
 		(-0.009 * _stride * absf(cos(phase)) + _sway.y - _landing_dip) * calm,
 		-shape.kick_back * _recoil * (1 - 0.5 * aim))
-	offset += Vector3(-0.03, -0.06, -0.06) * _sprint
-	var pitch := shape.kick_pitch * _recoil * calm - 0.45 * _sprint
-	# Sprinting carries the weapon across the body, muzzle down and left.
-	var yaw := -0.55 * _sprint
-	var roll := (_sway.x * -0.5 + 0.018 * sin(phase) * _stride) * calm + 0.34 * _sprint
+	# Lower and cant the weapon while keeping the fore-end in the frame.
+	offset += Vector3(-0.03, -0.012, -0.04) * _sprint
+	var pitch := shape.kick_pitch * _recoil * calm - 0.13 * _sprint
+	var yaw := -0.42 * _sprint
+	var roll := (_sway.x * -0.5 + 0.018 * sin(phase) * _stride) * calm + 0.26 * _sprint
 	match action:
 		Arsenal.Action.EQUIPPING:
 			var lower := (1 - progress) * (1 - progress)
