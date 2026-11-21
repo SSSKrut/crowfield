@@ -5,11 +5,17 @@ extends Node3D
 
 const ROUTE_FONT := preload("res://assets/type/BarlowCondensed-Bold.ttf")
 const GRASS_SHADER := preload("res://assets/valley/grass.gdshader")
-const RIDGE_SAMPLES := 96
+const RIDGE_SHADER := preload("res://assets/valley/skyline.gdshader")
+const RIDGE_MEADOW := preload("res://assets/valley/aerial_grass_rock-diff.jpg")
+const RIDGE_SHALE := preload("res://assets/valley/rocky_terrain_02-diff.jpg")
+const RIDGE_SAMPLES := 240
+const RIDGE_RINGS := 33
+const RIDGE_NEAR := 122.0
+const RIDGE_FAR := 612.0
+## Ridge center, spread, and mean height in meters.
+const RIDGE_BANDS := [Vector3(192.0, 34.0, 47.0), Vector3(331.0, 51.0, 77.0), Vector3(507.0, 68.0, 122.0)]
 const GRASS_TILE := 18
 const GRASS_BLADE_COUNT := 6
-const RIDGE_REACH := [122.0, 172.0, 248.0, 365.0]
-const RIDGE_HEIGHT := [0.0, 31.0, 53.0, 19.0]
 
 var _scene: MapScene
 var _terrain: Terrain
@@ -26,45 +32,94 @@ func _init(map: MapScene, wear: PackedFloat32Array) -> void:
 	_build_gate_signs()
 
 
-## The ridges sit outside the playable terrain, with near vertices below the
-## existing boundary hill so the old terrain edge cannot open a visible seam.
+## The overlap starts under Valley's render terrain. From there three broken
+## ridges rise in front of each other. One indexed mesh keeps the work out of
+## the shadow pass and leaves the authoritative terrain and bounds untouched.
 func _build_ridges() -> void:
-	var mesh := SurfaceTool.new()
-	mesh.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var rings: Array[PackedVector3Array] = []
-	for layer in 4:
-		var ring := PackedVector3Array()
+	var shape := FastNoiseLite.new()
+	shape.seed = 41783
+	shape.frequency = 0.009
+	shape.fractal_octaves = 4
+	var detail := FastNoiseLite.new()
+	detail.seed = 9161
+	detail.frequency = 0.031
+	detail.fractal_octaves = 3
+	var vertices := PackedVector3Array()
+	var normals := PackedVector3Array()
+	var colors := PackedColorArray()
+	var indices := PackedInt32Array()
+	vertices.resize(RIDGE_RINGS * RIDGE_SAMPLES)
+	colors.resize(vertices.size())
+	indices.resize((RIDGE_RINGS - 1) * RIDGE_SAMPLES * 6)
+	for i in RIDGE_SAMPLES:
+		var direction := Vector2.from_angle(TAU * float(i) / RIDGE_SAMPLES)
+		var square_scale := 1.0 / maxf(absf(direction.x), absf(direction.y))
+		var edge := direction * RIDGE_NEAR * square_scale
+		var edge_height := visual_height(_terrain.height_at(edge.x, edge.y), edge.x, edge.y, _scene.play_area)
+		for ring in RIDGE_RINGS:
+			var reach := lerpf(RIDGE_NEAR, RIDGE_FAR, float(ring) / (RIDGE_RINGS - 1))
+			var square_mix := 1.0 - smoothstep(RIDGE_NEAR, 220.0, reach)
+			var at := direction * (reach + RIDGE_NEAR * (square_scale - 1.0) * square_mix)
+			var height := _ridge_elevation(reach, direction, at, shape, detail)
+			height = lerpf(edge_height - 0.6, height, smoothstep(RIDGE_NEAR, 167.0, reach))
+			var index := ring * RIDGE_SAMPLES + i
+			vertices[index] = Vector3(at.x, height, at.y)
+			var woods := 0.46 + 1.21 * shape.get_noise_2d(at.x + 850.0, at.y - 370.0) \
+				+ 0.30 * detail.get_noise_2d(at.x + 260.0, at.y + 140.0)
+			var heath := 0.50 + 0.78 * detail.get_noise_2d(at.x - 70.0, at.y + 530.0)
+			colors[index] = Color(clampf(woods, 0, 1), clampf(heath, 0, 1), smoothstep(148, 558, reach))
+	for ring in RIDGE_RINGS:
 		for i in RIDGE_SAMPLES:
-			var angle := TAU * float(i) / RIDGE_SAMPLES
-			var dir := Vector2.from_angle(angle)
-			var extent := maxf(absf(dir.x), absf(dir.y))
-			var reach: float = RIDGE_REACH[layer]
-			var ridge := sin(5.0 * angle + float(layer) * 1.8) * 0.37 + sin(11.0 * angle - float(layer) * 2.1) * 0.15
-			var height: float = RIDGE_HEIGHT[layer] + (33.0 + layer * 8.0) * ridge
-			if layer == 0:
-				var p := dir * reach / extent
-				height = visual_height(_terrain.height_at(p.x, p.y), p.x, p.y, _scene.play_area) - 0.5
-			ring.append(Vector3(dir.x * reach / extent, height, dir.y * reach / extent))
-		rings.append(ring)
-	var colors := [Color8(64, 73, 59), Color8(62, 74, 61), Color8(59, 71, 69), Color8(64, 75, 76)]
-	for layer in range(3):
-		for i in RIDGE_SAMPLES:
-			var next := (i + 1) % RIDGE_SAMPLES
-			_ridge_vertex(mesh, rings[layer][i], colors[layer])
-			_ridge_vertex(mesh, rings[layer][next], colors[layer])
-			_ridge_vertex(mesh, rings[layer + 1][i], colors[layer + 1])
-			_ridge_vertex(mesh, rings[layer][next], colors[layer])
-			_ridge_vertex(mesh, rings[layer + 1][next], colors[layer + 1])
-			_ridge_vertex(mesh, rings[layer + 1][i], colors[layer + 1])
-	mesh.generate_normals()
-	var material := _plant_material()
-	material.cull_mode = BaseMaterial3D.CULL_DISABLED
-	mesh.set_material(material)
-	var ridge_landscape := MeshInstance3D.new()
-	ridge_landscape.name = "DistantRidges"
-	ridge_landscape.mesh = mesh.commit()
-	ridge_landscape.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	add_child(ridge_landscape)
+			var offset := ring * RIDGE_SAMPLES
+			var side := vertices[offset + (i + 1) % RIDGE_SAMPLES] - vertices[offset + posmod(i - 1, RIDGE_SAMPLES)]
+			var radial := vertices[mini(RIDGE_RINGS - 1, ring + 1) * RIDGE_SAMPLES + i] \
+				- vertices[maxi(0, ring - 1) * RIDGE_SAMPLES + i]
+			normals.append(side.cross(radial).normalized())
+			if ring == RIDGE_RINGS - 1:
+				continue
+			var a := offset + i
+			var b := offset + (i + 1) % RIDGE_SAMPLES
+			var c := a + RIDGE_SAMPLES
+			var d := b + RIDGE_SAMPLES
+			var triangle := a * 6
+			indices[triangle] = a
+			indices[triangle + 1] = c
+			indices[triangle + 2] = b
+			indices[triangle + 3] = b
+			indices[triangle + 4] = c
+			indices[triangle + 5] = d
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = vertices
+	arrays[Mesh.ARRAY_NORMAL] = normals
+	arrays[Mesh.ARRAY_COLOR] = colors
+	arrays[Mesh.ARRAY_INDEX] = indices
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	var material := ShaderMaterial.new()
+	material.shader = RIDGE_SHADER
+	material.set_shader_parameter("meadow", RIDGE_MEADOW)
+	material.set_shader_parameter("shale", RIDGE_SHALE)
+	mesh.surface_set_material(0, material)
+	var landscape := MeshInstance3D.new()
+	landscape.name = "DistantRidges"
+	landscape.mesh = mesh
+	landscape.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(landscape)
+
+
+static func _ridge_elevation(reach: float, direction: Vector2, at: Vector2,
+		shape: FastNoiseLite, detail: FastNoiseLite) -> float:
+	var height := 4.0
+	for band: Vector3 in RIDGE_BANDS:
+		var along := direction * band.x
+		var fold := shape.get_noise_2d(along.x + band.z * 13.0, along.y - band.x * 1.7)
+		var mass := shape.get_noise_2d(along.x - band.z * 2.0, along.y + band.x)
+		var crest := band.x + fold * band.y * 0.72
+		var side := (reach - crest) / band.y
+		height += band.z * (1.0 + 0.56 * mass) * exp(-0.5 * side * side)
+	height += (shape.get_noise_2d(at.x, at.y) * 9.0 + detail.get_noise_2d(at.x, at.y) * 2.6)
+	return height
 
 
 ## Shape the corner-to-corner skyline outside the invisible collision wall.
@@ -75,12 +130,6 @@ static func visual_height(height: float, x: float, z: float, play_area: float) -
 	var peak := sin(x * 0.058 - z * 0.046) * sin(z * 0.031 + 1.5)
 	var shape := height * (0.38 + 0.39 * saddle) + 3.0 + 10.0 * peak
 	return lerpf(height, shape, influence)
-
-
-static func _ridge_vertex(mesh: SurfaceTool, at: Vector3, color: Color) -> void:
-	var shade := 0.93 + 0.07 * sin(at.x * 0.19 + at.z * 0.35)
-	mesh.set_color(Color(color.r * shade, color.g * shade, color.b * shade))
-	mesh.add_vertex(at)
 
 
 func _build_woodland() -> void:
