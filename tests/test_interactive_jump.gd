@@ -244,3 +244,29 @@ func _mouse_motion(relative: Vector2) -> void:
 	event.screen_relative = relative
 	Input.parse_input_event(event)
 	Input.flush_buffered_events()
+
+
+func test_crouch_key_lowers_the_live_camera_and_releases() -> void:
+	if not await _start_client(60):
+		return
+	var tick := _client.session.tick
+	_key(KEY_C, true)
+	cleanup(func() -> void: _key(KEY_C, false))
+	var commands := await _commands(tick, 2)
+	if not check(commands.size() == 2 and commands[0].has(InputCommand.CROUCH)
+			and commands[1].has(InputCommand.CROUCH), "held C keeps setting crouch across ticks"):
+		return
+	for _frame in FRAME_LIMIT:
+		if _client.session.player.crouched:
+			break
+		await _tree.process_frame
+	var tuning := _client.rules.movement
+	var relative_y := _client.camera.global_position.y - _client._feet.y
+	check(_client.session.player.crouched and _client.predictor.soldier.crouched, "actual local server and prediction crouch")
+	check_near(relative_y, tuning.view_height(true), 0.005, "camera uses authoritative crouch eye")
+	_key(KEY_C, false)
+	commands = await _commands(_client.session.tick, 2)
+	check(commands.size() == 2 and not commands[0].has(InputCommand.CROUCH)
+		and not commands[1].has(InputCommand.CROUCH), "released C clears the input")
+	check(not _client.predictor.soldier.crouched, "camera rises where the standing capsule fits")
+	check_near(_client.camera.global_position.y - _client._feet.y, tuning.view_height(), 0.005, "camera returns to its standing eye")

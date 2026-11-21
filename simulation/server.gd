@@ -300,7 +300,7 @@ func _reinforcement_is_safe(team: int, point: Vector3) -> bool:
 			return false
 		if distance > REINFORCEMENT_SIGHT_RANGE:
 			continue
-		var from := soldier.position + eye
+		var from := soldier.position + Vector3.UP * rules.movement.view_height(soldier.crouched)
 		for target in [point + eye, point + eye * 0.65]:
 			if _reinforcement_rays <= 0:
 				return false
@@ -701,7 +701,7 @@ func _hitscan(pending: PendingShot) -> Array:
 		var pose := history.at(id, pending.view)
 		if pose.is_empty() or not pose[2]:
 			continue
-		var hit := Hitboxes.ray(shot.origin, shot.direction, reach, pose[0], pose[1])
+		var hit := Hitboxes.ray(shot.origin, shot.direction, reach, pose[0], pose[1], pose[3])
 		if not hit.is_empty():
 			reach = hit[0]
 			struck = [id, hit[1], hit[0]]

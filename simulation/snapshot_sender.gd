@@ -99,6 +99,7 @@ func _build(index: int) -> void:
 	if own != null:
 		private.position = own.position
 		private.velocity = own.velocity
+		private.crouched = own.crouched
 		private.arsenal = own.arsenal
 		private.health = own.health
 		if not own.alive:
@@ -181,7 +182,7 @@ func _prioritize(server: Server, player: ServerPlayer) -> void:
 	var forward := Vector3.ZERO
 	var center := Vector3(0, server.rules.movement.center_height(), 0)
 	if viewer != null:
-		eye = viewer.position + Vector3(0, server.rules.movement.eye_height, 0)
+		eye = viewer.position + Vector3.UP * server.rules.movement.view_height(viewer.crouched)
 		forward = Game.view_direction(player.last.yaw_radians(), player.last.pitch_radians())
 	var candidates := player.candidates
 	candidates.resize(0)

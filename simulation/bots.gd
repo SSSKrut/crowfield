@@ -382,20 +382,21 @@ func _look(bot: Bot, soldier: Soldier) -> int:
 			bot.think_at = _server.tick + 1
 			return 0
 		var enemy := _server.soldiers.get_soldier(id)
-		if _sees(soldier, enemy.position):
+		if _sees(soldier, enemy):
 			return id
 	return 0
 
 
 ## _sees tells whether a soldier's eye sees the body or the head of a soldier
 ## standing at a point, by rays through the static world.
-func _sees(soldier: Soldier, at: Vector3) -> bool:
+func _sees(soldier: Soldier, target: Soldier) -> bool:
 	var eye := soldier.position + Vector3(0, _eye, 0)
-	for height: float in [AIM_HEIGHT, HEAD_HEIGHT]:
+	for box in [1, 0]:
 		if _rays <= 0:
 			return false
 		_rays -= 1
-		var point: Vector3 = at + Vector3(0, height, 0)
+		var point := Hitboxes.center(box, target.position, target.yaw, true) if target.crouched \
+			else target.position + Vector3.UP * (AIM_HEIGHT if box == 1 else HEAD_HEIGHT)
 		var distance := eye.distance_to(point)
 		var hit := _server.cast_ray(eye, (point - eye) / distance, distance, Game.LAYER_STATIC | Game.LAYER_VEHICLE)
 		if hit < 0:
@@ -452,7 +453,7 @@ func _fight(bot: Bot, soldier: Soldier) -> void:
 		return
 	if tick >= bot.check_at and _rays > 0:
 		bot.check_at = tick + SIGHT_TICKS
-		if _sees(soldier, target.position):
+		if _sees(soldier, target):
 			bot.seen_at = tick
 			bot.last_seen = target.position
 	if tick - bot.seen_at > LOSE_TICKS:
@@ -461,11 +462,16 @@ func _fight(bot: Bot, soldier: Soldier) -> void:
 		return
 	# The bot sees its target as it was a reaction ago.
 	var seen := target.position
+	var seen_yaw := target.yaw
+	var seen_crouched := target.crouched
 	var pose := _server.history.at(target.id, tick - 1 - bot.reaction)
 	if not pose.is_empty():
 		seen = pose[0]
+		seen_yaw = pose[1]
+		seen_crouched = pose[3]
 	var eye := soldier.position + Vector3(0, _eye, 0)
-	var aim := seen + Vector3(0, AIM_HEIGHT, 0) - eye
+	var point := Hitboxes.center(1, seen, seen_yaw, true) if seen_crouched else seen + Vector3.UP * AIM_HEIGHT
+	var aim := point - eye
 	var distance := aim.length()
 	var yaw := Game.yaw_of(aim)
 	var pitch := atan2(aim.y, Vector2(aim.x, aim.z).length())

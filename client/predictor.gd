@@ -126,6 +126,7 @@ func reconcile(server: PlayerState) -> void:
 		soldier = Soldier.new()
 		soldier.id = server.soldier
 		soldier.position = server.position
+		soldier.crouched = server.crouched
 		soldier.arsenal = server.arsenal
 		return
 	var at := server.last_processed_tick
@@ -138,7 +139,8 @@ func reconcile(server: PlayerState) -> void:
 	var slot := _ticks[at % HISTORY]
 	var known := started and slot.tick == at and slot.stepped
 	var moved := not known or not _near(slot.soldier.position, server.position, ACCEPTED_POSITION_ERROR) \
-		or not _near(slot.soldier.velocity, server.velocity, ACCEPTED_VELOCITY_ERROR)
+		or not _near(slot.soldier.velocity, server.velocity, ACCEPTED_VELOCITY_ERROR) \
+		or slot.soldier.crouched != server.crouched
 	if not moved and slot.soldier.arsenal.agrees(server.arsenal):
 		return
 	var before := soldier.position
@@ -147,9 +149,11 @@ func reconcile(server: PlayerState) -> void:
 	confirmed.alive = true
 	confirmed.position = server.position
 	confirmed.velocity = server.velocity
+	confirmed.crouched = server.crouched
 	confirmed.health = server.health
 	confirmed.arsenal = server.arsenal.copy()
-	if known and slot.soldier.position.distance_to(server.position) < TELEPORT_DISTANCE:
+	if known and slot.soldier.crouched == server.crouched \
+			and slot.soldier.position.distance_to(server.position) < TELEPORT_DISTANCE:
 		# The ground the prediction had at that tick holds for the server's
 		# position, which is at most a step away.
 		confirmed.grounded = slot.soldier.grounded

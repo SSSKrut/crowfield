@@ -3,11 +3,13 @@ extends RefCounted
 ## Shared infantry geometry and animation resources. Each soldier owns its pose,
 ## and marks take their team's colour without adding a material or draw call.
 
-const CLIPS := [&"Idle", &"Walking", &"Running"]
-enum Clip { IDLE, WALKING, RUNNING }
-const _PERIODS := [2.6, 0.56, 0.43]
-const _STEP_LENGTH := [0.0, 0.73, 0.91]
-const _STANCE_PORTION := [0.0, 0.61, 0.52]
+const CLIPS := [&"Idle", &"Walking", &"Running", &"CrouchIdle", &"CrouchWalking"]
+enum Clip { IDLE, WALKING, RUNNING, CROUCH_IDLE, CROUCH_WALKING }
+const _PERIODS := [2.6, 0.56, 0.43, 2.0, 0.42]
+const _STEP_LENGTH := [0.0, 0.73, 0.91, 0.0, 0.42]
+const _STANCE_PORTION := [0.0, 0.61, 0.52, 0.0, 0.60]
+const _CROUCH_HIP_SHIFT := 0.26
+const _CROUCH_ANKLE_DROP := 0.163
 
 const _SHADER := """
 shader_type spatial;
@@ -116,7 +118,7 @@ func _clip(skeleton: Skeleton3D, clip: int) -> Animation:
 	var position := animation.add_track(Animation.TYPE_POSITION_3D)
 	animation.track_set_path(position, NodePath("Skeleton3D:Hips"))
 	var hips := skeleton.get_bone_rest(bones["Hips"]).origin
-	var tracked := ["Hips", "Torso_2", "Head_2", "UpperLeg.L", "UpperLeg.R",
+	var tracked := ["Hips", "Abdomen", "Torso_2", "Head_2", "UpperLeg.L", "UpperLeg.R",
 		"LowerLeg.L", "LowerLeg.R", "Foot.L", "Foot.R", "UpperArm.L", "UpperArm.R"]
 	for name in tracked:
 		var track := animation.add_track(Animation.TYPE_ROTATION_3D)
@@ -126,10 +128,15 @@ func _clip(skeleton: Skeleton3D, clip: int) -> Animation:
 		var phase := TAU * sample / STEPS
 		var time := animation.length * sample / STEPS
 		var bounce := 0.0
+		var pelvis := hips
 		var poses := {}
 		if clip == Clip.IDLE:
 			poses["Torso_2"] = Vector3(0.013 * sin(phase), 0.012 * sin(phase), 0)
 			poses["Head_2"] = Vector3(-0.008 * sin(phase), 0, 0)
+		elif clip == Clip.CROUCH_IDLE or clip == Clip.CROUCH_WALKING:
+			_crouch_pose(poses, clip, float(sample) / STEPS)
+			pelvis.z -= _CROUCH_HIP_SHIFT
+			bounce = -_sole_height(skeleton, poses)
 		else:
 			var running := clip == Clip.RUNNING
 			var strength := 1.0 if running else 0.7
@@ -144,30 +151,48 @@ func _clip(skeleton: Skeleton3D, clip: int) -> Animation:
 				poses["Foot." + side] = Vector3(leg.z, 0, 0)
 				poses["UpperArm." + side] = Vector3(0.028 * sin(TAU * foot_phase), 0, 0)
 			bounce = -_sole_height(skeleton, poses)
-		animation.position_track_insert_key(position, time, hips + Vector3.UP * bounce)
+		animation.position_track_insert_key(position, time, pelvis + Vector3.UP * bounce)
 		for i in tracked.size():
 			var angles: Vector3 = poses.get(tracked[i], Vector3.ZERO)
 			animation.rotation_track_insert_key(i + 1, time, Quaternion.from_euler(angles))
 	return animation
 
 
+## Fold the knees beneath a lowered pelvis and lean the upper body forward.
+## Both ankles retain their full leg lengths and use the grounded sole solve.
+func _crouch_pose(poses: Dictionary, clip: int, cycle: float) -> void:
+	var moving := clip == Clip.CROUCH_WALKING
+	var sway := sin(TAU * cycle)
+	poses["Hips"] = Vector3(0, -0.04 * sway if moving else 0, 0)
+	poses["Abdomen"] = Vector3(0.90 + 0.01 * sway, 0, 0)
+	poses["Torso_2"] = Vector3(0.27, 0.04 * sway if moving else 0, 0)
+	poses["Head_2"] = Vector3(-1.10, 0, 0)
+	for side in ["L", "R"]:
+		var offset := 0.0 if side == "L" else 0.5
+		var phase := fposmod(cycle + offset, 1.0)
+		var leg := _stride(phase, clip) if moving else _leg_angles(_CROUCH_ANKLE_DROP, _CROUCH_HIP_SHIFT + lerpf(-0.038, 0.038, offset * 2), 0.0)
+		poses["UpperLeg." + side] = Vector3(leg.x, 0, 0)
+		poses["LowerLeg." + side] = Vector3(leg.y, 0, 0)
+		poses["Foot." + side] = Vector3(leg.z, 0, 0)
+		poses["UpperArm." + side] = Vector3(-1.05, 0, 0)
+
+
 ## The stance foot moves back along a level path at constant speed; the
 ## swing foot returns in a higher curved arc. Solve both joints against the
 ## desired ankle position to avoid the old simultaneous knee swivel.
 func _stride(phase: float, clip: int) -> Vector3:
-	const LENGTH := 0.401
-	const REST_PITCH := 0.070
 	var stance: float = _STANCE_PORTION[clip]
 	var reach: float = _STEP_LENGTH[clip] * 0.5
 	var running := clip == Clip.RUNNING
-	# The pelvis rises as the supporting leg comes beneath the body.
+	var crouched := clip == Clip.CROUCH_WALKING
+	# The standing pelvis rises as the supporting leg comes beneath the body.
 	var other_phase := fposmod(phase + 0.5, 1.0)
 	var reach_under_load := 0.0
 	for support_phase in [phase, other_phase]:
 		if support_phase < stance:
 			reach_under_load = maxf(reach_under_load, absf(lerpf(reach, -reach, support_phase / stance)))
 	var extension := 0.789 if running else 0.783
-	var down := sqrt(extension * extension - reach_under_load * reach_under_load)
+	var down := _CROUCH_ANKLE_DROP if crouched else sqrt(extension * extension - reach_under_load * reach_under_load)
 	var forward := 0.0
 	var foot_roll := 0.0
 	if phase < stance:
@@ -177,8 +202,16 @@ func _stride(phase: float, clip: int) -> Vector3:
 	else:
 		var progress := (phase - stance) / (1.0 - stance)
 		forward = lerpf(-reach, reach, smoothstep(0.0, 1.0, progress))
-		down -= sin(PI * progress) * (0.175 if running else 0.102)
+		down -= sin(PI * progress) * (0.046 if crouched else 0.175 if running else 0.102)
 		foot_roll = lerpf(0.16, 0.0, smoothstep(0.0, 1.0, progress))
+	if crouched:
+		forward += _CROUCH_HIP_SHIFT
+	return _leg_angles(down, forward, foot_roll)
+
+
+static func _leg_angles(down: float, forward: float, foot_roll: float) -> Vector3:
+	const LENGTH := 0.401
+	const REST_PITCH := 0.070
 	var distance := minf(Vector2(forward, down).length(), 2.0 * LENGTH - 0.001)
 	var opposite := acos(distance / (2.0 * LENGTH))
 	var thigh := REST_PITCH - atan2(forward, down) - opposite

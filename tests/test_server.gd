@@ -114,3 +114,39 @@ func test_snapshots_keep_the_budget() -> void:
 	check(rate >= ServerSettings.DEFAULT_CLIENT_BANDWIDTH * 0.9, "snapshots cost only %.1f KB/s of the budget" % (rate / 1024))
 	check_equal(client.session.unresolved, 0, "datagrams without a delta base")
 	check(client.session.soldiers.size() >= 250, "the client knows %d soldiers" % client.session.soldiers.size())
+
+
+class CrouchDriver extends HeadlessClient.Wanderer:
+	var crouch := false
+
+	func command(_predictor: Predictor) -> InputCommand:
+		return InputCommand.create(0, 0, 0, 0, 0, InputCommand.CROUCH if crouch else 0)
+
+
+func test_two_clients_agree_on_crouched_stance_and_standing() -> void:
+	var server := _server()
+	var listener := Memory.MemoryListener.new()
+	server.add_listener(listener)
+	var holder := _join(server, listener, "Holder", _space())
+	var watcher := _join(server, listener, "Watcher", _space())
+	var driver := CrouchDriver.new(5)
+	holder.input = driver
+	watcher.input = CrouchDriver.new(7)
+	_run(server, [holder, watcher], 120)
+	if not check(holder.joined() and watcher.joined(), "both clients have joined"):
+		return
+	var id := holder.session.player.soldier
+	var slot := SoldierSet.slot_of(id)
+	var before := holder.predictor.corrections
+	for wanted in [true, false]:
+		driver.crouch = wanted
+		_run(server, [holder, watcher], 24)
+		var own := server.soldiers.get_soldier(id)
+		var observer: KnownSoldier = watcher.session.soldiers.get(slot)
+		check_equal(own.crouched, wanted, "server stance")
+		check_equal(holder.session.player.crouched, wanted, "private snapshot stance")
+		check_equal(holder.predictor.soldier.crouched, wanted, "predicted stance")
+		check_equal(observer.soldier.crouched, wanted, "remote snapshot stance")
+		observer.remote.evaluate(10000.0)
+		check_equal(observer.remote.crouched, wanted, "remote rendered stance")
+	check_equal(holder.predictor.corrections, before, "stance changes do not correct deterministic prediction")
