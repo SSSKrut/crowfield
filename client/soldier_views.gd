@@ -119,6 +119,7 @@ func update(session: ClientSession, delta: float, camera: Camera3D, scene: MapSc
 	for entry in shown:
 		var detailed := entry.distance <= threshold and full < FULL_DETAIL
 		entry.view.set_detail(detailed)
+		entry.view.set_foot_terrain(scene.terrain if detailed and entry.known.remote.grounded else null)
 		if detailed:
 			full += 1
 		else:
