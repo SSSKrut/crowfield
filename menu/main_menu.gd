@@ -22,12 +22,30 @@ var message := ""
 
 func _ready() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	resized.connect(_position_panel)
+	_position_panel()
 	_port.value = ENetTransport.DEFAULT_PORT
 	for map_name in MapScene.MAPS:
 		_map.add_item(map_name.capitalize())
 	_load()
+	_on_map_selected(_map.selected)
 	_show_status(message)
 	%Solo.grab_focus()
+
+
+func _position_panel() -> void:
+	# Leave the right side of the Valley panorama visible on wider windows.
+	%Center.anchor_right = clampf(565.0 / maxf(size.x, 1.0), 0.54, 1.0)
+
+
+func _on_map_selected(index: int) -> void:
+	var valley: bool = MapScene.MAPS[index] == "valley"
+	%Subtitle.text = "Capture and hold the river flags to score." if valley else "Practice movement and combat."
+	%Solo.text = "Play Valley solo" if valley else "Play practice map solo"
+
+
+func _on_network_toggled(open: bool) -> void:
+	%Network.visible = open
 
 
 func _on_solo_pressed() -> void:
@@ -58,6 +76,14 @@ func _on_join_pressed() -> void:
 
 func _on_address_submitted(_text: String) -> void:
 	_on_join_pressed()
+
+
+func _on_credits_pressed() -> void:
+	%Credits.popup_centered()
+
+
+func _on_credit_link_clicked(url: Variant) -> void:
+	OS.shell_open(str(url))
 
 
 func _on_quit_pressed() -> void:

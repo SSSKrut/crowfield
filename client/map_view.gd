@@ -37,6 +37,9 @@ var props: Array[RigidBody3D] = []
 var _detail: NoiseTexture2D
 ## _fine is a subtler detail for the walls of buildings.
 var _fine: NoiseTexture2D
+var _flag_cloth: Array[StandardMaterial3D] = []
+var _flag_labels: Array[Label3D] = []
+var _flag_colors: Array[Color] = []
 
 
 func _init(map: MapScene) -> void:
@@ -54,6 +57,71 @@ func _ready() -> void:
 	for water in scene.waters:
 		_build_water(water)
 	_build_props()
+	_build_flags()
+
+
+## update_flags paints the world markers from the last server snapshot.
+func update_flags(state: MatchState) -> void:
+	if state == null:
+		return
+	for index in _flag_cloth.size():
+		var flag := state.flags[index]
+		var color := _flag_color(flag.owner, flag.contested)
+		if _flag_colors[index] == color:
+			continue
+		_flag_colors[index] = color
+		_flag_cloth[index].albedo_color = color
+		_flag_labels[index].modulate = color.lightened(0.30)
+
+
+static func _flag_color(team: int, contested: bool) -> Color:
+	if contested:
+		return Color8(242, 189, 83)
+	return Hud.TEAM_COLORS.get(team, Color8(208, 208, 184))
+
+
+func _build_flags() -> void:
+	var pole_material := StandardMaterial3D.new()
+	pole_material.albedo_color = Color8(63, 72, 68)
+	pole_material.metallic = 0.3
+	for zone in scene.flags:
+		var root := Node3D.new()
+		root.position = zone.center
+		add_child(root)
+		var pole_mesh := CylinderMesh.new()
+		pole_mesh.height = 4.5
+		pole_mesh.top_radius = 0.045
+		pole_mesh.bottom_radius = 0.07
+		pole_mesh.radial_segments = 8
+		var pole := MeshInstance3D.new()
+		pole.mesh = pole_mesh
+		pole.material_override = pole_material
+		pole.position.y = 2.25
+		root.add_child(pole)
+		var cloth_mesh := BoxMesh.new()
+		cloth_mesh.size = Vector3(1.25, 0.80, 0.045)
+		var cloth := MeshInstance3D.new()
+		cloth.mesh = cloth_mesh
+		cloth.position = Vector3(0.65, 3.95, 0.0)
+		var material := StandardMaterial3D.new()
+		material.roughness = 0.86
+		var neutral := _flag_color(Game.Team.NONE, false)
+		material.albedo_color = neutral
+		cloth.material_override = material
+		root.add_child(cloth)
+		_flag_cloth.append(material)
+		_flag_colors.append(neutral)
+		var label := Label3D.new()
+		label.text = zone.name
+		label.position.y = 4.95
+		label.font_size = 26
+		label.outline_size = 8
+		label.modulate = neutral.lightened(0.30)
+		label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+		label.fixed_size = true
+		label.pixel_size = 0.0025
+		root.add_child(label)
+		_flag_labels.append(label)
 
 
 ## reset puts the props back where they started.

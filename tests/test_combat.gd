@@ -17,7 +17,7 @@ func test_shots_hit_the_zone_aimed_at() -> void:
 	var range := _range()
 	var target := range.target(Game.Team.RED, Vector3(0, 0, -1))
 	range.step(2)
-	for c in [["head", Vector3(0, 1.5, -1), 50], ["body", Vector3(0, 0.85, -1), 25], ["leg", Vector3(0.26, 0.3, -1), 19]]:
+	for c in [["head", Vector3(0, 1.64, -1), 50], ["body", Vector3(0, 1.07, -1), 25], ["leg", Vector3(0.118, 0.3, -1), 19]]:
 		var before := range.health(target)
 		range.fire(c[1])
 		check_equal(before - range.health(target), c[2], "damage of a shot at the %s" % c[0])

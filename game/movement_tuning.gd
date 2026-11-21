@@ -10,8 +10,9 @@ const FIELDS := [
 
 var walk_speed := 5.0
 var sprint_speed := 8.0
-var jump_speed := 6.0
-var gravity := 9.81
+# Use a short jump that clears low cover and lands quickly.
+var jump_speed := 4.8
+var gravity := 17.5
 var ground_stick_speed := 0.5
 var capsule_half_height := 0.55
 var capsule_radius := 0.35

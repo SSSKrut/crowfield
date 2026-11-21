@@ -112,6 +112,11 @@ func _build(index: int) -> void:
 	var per_snapshot := float(server.settings.client_bandwidth) / server.settings.snapshot_rate
 	player.allowance = minf(player.allowance + per_snapshot, 2 * per_snapshot)
 	var snapshot := player.snapshot
+	if server.flag_match != null:
+		if snapshot.match_state == null:
+			snapshot.match_state = MatchState.new()
+		snapshot.match_state.set_round(server.flag_match.state)
+		snapshot.match_state.kills = player.kills
 	var packer := player.packer
 	var candidates := player.candidates
 	var next := 0

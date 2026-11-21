@@ -30,8 +30,6 @@ var _base_locals: Array[Transform3D] = []
 func setup(character: CharacterAsset, model: Node3D) -> void:
 	asset = character
 	_model = model
-	_model.scale = Vector3.ONE * asset.scale
-	_model.position = asset.offset
 	add_child(_model)
 	skeleton = _model.find_child("Skeleton3D", true, false)
 	player = _model.find_child("AnimationPlayer", true, false)
@@ -72,6 +70,21 @@ func animate(delta: float, speed: float) -> void:
 		if phase > 0:
 			player.seek(phase * asset.periods[next])
 		clip = next
+	match clip:
+		CharacterAsset.Clip.IDLE:
+			player.speed_scale = 1.0
+		CharacterAsset.Clip.WALKING:
+			player.speed_scale = clampf(speed / 5.0, 0.25, 1.2)
+		CharacterAsset.Clip.RUNNING:
+			player.speed_scale = clampf(speed / 8.0, 0.75, 1.25)
+
+
+## grip_shift keeps the held weapon with the animated trigger hand.
+func grip_shift() -> Vector3:
+	var hand := asset.bones["Palm1.R"] as int
+	var at := skeleton.get_bone_global_pose(hand).origin
+	var rest := skeleton.get_bone_global_rest(hand).origin
+	return skeleton.global_basis * (at - rest)
 
 
 ## set_detail lets the animation run every frame near the camera and less

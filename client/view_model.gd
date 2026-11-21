@@ -27,10 +27,9 @@ const AIM_TIME := 0.15
 const RECOIL_TIME := 0.06
 const FLASH_TIME := 0.05
 ## A soldier holds its weapon at its right side, at the height of the chest and
-## somewhat forward, along its aim; a little larger than in first person, to
-## suit the chunky robot.
-const HELD_SCALE := 1.2
-const HELD_OFFSET := Vector3(0.26, 1.0, 0.3)
+## somewhat forward, along its aim.
+const HELD_SCALE := 0.94
+const HELD_OFFSET := Vector3(0.085, 1.29, 0.30)
 ## LIGHT is where the light of the world comes from when no sun is given: the
 ## direction the box models of the prototype were lit from.
 const LIGHT := Vector3(0.4, 1.0, 0.3)
@@ -39,7 +38,8 @@ const GUN_METAL := Color8(58, 60, 64)
 const GUN_DARK := Color8(32, 33, 36)
 const GUN_POLYMER := Color8(74, 76, 66)
 const GUN_WOOD := Color8(124, 82, 47)
-const SLEEVE := Color8(86, 92, 102)
+const SLEEVE := Color8(98, 106, 78)
+const GLOVE := Color8(46, 50, 44)
 const FLASH_CORE := Color8(255, 214, 120)
 const FLASH_FLAME := Color8(255, 170, 60, 220)
 
@@ -180,7 +180,7 @@ func _flash_part(mesh: PrimitiveMesh, color: Color) -> MeshInstance3D:
 
 
 ## show_weapon shows the model of a kind in first person, its hands in the
-## team colour tint.
+## team wrist bands.
 func show_weapon(kind: int, tint: Color) -> void:
 	if layer == null:
 		return
@@ -470,15 +470,15 @@ static func _limb(from: Vector3, to: Vector3, half: float, tint: Color) -> Box:
 	return box
 
 
-## _arms are the sleeves from the elbows to the hands; the hands, in the team
-## colour, hold the weapon at the given points.
+## _arms adds uniform sleeves, team wrist bands and gloves around the grips.
 static func _arms(right: Vector3, right_elbow: Vector3, left: Vector3, left_elbow: Vector3) -> Array[Box]:
 	var hand := Vector3(0.032, 0.036, 0.042)
-	var right_hand := Box.new(right, hand, Color.WHITE)
-	right_hand.accent = true
-	var left_hand := Box.new(left, hand, Color.WHITE)
-	left_hand.accent = true
-	return [_limb(right_elbow, right, 0.038, SLEEVE), _limb(left_elbow, left, 0.036, SLEEVE), right_hand, left_hand]
+	var right_band := _limb(right.lerp(right_elbow, 0.12), right.lerp(right_elbow, 0.23), 0.040, Color.WHITE)
+	var left_band := _limb(left.lerp(left_elbow, 0.12), left.lerp(left_elbow, 0.23), 0.038, Color.WHITE)
+	right_band.accent = true
+	left_band.accent = true
+	return [_limb(right_elbow, right, 0.038, SLEEVE), _limb(left_elbow, left, 0.036, SLEEVE),
+		right_band, left_band, Box.new(right, hand, GLOVE), Box.new(left, hand, GLOVE)]
 
 
 static func _weapon_shapes() -> Array[Shape]:

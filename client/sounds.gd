@@ -1,30 +1,23 @@
 class_name Sounds
 extends Node
-## Sounds are the sounds of the weapons: the player's own, and the shots of
-## other soldiers from where they were fired. There are no sound files yet:
-## they are made at start from noise and tones. With a volume of zero the game
-## is silent and no players are made.
+## Local weapon and feedback cues, and spatial shots from other soldiers.
+## With a volume of zero the game is silent and creates no players.
 
 const SAMPLE_RATE := 44100
 ## Rapid fire overlaps: every weapon sound plays on SHOT_VOICES voices in turn.
 const SHOT_VOICES := 6
 ## Shots of other soldiers play on this many positional voices in turn.
 const POSITIONAL_VOICES := 24
-## Another soldier's shot is as loud as 1 / (1 + distance / FALLOFF_DISTANCE)
-## of the shot at its muzzle, and silent below QUIETEST.
-const FALLOFF_DISTANCE := 12.0
+## A distant shot is half as loud at this distance, before the spatial mix.
+const FALLOFF_DISTANCE := 20.0
 const QUIETEST := 0.03
 
-## SHOT_VOLUMES are the volumes of the weapons' shots, at the shooter.
-const SHOT_VOLUMES := [0.0, 0.85, 1.0, 0.7]
-## A gunshot is a burst of filtered noise over a falling thump: decay is the
-## time constant of the noise in seconds, smoothing how much of each new noise
-## sample passes the low-pass filter, thump the starting pitch of the low
-## tone, in Hz.
+const SHOT_VOLUMES := [0.0, 0.70, 0.82, 0.62]
+const SHOT_PITCHES := [1.0, 0.98, 1.02, 0.99, 1.01, 1.0]
 const GUNSHOTS := {
-	WeaponTuning.Kind.ASSAULT_RIFLE: {"decay": 0.07, "smoothing": 0.32, "thump": 115.0},
-	WeaponTuning.Kind.RIFLE: {"decay": 0.13, "smoothing": 0.22, "thump": 85.0},
-	WeaponTuning.Kind.PISTOL: {"decay": 0.045, "smoothing": 0.5, "thump": 160.0},
+	WeaponTuning.Kind.ASSAULT_RIFLE: preload("res://assets/audio/assault-shot.wav"),
+	WeaponTuning.Kind.RIFLE: preload("res://assets/audio/rifle-shot.wav"),
+	WeaponTuning.Kind.PISTOL: preload("res://assets/audio/pistol-shot.wav"),
 }
 
 var _volume := 0.0
@@ -32,7 +25,6 @@ var _audible := false
 ## _shots holds, by weapon kind, its voices; _next the voice to play next.
 var _shots := {}
 var _next := {}
-var _streams := {}
 var _positional: Array[AudioStreamPlayer3D] = []
 var _next_positional := 0
 var _dry: AudioStreamPlayer
@@ -41,6 +33,9 @@ var _magazine_in: AudioStreamPlayer
 var _equip: AudioStreamPlayer
 ## _marker ticks when a shot of the player hurt someone.
 var _marker: AudioStreamPlayer
+var _kill_marker: AudioStreamPlayer
+var _flag_captured: AudioStreamPlayer
+var _flag_lost: AudioStreamPlayer
 
 
 ## volume is the master volume from 0 to 1.
@@ -51,19 +46,22 @@ func _init(volume: float) -> void:
 		return
 	_audible = true
 	for kind in GUNSHOTS:
-		var voice: Dictionary = GUNSHOTS[kind]
-		var stream := _to_stream(_gunshot(0.5, voice["decay"], voice["smoothing"], voice["thump"], kind))
-		_streams[kind] = stream
+		var stream: AudioStreamWAV = GUNSHOTS[kind]
 		var voices: Array[AudioStreamPlayer] = []
 		for i in SHOT_VOICES:
-			voices.append(_player(stream, SHOT_VOLUMES[kind]))
+			var voice := _player(stream, SHOT_VOLUMES[kind])
+			voice.pitch_scale = SHOT_PITCHES[i]
+			voices.append(voice)
 		_shots[kind] = voices
 		_next[kind] = 0
 	_dry = _player(_to_stream(_click(0.05, 0.004, 0.9, 0.0, 7)), 0.4)
-	_magazine_out = _player(_to_stream(_clicks(0.25, 0.0, 0.09)), 0.35)
-	_magazine_in = _player(_to_stream(_clicks(0.25, 0.0, 0.12)), 0.5)
+	_magazine_out = _player(preload("res://assets/audio/magazine-out.wav"), 0.38)
+	_magazine_in = _player(preload("res://assets/audio/magazine-in.wav"), 0.46)
 	_equip = _player(_to_stream(_clicks(0.2, 0.0, 0.06)), 0.3)
-	_marker = _player(_to_stream(_tone(0.08, 2400.0, 0.015)), 0.35)
+	_marker = _player(_cue(1400.0), 0.30)
+	_kill_marker = _player(_cue(875.0, 1312.5), 0.40)
+	_flag_captured = _player(_cue(440.0, 660.0), 0.31)
+	_flag_lost = _player(_cue(392.0, 294.0), 0.23)
 	for i in POSITIONAL_VOICES:
 		var player := AudioStreamPlayer3D.new()
 		# The fall with distance is the game's own, below; the engine only
@@ -84,7 +82,6 @@ func weapon(kind: int, events: int) -> void:
 		var voices: Array[AudioStreamPlayer] = _shots[kind]
 		var voice := voices[_next[kind]]
 		_next[kind] = (_next[kind] + 1) % SHOT_VOICES
-		voice.volume_db = linear_to_db(SHOT_VOLUMES[kind] * _volume)
 		voice.play()
 	if events & Arsenal.EVENT_DRY_FIRE:
 		_dry.play()
@@ -99,29 +96,39 @@ func weapon(kind: int, events: int) -> void:
 ## shot_at plays another soldier's shot from where it was fired, quieter with
 ## the distance to the camera, to the side it came from.
 func shot_at(kind: int, position: Vector3) -> void:
-	if not _audible or not is_inside_tree() or not _streams.has(kind):
+	if not _audible or not is_inside_tree() or not GUNSHOTS.has(kind):
 		return
 	var distance := 0.0
 	var camera := get_viewport().get_camera_3d()
 	if camera != null:
 		distance = camera.global_position.distance_to(position)
-	var gain := 1.0 / (1.0 + distance / FALLOFF_DISTANCE)
+	var relative_distance := distance / FALLOFF_DISTANCE
+	var gain := 1.0 / (1.0 + relative_distance * relative_distance)
 	if gain < QUIETEST:
 		return
 	var player := _positional[_next_positional]
 	_next_positional = (_next_positional + 1) % POSITIONAL_VOICES
-	player.stream = _streams[kind]
+	player.stream = GUNSHOTS[kind]
+	player.pitch_scale = SHOT_PITCHES[_next_positional % SHOT_VOICES]
 	player.global_position = position
 	player.volume_db = linear_to_db(gain * SHOT_VOLUMES[kind] * _volume)
 	player.play()
 
 
-## hit_marker ticks for a shot that hurt someone, lower for a kill.
+## A kill has its own confirmation so it is recognizable in a firefight.
 func hit_marker(killed: bool) -> void:
 	if not _audible or not is_inside_tree():
 		return
-	_marker.pitch_scale = 0.75 if killed else 1.0
-	_marker.play()
+	var cue := _kill_marker if killed else _marker
+	cue.play()
+
+
+## Plays when the player's team gains or loses control of a flag.
+func flag_changed(captured: bool) -> void:
+	if not _audible or not is_inside_tree():
+		return
+	var cue := _flag_captured if captured else _flag_lost
+	cue.play()
 
 
 func _player(stream: AudioStreamWAV, volume: float) -> AudioStreamPlayer:
@@ -130,28 +137,6 @@ func _player(stream: AudioStreamWAV, volume: float) -> AudioStreamPlayer:
 	player.volume_db = linear_to_db(volume * _volume)
 	add_child(player)
 	return player
-
-
-## _gunshot renders a gunshot of the given voice; seed varies the noise from
-## weapon to weapon.
-static func _gunshot(seconds: float, decay: float, smoothing: float, thump: float, seed: int) -> PackedFloat32Array:
-	var random := RandomNumberGenerator.new()
-	random.seed = seed * 0x5a11 + 1
-	var count := int(seconds * SAMPLE_RATE)
-	var samples := PackedFloat32Array()
-	samples.resize(count)
-	var filtered := 0.0
-	var phase := 0.0
-	for i in count:
-		var t := float(i) / SAMPLE_RATE
-		filtered += smoothing * (random.randf() * 2 - 1 - filtered)
-		var noise := filtered * exp(-t / decay)
-		var pitch := thump * (0.5 + 0.5 * exp(-t / 0.04))
-		phase += TAU * pitch / SAMPLE_RATE
-		var tone := sin(phase) * exp(-t / 0.035)
-		var attack := minf(1.0, t / 0.0015)
-		samples[i] = attack * (1.6 * noise + 0.8 * tone)
-	return samples
 
 
 ## _click renders a short tick of bright noise starting at a time.
@@ -178,15 +163,25 @@ static func _clicks(seconds: float, first: float, second: float) -> PackedFloat3
 	return samples
 
 
-## _tone renders a short beep of the given pitch that fades with decay.
-static func _tone(seconds: float, pitch: float, decay: float) -> PackedFloat32Array:
+## Add a second note for confirmations that must be distinct from a hit.
+static func _cue(pitch: float, followup: float = 0.0) -> AudioStreamWAV:
+	const FOLLOWUP_TIME := 0.065
+	var seconds := 0.11 if followup == 0.0 else 0.23
 	var count := int(seconds * SAMPLE_RATE)
 	var samples := PackedFloat32Array()
 	samples.resize(count)
 	for i in count:
-		var t := float(i) / SAMPLE_RATE
-		samples[i] = sin(TAU * pitch * t) * exp(-t / decay)
-	return samples
+		var time := float(i) / SAMPLE_RATE
+		samples[i] = _cue_note(pitch, time)
+		if followup > 0.0 and time >= FOLLOWUP_TIME:
+			samples[i] += _cue_note(followup, time - FOLLOWUP_TIME)
+	return _to_stream(samples)
+
+
+static func _cue_note(pitch: float, time: float) -> float:
+	var phase := TAU * pitch * time
+	var envelope := minf(time / 0.004, 1.0) * exp(-time / 0.022)
+	return (sin(phase) + 0.2 * sin(phase * 2.0)) * envelope
 
 
 ## _to_stream makes 16-bit sound of samples, scaled so that its loudest sample

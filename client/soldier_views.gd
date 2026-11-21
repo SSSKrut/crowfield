@@ -79,7 +79,7 @@ func update(session: ClientSession, delta: float, camera: Camera3D) -> void:
 		remote.smooth(delta)
 		remote.evaluate(session.clock.render_tick)
 		var entry: Entry = _entries.get(id)
-		var hit := _show_combat(known, session.clock.render_tick)
+		var hit := _show_combat(known, entry.view if entry != null else null, session.clock.render_tick)
 		if hit and entry != null and remote.alive and remote.position.distance_to(eye) < FLINCH_DISTANCE:
 			entry.view.hit(HITBOX_PARTS[mini(known.soldier.hit_box, Hitboxes.COUNT - 1)], Game.view_direction(known.soldier.hit_yaw, 0))
 		if not remote.alive:
@@ -135,7 +135,7 @@ func _hold(entry: Entry, kind: int, remote: RemoteSoldier, team: int) -> void:
 		if entry.held != null:
 			add_child(entry.held)
 	if entry.held != null:
-		entry.held.transform = ViewModel.held_transform(remote.position, remote.yaw, remote.pitch)
+		entry.held.transform = ViewModel.held_transform(remote.position + entry.view.grip_shift(), remote.yaw, remote.pitch)
 
 
 func _drop(id: int) -> void:
@@ -150,7 +150,7 @@ func _drop(id: int) -> void:
 ## interpolation reaches them: a flash at the muzzle of its weapon, a tracer to
 ## where its aim meets the world, the sound, and sparks off the hitbox that was
 ## struck. It reports a hit shown.
-func _show_combat(known: KnownSoldier, render_tick: float) -> bool:
+func _show_combat(known: KnownSoldier, view: CharacterView, render_tick: float) -> bool:
 	if effects == null:
 		known.shots.clear()
 		known.hurt = false
@@ -159,7 +159,7 @@ func _show_combat(known: KnownSoldier, render_tick: float) -> bool:
 	var shown_shots := 0
 	while shown_shots < known.shots.size() and known.shots[shown_shots] <= render_tick:
 		if known.shots[shown_shots] >= render_tick - STALE_SHOTS:
-			_show_shot(known.soldier.arsenal.weapon(), remote)
+			_show_shot(known.soldier.arsenal.weapon(), remote, view.grip_shift() if view != null else Vector3.ZERO)
 		shown_shots += 1
 	if shown_shots > 0:
 		known.shots = known.shots.slice(shown_shots)
@@ -173,11 +173,11 @@ func _show_combat(known: KnownSoldier, render_tick: float) -> bool:
 
 ## _show_shot shows one shot of another soldier. Its spread is the server's
 ## secret; a little scatter keeps a burst from drawing one line.
-func _show_shot(kind: int, remote: RemoteSoldier) -> void:
+func _show_shot(kind: int, remote: RemoteSoldier, grip_shift: Vector3) -> void:
 	var tuning := rules.weapons.get_tuning(kind)
 	if tuning == null or view_model == null:
 		return
-	var muzzle := view_model.held_muzzle(kind, remote.position, remote.yaw, remote.pitch)
+	var muzzle := view_model.held_muzzle(kind, remote.position + grip_shift, remote.yaw, remote.pitch)
 	if muzzle == Vector3.INF:
 		return
 	const SCATTER := 0.012

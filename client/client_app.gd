@@ -222,11 +222,7 @@ func _ready() -> void:
 	_build_world()
 	# Everything is loaded before connecting: once connected, the client must
 	# send a command every tick, and a stall puts its clock behind the server.
-	var character: Variant = CharacterAsset.load_asset()
-	if character is String:
-		_quit_with(character)
-		return
-	asset = character
+	asset = CharacterAsset.load_asset()
 	_build_soldiers()
 	error = _open()
 	if error != "":
@@ -282,7 +278,7 @@ func _setup_window() -> void:
 	if size != Vector2i(ProjectSettings.get_setting("display/window/size/viewport_width"),
 			ProjectSettings.get_setting("display/window/size/viewport_height")):
 		DisplayServer.window_set_size(size)
-	DisplayServer.window_set_title("Crowfield prototype")
+	DisplayServer.window_set_title("Crowfield")
 	if settings["max-fps"] == 0:
 		DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
 
@@ -1037,7 +1033,7 @@ func _update_self(delta: float, feet: Vector3, speed: float, server_own: Soldier
 		if _self_held != null:
 			add_child(_self_held)
 	if _self_held != null:
-		_self_held.transform = ViewModel.held_transform(feet, _yaw, _pitch)
+		_self_held.transform = ViewModel.held_transform(feet + _self_view.grip_shift(), _yaw, _pitch)
 
 
 ## _update_camera looks where the player aims, turned by the kick of the
@@ -1103,7 +1099,7 @@ func _update_weapon(delta: float, own: Soldier, speed: float) -> void:
 		var query := PhysicsRayQueryParameters3D.create(shot.origin, shot.origin + shot.direction * reach, Game.LAYER_STATIC | Game.LAYER_VEHICLE)
 		var hit := state.intersect_ray(query)
 		var end: Vector3 = hit["position"] if not hit.is_empty() else shot.origin + shot.direction * reach
-		var muzzle := view_model.held_muzzle(shot.weapon, _feet, _yaw, _pitch)
+		var muzzle := view_model.held_muzzle(shot.weapon, _feet + _self_view.grip_shift(), _yaw, _pitch)
 		if muzzle == Vector3.INF:
 			muzzle = camera.global_position
 		if placed:
@@ -1257,17 +1253,19 @@ func _draw_debug(spawned: bool) -> void:
 
 
 func _update_hud(feet: Vector3, own: Soldier) -> void:
-	var lines := PackedStringArray(HELP_LINES)
+	var lines := PackedStringArray()
 	var connected := session != null
-	lines.append("FPS %d | XYZ %.2f %.2f %.2f | %s | drawn %d (full %d) | bodies %d (ragdolls %d)" % [
-		Engine.get_frames_per_second(), feet.x, feet.y, feet.z, CharacterAsset.CLIPS[_self_view.clip],
-		soldier_views.drawn, soldier_views.full, bodies.all.size(), bodies.ragdolls()])
-	if connected:
-		lines.append("%d Hz | tick %d server %d lead %d (clock %+.1f%%) | RTT %d ms | snapshots %.1f KB/s | jumps %d | corrections %d (last %.3f m) | soldiers %d" % [
-			Game.TICK_RATE, session.tick, session.server_tick, session.player.input_lead, 100 * session.dilation,
-			roundi(session.conn.stats.rtt * 1000), _net_rate, session.resyncs, predictor.corrections, predictor.last_error,
-			session.soldiers.size()])
-	else:
+	if _debug or _net_graph:
+		lines.append_array(HELP_LINES)
+		lines.append("FPS %d | XYZ %.2f %.2f %.2f | %s | drawn %d (full %d) | bodies %d (ragdolls %d)" % [
+			Engine.get_frames_per_second(), feet.x, feet.y, feet.z, CharacterAsset.CLIPS[_self_view.clip],
+			soldier_views.drawn, soldier_views.full, bodies.all.size(), bodies.ragdolls()])
+		if connected:
+			lines.append("%d Hz | tick %d server %d lead %d (clock %+.1f%%) | RTT %d ms | snapshots %.1f KB/s | jumps %d | corrections %d (last %.3f m) | soldiers %d" % [
+				Game.TICK_RATE, session.tick, session.server_tick, session.player.input_lead, 100 * session.dilation,
+				roundi(session.conn.stats.rtt * 1000), _net_rate, session.resyncs, predictor.corrections, predictor.last_error,
+				session.soldiers.size()])
+	if not connected:
 		lines.append(_status + "…")
 	if _capture_notice != "" and Time.get_ticks_msec() < _capture_notice_until:
 		lines.append(_capture_notice)
@@ -1285,7 +1283,7 @@ func _update_hud(feet: Vector3, own: Soldier) -> void:
 	hud.dead = player.soldier != 0 and player.health == 0
 	hud.health = player.health
 	hud.respawn_ticks = player.respawn
-	hud.team = _team()
+	_update_match_hud(session.match_state if connected else null, feet, _team())
 	hud.view_yaw = _yaw
 	hud.net_graph = session.graph if connected and _net_graph else null
 	hud.jumps = session.resyncs if connected else 0
@@ -1296,6 +1294,27 @@ func _update_hud(feet: Vector3, own: Soldier) -> void:
 			"Reconnecting: attempt %d, %d s of %d" % [_reconnect_attempts, int(ClientSession._now() - _reconnect_since), int(RECONNECT_WINDOW)],
 		])
 	hud.queue_redraw()
+
+
+func _update_match_hud(state: MatchState, feet: Vector3, team: int) -> void:
+	var previous := hud.match_state
+	if state != null and previous != null and state != previous and team == hud.team and team != Game.Team.NONE:
+		var captured := false
+		var lost := false
+		for index in mini(state.flags.size(), previous.flags.size()):
+			var old_owner := previous.flags[index].owner
+			var owner := state.flags[index].owner
+			if old_owner != owner:
+				captured = captured or owner == team
+				lost = lost or old_owner == team
+		if captured or lost:
+			sounds.flag_changed(captured)
+	hud.team = team
+	hud.match_state = state
+	hud.map_scene = scene
+	hud.feet = feet
+	if map_view != null and state != previous:
+		map_view.update_flags(state)
 
 
 func _request_capture(kind: PlaytestCapture) -> void:

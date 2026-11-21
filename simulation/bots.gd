@@ -42,10 +42,9 @@ const SEARCH_TICKS := 6 * Game.TICK_RATE
 const ALERT_TICKS := 3 * Game.TICK_RATE
 const REACTION := Vector2(0.22, 0.45)
 const TURN_SPEED := deg_to_rad(400.0)
-## AIM_HEIGHT is the middle of the body, under the big head, that a bot aims
-## at; HEAD_HEIGHT where it looks for a head over cover.
-const AIM_HEIGHT := 0.8
-const HEAD_HEIGHT := 1.45
+## Aim at the infantry chest and check for a visible helmet over cover.
+const AIM_HEIGHT := 1.17
+const HEAD_HEIGHT := 1.64
 ## The aim error starts at ACQUIRE_ERROR on a new target and settles towards
 ## STEADY_ERROR in about SETTLE seconds, wandering by NOISE every tick. Each
 ## bot has a hand of its own: its errors are its skill times these.
@@ -172,6 +171,14 @@ func spawn_all(how_many: int) -> void:
 		bot.skill = _random.randf_range(SKILL.x, SKILL.y)
 		bots.append(bot)
 		_spawn(bot, Game.Team.BLUE if i % 2 == 0 else Game.Team.RED)
+
+
+func reset_for_round() -> void:
+	var count := bots.size()
+	for bot in bots:
+		_server.soldiers.remove(bot.soldier)
+	bots.clear()
+	spawn_all(count)
 
 
 ## _spawn puts a bot on the map as a new soldier of the team: in the zone of
@@ -661,7 +668,10 @@ func _step_back(soldier: Soldier) -> void:
 func _linger() -> int:
 	if not _ai:
 		return 0
-	return _random.randi_range(2 * Game.TICK_RATE, 7 * Game.TICK_RATE)
+	var minimum := Game.TICK_RATE * 2
+	if _server.flag_match != null and _server.flag_match.started:
+		minimum = FlagMatch.CAPTURE_TICKS
+	return _random.randi_range(minimum, 7 * Game.TICK_RATE)
 
 
 ## _look_about turns a bot that waits now and then to another direction.
@@ -677,12 +687,28 @@ func _look_about(bot: Bot, soldier: Soldier) -> void:
 ## fighting for, now and then the enemy's base.
 func _pick_goal(soldier: Soldier) -> Vector3:
 	var zone: MapScene.Zone
+	var round := _server.flag_match
+	if _ai and round != null and round.started and round.state.result == MatchState.Result.ACTIVE:
+		zone = _flag_goal(soldier.team, round)
+		var approach := Vector2.from_angle(_random.randf() * TAU) * zone.radius * _random.randf() * 0.4
+		return _server.navigation.closest(zone.center + Vector3(approach.x, 0.5, approach.y))
 	if _scene.objectives.is_empty() or (_ai and _random.randf() < 0.12):
 		zone = _scene.zone_of(_enemy_of(soldier.team))
 	else:
 		zone = _scene.objectives[_random.randi_range(0, _scene.objectives.size() - 1)]
 	var offset := Vector2.from_angle(_random.randf() * TAU) * sqrt(_random.randf()) * zone.radius
 	return _server.navigation.closest(zone.center + Vector3(offset.x, 0.5, offset.y))
+
+
+func _flag_goal(team: int, round: FlagMatch) -> MapScene.Zone:
+	# A mix of attack and defense keeps some bots spread across the crossings.
+	if _random.randf() < 0.75:
+		var start := _random.randi_range(0, round.zones.size() - 1)
+		for offset in round.zones.size():
+			var index := (start + offset) % round.zones.size()
+			if round.state.flags[index].owner != team:
+				return round.zones[index]
+	return round.zones[_random.randi_range(0, round.zones.size() - 1)]
 
 
 ## _away_from_others is the push that keeps a bot clear of the soldiers near it.

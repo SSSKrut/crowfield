@@ -440,10 +440,12 @@ func _objectives() -> void:
 		_scene.patches.append(MapScene.Zone.new("ruins", _on_ground(RUINS * sign), 5))
 		var side := "south" if sign > 0 else "north"
 		var village := "west village" if sign > 0 else "east village"
-		var bridge := "west bridge" if sign > 0 else "east bridge"
 		_scene.objectives.append(MapScene.Zone.new(village, _on_ground(VILLAGE * sign), 13))
 		_scene.objectives.append(MapScene.Zone.new("%s hill" % side, _on_ground(HILL * sign), 7))
 		_scene.objectives.append(MapScene.Zone.new("%s ruins" % side, _on_ground(RUINS * sign), 7))
-		var x := -BRIDGE_X * sign
-		_scene.objectives.append(MapScene.Zone.new(bridge, Vector3(x, 0.7, river_z(x)), 3))
-	_scene.objectives.append(MapScene.Zone.new("ford", _on_ground(Vector3.ZERO), 8))
+	_scene.flags = [
+		MapScene.Zone.new("West Bridge", Vector3(-BRIDGE_X, 0.7, river_z(-BRIDGE_X)), 5),
+		MapScene.Zone.new("Ford", _on_ground(Vector3.ZERO), 8),
+		MapScene.Zone.new("East Bridge", Vector3(BRIDGE_X, 0.7, river_z(BRIDGE_X)), 5),
+	]
+	_scene.objectives.append_array(_scene.flags)
