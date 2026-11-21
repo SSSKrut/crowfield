@@ -224,7 +224,7 @@ visible = false
 
 [node name="CreditsText" type="RichTextLabel" parent="Credits"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(440, 156)
+custom_minimum_size = Vector2(440, 196)
 bbcode_enabled = true
 text = "[b]Gunshot Sounds[/b] — Vincent Sevedge (Tabasco), © 2009. Edited for Crowfield.
 [url=https://opengameart.org/content/gunshot-sounds]Source[/url] · [url=https://creativecommons.org/licenses/by/3.0/]CC BY 3.0[/url]
