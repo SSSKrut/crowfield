@@ -98,7 +98,9 @@ func _draw_match() -> void:
 	var center := Vector2(size.x / 2.0, 18 * _scale)
 	var blue := team_color(Game.Team.BLUE).lightened(0.30)
 	var red := team_color(Game.Team.RED).lightened(0.30)
-	_box(center, -183, 0, 366, 79, PANEL)
+	var show_bearings := has_soldier and not dead and match_state.result == MatchState.Result.ACTIVE
+	var footer := 97 if show_bearings else 79
+	_box(center, -183, 0, 366, footer, PANEL)
 	_box(center, -183, 0, 366, 1, PANEL_EDGE)
 	var clock := "%d:%02d" % [match_state.seconds / 60, match_state.seconds % 60]
 	_text("BLUE", center + Vector2(-167, 11) * _scale, 15, blue, _DISPLAY)
@@ -115,12 +117,34 @@ func _draw_match() -> void:
 		_centered(map_scene.flags[index].name, center + Vector2(x, 45) * _scale, 16, WHITE)
 		var status := "CONTESTED" if flag.contested else ("NEUTRAL" if flag.owner == Game.Team.NONE else Game.team_name(flag.owner).to_upper())
 		_centered(status, center + Vector2(x, 62) * _scale, 12, tint.lightened(0.30), _DISPLAY)
-	_box(center, -48, 81, 96, 22, PANEL)
-	_centered("%d KILLS" % match_state.kills, center + Vector2(0, 83) * _scale, 16, WHITE, _DISPLAY)
+		if show_bearings:
+			_draw_flag_bearing(map_scene.flags[index], center + Vector2(x, 84) * _scale)
+	_box(center, -48, footer + 2, 96, 22, PANEL)
+	_centered("%d KILLS" % match_state.kills, center + Vector2(0, footer + 4) * _scale, 16, WHITE, _DISPLAY)
 	if match_state.result != MatchState.Result.ACTIVE:
 		_draw_result()
 	elif has_soldier and not dead:
 		_draw_capture()
+
+
+## The arrow turns with the player, including when the flag is behind them.
+func _draw_flag_bearing(zone: MapScene.Zone, center: Vector2) -> void:
+	if zone.contains_flag_position(feet):
+		_centered("AT FLAG", center + Vector2(0, -7) * _scale, 13, LIGHT_GRAY, _DISPLAY)
+		return
+	var offset := zone.center - feet
+	var angle := atan2(offset.x, -offset.z) - view_yaw
+	var forward := Vector2(sin(angle), -cos(angle))
+	var side := forward.orthogonal()
+	var origin := center - Vector2(16, 0) * _scale
+	draw_colored_polygon(PackedVector2Array([
+		origin + forward * (6 * _scale),
+		origin + (side * 4 - forward * 4) * _scale,
+		origin + (forward * -2) * _scale,
+		origin + (-side * 4 - forward * 4) * _scale,
+	]), WHITE)
+	var meters := roundi(Vector2(offset.x, offset.z).length())
+	_text("%d m" % meters, center + Vector2(-5, -7) * _scale, 13, LIGHT_GRAY, _DISPLAY)
 
 
 func _draw_capture() -> void:
