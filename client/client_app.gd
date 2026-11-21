@@ -101,6 +101,7 @@ var _buttons := 0
 ## it lies dead, until a new one comes.
 var _feet := Vector3.ZERO
 var _fallen := 0
+var _view_soldier_id := 0
 ## _momentum is the velocity the own soldier was last predicted with.
 var _momentum := Vector3.ZERO
 var _debug := false
@@ -1118,6 +1119,12 @@ func _die(feet: Vector3, velocity: Vector3) -> void:
 func _follow_life() -> void:
 	var player := session.player
 	var dead := player.soldier != 0 and player.health == 0
+	if scene.name == "valley" and not dead and player.soldier != 0 and player.soldier != _view_soldier_id:
+		var deployed := session.local_soldier()
+		if deployed != null:
+			_view_soldier_id = player.soldier
+			_yaw = PI if deployed.team == Game.Team.RED else 0.0
+			_pitch = 0.0
 	if dead and _fallen != player.soldier:
 		# The body falls where the server has it dead, which everyone else sees,
 		# not where the prediction ran on to, with the momentum it had.
