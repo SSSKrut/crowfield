@@ -14,6 +14,7 @@ cache="${XDG_CACHE_HOME:-$HOME/.cache}/crowfield/godot/$version"
 templates="${XDG_DATA_HOME:-$HOME/.local/share}/godot/export_templates/$version.stable"
 output="$PWD/export/macos"
 mkdir -p "$cache" "$templates" "$output"
+touch "$PWD/export/.gdignore"
 
 # Serialize installs and builds that share this toolchain.
 exec 9>"$cache/build.lock"
