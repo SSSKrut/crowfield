@@ -100,8 +100,8 @@ func _carrier() -> void:
 		_pouch(TORSO, Vector3(x, 1.257, 0.195), Vector3(0.059, 0.038, 0.057), ARMOUR)
 		_pouch(TORSO, Vector3(x, 1.246, 0.225), Vector3(0.020, 0.016, 0.006), HARDWARE, Finish.POLYMER)
 
-	_pouch(TORSO, Vector3(0, 1.355, 0.185), Vector3(0.151, 0.033, 0.014), HARDWARE)
-	_pouch(TORSO, Vector3(0, 1.355, 0.193), Vector3(0.132, 0.021, 0.010), MARK)
+	_pouch(TORSO, Vector3(0, 1.355, 0.185), Vector3(0.163, 0.052, 0.014), CLOTH_DARK)
+	_pouch(TORSO, Vector3(0, 1.355, 0.193), Vector3(0.143, 0.038, 0.010), MARK)
 	_pouch(TORSO, Vector3(0, 1.276, -0.149), Vector3(0.335, 0.306, 0.146), CLOTH_DARK)
 	_pouch(TORSO, Vector3(0, 1.291, -0.219), Vector3(0.252, 0.223, 0.066), ARMOUR)
 	_pouch(TORSO, Vector3(0, 1.211, -0.260), Vector3(0.203, 0.093, 0.034), CLOTH_DARK)
@@ -109,8 +109,10 @@ func _carrier() -> void:
 		var x: float = side * 0.105
 		_pouch(TORSO, Vector3(x, 1.276, -0.246), Vector3(0.030, 0.230, 0.018), WEBBING)
 		_pouch(TORSO, Vector3(x, 1.212, -0.260), Vector3(0.040, 0.027, 0.015), HARDWARE, Finish.POLYMER)
-	_pouch(TORSO, Vector3(0, 1.355, -0.254), Vector3(0.173, 0.036, 0.014), HARDWARE)
-	_pouch(TORSO, Vector3(0, 1.355, -0.263), Vector3(0.153, 0.023, 0.010), MARK)
+	# A sewn ID panel fills the upper pack flap. The neutral rim gives its
+	# edge enough contrast to read against both grass and bare walls.
+	_pouch(TORSO, Vector3(0, 1.340, -0.254), Vector3(0.246, 0.113, 0.018), CLOTH_DARK)
+	_pouch(TORSO, Vector3(0, 1.340, -0.264), Vector3(0.220, 0.091, 0.010), MARK)
 
 
 func _head() -> void:
@@ -153,13 +155,25 @@ func _sleeve(side: String) -> void:
 		_ring(elbow.lerp(hand, 0.85), 0.043, 0.046, lower),
 		_ring(hand, 0.038, 0.042, lower, palm, 0.15),
 	], CLOTH, 14, 0.050, Finish.UNIFORM)
-	var patch := shoulder.lerp(elbow, 0.29) + outer * 0.065
-	_pouch(upper, patch, Vector3(0.028, 0.095, 0.097), CLOTH_DARK)
-	_pouch(upper, patch + outer * 0.013 + Vector3.UP * 0.012, Vector3(0.012, 0.051, 0.075), MARK)
+	_armband(upper, shoulder, elbow)
 	_round(lower, elbow.lerp(hand, 0.11) + outer * 0.048, Vector3(0.020, 0.060, 0.049), WEBBING)
 	_pouch(lower, elbow.lerp(hand, 0.87) + Vector3.UP * 0.026, Vector3(0.061, 0.032, 0.052), WEBBING)
 	_round(palm, hand, Vector3(0.049, 0.036, 0.062), HARDWARE)
 	_pouch(palm, hand + Vector3(0, 0.025, 0.014), Vector3(0.071, 0.027, 0.066), BOOT, Finish.POLYMER)
+
+
+## Tailor both seams to the taper of the sleeve. The identification wraps
+## the existing fabric, so it reads in profile without an extra hard plate.
+func _armband(bone: String, shoulder: Vector3, elbow: Vector3) -> void:
+	var edges := PackedFloat32Array([0.122, 0.147, 0.505, 0.530])
+	var colors := [CLOTH_DARK, MARK, CLOTH_DARK]
+	for index in colors.size():
+		var from := edges[index]
+		var to := edges[index + 1]
+		_loft([
+			_ring(shoulder.lerp(elbow, from), lerpf(0.079, 0.066, from), lerpf(0.081, 0.064, from), bone),
+			_ring(shoulder.lerp(elbow, to), lerpf(0.079, 0.066, to), lerpf(0.081, 0.064, to), bone),
+		], colors[index], 14)
 
 
 func _trousers(side: String) -> void:
