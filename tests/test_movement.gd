@@ -80,13 +80,18 @@ func test_jumps() -> void:
 	var controller: CharacterController = made[0]
 	var soldier: Soldier = made[1]
 	var tick := _settle(controller, soldier)
+	var floor_height := soldier.position.y
 	var peak := 0.0
+	var airtime_ticks := 0
 	for i in Game.TICK_RATE * 2:
-		controller.step(soldier, InputCommand.create(tick, 0, 0, 0, 0, InputCommand.JUMP if i == 0 else 0))
-		peak = maxf(peak, soldier.position.y)
-		tick += 1
-	var tuning := MovementTuning.new()
-	check_near(peak, tuning.jump_speed * tuning.jump_speed / (2 * tuning.gravity), 0.1, "jump peak")
+		controller.step(soldier, InputCommand.create(tick + i, 0, 0, 0, 0, InputCommand.JUMP if i == 0 else 0))
+		peak = maxf(peak, soldier.position.y - floor_height)
+		if soldier.grounded:
+			break
+		airtime_ticks += 1
+	check(peak >= 0.55 and peak <= 0.8, "jump should clear low cover without floating upward: %f m" % peak)
+	var airtime := airtime_ticks * Game.TICK_DELTA
+	check(airtime >= 0.45 and airtime <= 0.65, "jump should land promptly: %f s" % airtime)
 	check(soldier.grounded and absf(soldier.position.y) < 0.05, "soldier did not land: %s" % soldier.position)
 
 

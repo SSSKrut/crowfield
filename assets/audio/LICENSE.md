@@ -1,0 +1,4 @@
+# Combat audio credits
+
+- `assault-shot.wav`, `rifle-shot.wav` and `pistol-shot.wav` are edited excerpts of `sks.wav`, `mosin.wav` and `cz.wav`, respectively, from [Gunshot Sounds](https://opengameart.org/content/gunshot-sounds) by Tabasco (Vincent Sevedge, © 2009). The source archive includes a [CC BY 3.0 Unported](https://creativecommons.org/licenses/by/3.0/) notice. The excerpts were trimmed, filtered, faded and mixed to mono for Crowfield.
+- `magazine-out.wav` and `magazine-in.wav` are edited excerpts of `clipload1.wav` and `clipload2.wav` from [Gun Reload Sound Effects](https://opengameart.org/content/gun-reload-sound-effects) by Brian MacIntosh (BMacZero), released under [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/). They were trimmed, filtered, faded and mixed to mono.

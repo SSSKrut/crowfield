@@ -92,7 +92,7 @@ static func prototype() -> MapScene:
 	scene.set_zone(Game.Team.RED, Vector3(0, 0.2, -11), 0)
 	scene.play_area = 14.0
 	scene.add_box(Vector3(15, 0.25, 15), Vector3(0, -0.25, 0), Basis(), Kind.GROUND)
-	scene.add_box(Vector3(2.5, 0.2, 3), Vector3(4, 0.65, 0), Basis(Vector3.RIGHT, -0.22), Kind.WOOD)
+	scene.add_box(Vector3(2.5, 0.2, 3), Vector3(4, 0.65, 0), Basis(Vector3.RIGHT, 0.22), Kind.WOOD)
 	scene.add_box(Vector3(2.5, 0.75, 2.5), Vector3(4, 0.75, -5), Basis(), Kind.WOOD)
 	scene.add_box(Vector3(0.35, 0.6, 2), Vector3(-2, 0.6, -2), Basis(), Kind.WOOD)
 	scene.add_box(Vector3(1.5, 0.15, 0.5), Vector3(-5, 0.15, 3), Basis(), Kind.WOOD)
