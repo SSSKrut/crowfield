@@ -32,3 +32,19 @@ Crowfield already has a full round, three river crossings, team colors, and an a
 | Preference | Use five to eight players. Alternate the order of unlabeled Crowfield builds, and compare Ravenfield in its own logged session. Ask which game they would play again and why. | A majority prefer Crowfield overall and can name a reason tied to playing the match. Keep separate notes for navigation, combat feel and presentation. |
 
 Automated tests protect rules and regressions. A scripted benchmark can compare rendering options, and a human comparison establishes whether the game clears the quality floor. Log the build, hardware, renderer, viewport pixels, bot count, seed, scenario, and preset with every result. [Godot GPU optimization guide](https://docs.godotengine.org/en/4.7/tutorials/performance/gpu_optimization.html)
+
+## Run the renderer comparison
+
+From Terminal on macOS, run the exported app at the same resolution and with both presets, one run at a time. The camera moves from the gate to the ford while the local server runs a seeded 24-bot round. Each run writes frame-time percentiles and the viewport configuration. The camera route measures renderer performance. Use a human round to evaluate input feel and player decisions.
+
+```sh
+app="$HOME/Applications/Crowfield.app/Contents/MacOS/Crowfield"
+for preset in quality performance; do
+  "$app" --windowed --resolution 3840x2160 -- client \
+    -map=valley -bots=24 -seed=5 -max-fps=60 -volume=0 -config-dir= \
+    "-graphics=$preset" -benchmark=90s -benchmark-warmup=6s \
+    -benchmark-route=valley "-benchmark-path=/tmp/crowfield-$preset-4k.json"
+done
+```
+
+For a 1280×720 comparison, change the window resolution and output filenames. Compare the report's actual viewport sizes and frame-time percentiles. The Performance preset caps the estimated 3D render area near 1600×900, with full-resolution HUD, no MSAA, and shorter directional shadows. [Godot resolution scaling](https://docs.godotengine.org/en/4.7/tutorials/3d/resolution_scaling.html)
