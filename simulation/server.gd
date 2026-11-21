@@ -95,6 +95,11 @@ static func create(server_settings: ServerSettings, server_rules: Rules) -> Vari
 	return server
 
 
+## tick_time is the simulation clock used by tests that run in lockstep.
+func tick_time() -> float:
+	return float(tick) / Game.TICK_RATE
+
+
 ## close frees the world and ends every connection.
 func close() -> void:
 	for session in sessions:

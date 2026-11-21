@@ -9,14 +9,20 @@ class_name Memory
 static func pair() -> Array[Conn]:
 	var first := End.new()
 	var second := End.new()
-	first.peer = second
-	second.peer = first
+	first._peer = weakref(second)
+	second._peer = weakref(first)
 	return [first, second]
 
 
 class End:
 	extends Conn
-	var peer: End
+	# The callers own the ends. Each end only borrows the other while sending.
+	var _peer: WeakRef
+
+	func is_open() -> bool:
+		if super.is_open() and (_peer == null or _peer.get_ref() == null):
+			_mark_closed("peer disconnected", true)
+		return super.is_open()
 
 	func send_reliable(channel: int, payload: PackedByteArray) -> Error:
 		if not is_open():
@@ -26,6 +32,7 @@ class End:
 			return error
 		stats.messages_sent += 1
 		stats.bytes_sent += payload.size()
+		var peer := _peer.get_ref() as End
 		if peer != null and peer.is_open() and not peer._deliver_reliable(channel, payload):
 			peer._mark_closed("receive queue overflowed", false)
 			_mark_closed("peer does not read its reliable messages", false)
@@ -39,6 +46,7 @@ class End:
 			return ERR_INVALID_PARAMETER
 		stats.datagrams_sent += 1
 		stats.bytes_sent += payload.size()
+		var peer := _peer.get_ref() as End
 		if peer != null and peer.is_open():
 			peer._deliver_datagram(payload)
 		return OK
@@ -47,11 +55,9 @@ class End:
 		if not is_open():
 			return
 		_mark_closed(reason, false)
+		var peer := _peer.get_ref() as End
 		if peer != null:
 			peer._mark_closed(reason, true)
-			# The two ends point at each other; closed, they let go.
-			peer.peer = null
-			peer = null
 
 
 ## Listener lets the embedded server accept the client of its own process
@@ -80,6 +86,9 @@ class MemoryListener:
 
 	func close() -> void:
 		_closed = true
+		for conn in _pending:
+			conn.close("listener closed")
+		_pending.clear()
 		for conn in _accepted:
 			conn.close("listener closed")
 		_accepted.clear()

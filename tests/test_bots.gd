@@ -23,9 +23,17 @@ func _server(bots: int, walled: bool) -> Server:
 	settings.bots = bots
 	settings.seed = 2
 	var server: Server = Server.create(settings, Rules.new())
-	server.clock = func() -> float: return float(server.tick) / Game.TICK_RATE
+	server.clock = server.tick_time
 	cleanup(func() -> void: server.close())
 	return server
+
+
+func test_bot_death_attempts_are_bounded_per_tick() -> void:
+	var server := _server(1, false)
+	server.settings.bot_deaths = 1e30
+	server.bots.kill()
+	var bot := server.soldiers.get_soldier(server.bots.bots[0].soldier)
+	check(not bot.alive, "the bot did not die at the configured debug rate")
 
 
 static func _steps(server: Server, ticks: int) -> void:

@@ -25,6 +25,8 @@ var match_seed := 0
 var soldier := Soldier.new()
 var started := false
 var last := 0
+## Horizontal speed achieved in the latest predicted tick, after collisions.
+var achieved_speed := 0.0
 ## corrections counts the corrections, weapon_corrections those of them where
 ## only the weapons disagreed.
 var corrections := 0
@@ -32,6 +34,7 @@ var weapon_corrections := 0
 var last_error := 0.0
 
 var _ticks: Array[PredictedTick] = []
+var _last_command_tick := -1
 var _previous := Vector3.ZERO
 var _offset := Vector3.ZERO
 
@@ -56,8 +59,10 @@ func close() -> void:
 ## their commands.
 func join(seed: int) -> void:
 	started = false
+	achieved_speed = 0
 	_offset = Vector3.ZERO
 	match_seed = seed
+	_last_command_tick = -1
 	for predicted in _ticks:
 		predicted.tick = -1
 		predicted.stepped = false
@@ -67,10 +72,15 @@ func join(seed: int) -> void:
 ## it. Ticks skipped by a clock jump get the repeated command the server uses.
 ## It returns what the weapons did at the tick of the command, for the effects.
 func predict(command: InputCommand) -> WeaponStep:
-	if started and command.tick <= last:
+	if command.tick <= _last_command_tick:
 		# The clock jumped back; start again from the next confirmed state.
 		started = false
+	_last_command_tick = command.tick
 	if started:
+		# A confirmation can put the soldier ahead of the client's clock.
+		# Commands for those ticks cannot change the confirmed state.
+		if command.tick <= last:
+			return WeaponStep.new()
 		var previous := _ticks[last % HISTORY].command
 		var at := last + 1
 		while at != command.tick and command.tick - at < HISTORY:
@@ -93,7 +103,9 @@ func _record(command: InputCommand, step: bool) -> WeaponStep:
 
 
 func _step(slot: PredictedTick) -> WeaponStep:
+	var before := soldier.position
 	var result := controller.run_command(weapons, soldier, slot.command, match_seed)
+	achieved_speed = Game.horizontal_length(soldier.position - before) / Game.TICK_DELTA
 	slot.soldier = soldier.copy()
 	slot.stepped = true
 	return result
@@ -109,6 +121,7 @@ func reconcile(server: PlayerState) -> void:
 		# The dead are not predicted: the soldier lies where the server says,
 		# and a new one starts the prediction again.
 		started = false
+		achieved_speed = 0
 		_offset = Vector3.ZERO
 		soldier = Soldier.new()
 		soldier.id = server.soldier
@@ -118,6 +131,12 @@ func reconcile(server: PlayerState) -> void:
 	# Health is the server's alone; the prediction needs it for a medkit.
 	soldier.health = server.health
 	var at := server.last_processed_tick
+	if last - at >= HISTORY:
+		# The history no longer covers this confirmation. Snap to it without
+		# inventing the missing commands or reusing predictions from before it.
+		for predicted in _ticks:
+			predicted.tick = -1
+		last = at
 	var slot := _ticks[at % HISTORY]
 	var known := started and slot.tick == at and slot.stepped
 	var moved := not known or not _near(slot.soldier.position, server.position, ACCEPTED_POSITION_ERROR) \
@@ -146,6 +165,8 @@ func reconcile(server: PlayerState) -> void:
 		if not moved:
 			weapon_corrections += 1
 	soldier = confirmed
+	if moved:
+		achieved_speed = 0
 	var previous := InputCommand.new()
 	if slot.tick == at:
 		previous = slot.command

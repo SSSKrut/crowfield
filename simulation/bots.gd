@@ -300,7 +300,9 @@ func hurt(index: int, shooter: int) -> void:
 func kill() -> void:
 	if _server.settings.bot_deaths <= 0 or bots.is_empty():
 		return
-	_deaths += _server.settings.bot_deaths / Game.TICK_RATE
+	# There are only this many bots to kill in one tick. Discard excess
+	# attempts so an extreme debug rate cannot stall the simulation.
+	_deaths = minf(_deaths + _server.settings.bot_deaths / Game.TICK_RATE, bots.size())
 	while _deaths >= 1:
 		_deaths -= 1
 		var soldier := _server.soldiers.get_soldier(bots[_random.randi_range(0, bots.size() - 1)].soldier)

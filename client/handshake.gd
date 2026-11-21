@@ -42,7 +42,9 @@ func failed() -> bool:
 	return error != ""
 
 
-func poll() -> void:
+## local_tick is the current tick of a server on this thread. It stays fixed
+## while this call builds the map.
+func poll(local_tick: int = -1) -> void:
 	if done() or failed():
 		return
 	conn.poll()
@@ -99,8 +101,14 @@ func poll() -> void:
 		conn.close("handshake failed")
 		return
 	conn.send_reliable(Conn.Channel.CONTROL, Protocol.encode(Messages.Ready.new()))
-	# The server went on while the map was built.
-	welcome.server_tick += floori((ClientSession._now() - _sent - rtt) * Game.TICK_RATE)
+	if local_tick >= 0:
+		welcome.server_tick = local_tick
+		# The memory transport adds no network latency. The measured delay
+		# here is time spent waiting for the client and server to process a frame.
+		rtt = 0.0
+	else:
+		# A remote server keeps ticking while this client builds the map.
+		welcome.server_tick += floori((ClientSession._now() - _sent - rtt) * Game.TICK_RATE)
 	session = ClientSession.new(conn, _name, welcome, rtt)
 
 

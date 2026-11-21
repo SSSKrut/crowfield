@@ -1,4 +1,4 @@
-# The engine's cache of imported assets and scripts; `make import` rebuilds it.
+# The engine's cache of imported assets and scripts; `godot --headless --import` rebuilds it.
 /.godot/
 # Exported builds.
 /export/

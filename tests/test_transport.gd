@@ -93,6 +93,14 @@ func test_memory_close_tells_the_reason() -> void:
 	check(ends[0].send_reliable(Conn.Channel.CONTROL, _bytes("late")) != OK, "a closed connection sent")
 
 
+func test_memory_closes_when_peer_is_released() -> void:
+	var ends := Memory.pair()
+	var remaining := ends[0]
+	ends.clear()
+	check_equal(remaining.send_reliable(Conn.Channel.CONTROL, _bytes("late")), ERR_CONNECTION_ERROR, "send to a released peer")
+	check(not remaining.is_open() and remaining.closed_by_peer, "the remaining end still appears connected")
+
+
 func _simulated(text: String) -> Array:
 	var parsed: Variant = NetworkConditions.parse(text)
 	if parsed is String:

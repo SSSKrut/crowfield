@@ -191,12 +191,16 @@ func _wall(origin: Vector3, turn: float, a: Vector2, b: Vector2, level: float, h
 ## _base is a camp behind sandbags, facing north: huts, crates, a flag and a
 ## watch platform with a ramp.
 func _base(origin: Vector3, turn: float) -> void:
+	const GATE_HALF_WIDTH := 4.0
+	const FLANK_COVER_WIDTH := 2.4
 	var level := BASE_LEVEL
 	for side: float in [-1.0, 1.0]:
-		_wall(origin, turn, Vector2(side * 4, -15), Vector2(side * 15, -15), level, 1.1, 0.8, MapScene.Kind.SANDBAG)
+		_wall(origin, turn, Vector2(side * GATE_HALF_WIDTH, -15), Vector2(side * 15, -15), level, 1.1, 0.8, MapScene.Kind.SANDBAG)
 		_wall(origin, turn, Vector2(side * 17, -12), Vector2(side * 17, -2), level, 1.1, 0.8, MapScene.Kind.SANDBAG)
 		_wall(origin, turn, Vector2(side * 17, 4), Vector2(side * 17, 14), level, 1.1, 0.8, MapScene.Kind.SANDBAG)
-		_put(origin, turn, side * 2.2, -17.5, level, Vector3(2.4, 1.1, 0.8), MapScene.Kind.SANDBAG)
+		# Keep the outer sandbags clear of the main gate.
+		_put(origin, turn, side * (GATE_HALF_WIDTH + FLANK_COVER_WIDTH / 2), -17.5, level,
+			Vector3(FLANK_COVER_WIDTH, 1.1, 0.8), MapScene.Kind.SANDBAG)
 		# A hut open to the middle of the camp.
 		var hut := Vector2(side * 11, 4)
 		_wall(origin, turn, hut + Vector2(-2.5, -2), hut + Vector2(2.5, -2), level, 2.6, 0.2, MapScene.Kind.PLANKS)

@@ -127,6 +127,18 @@ func _init() -> void:
 		_light_age.append(BLAST_LIGHT_TIME)
 
 
+## warm_up lets the Compatibility renderer draw every pool before combat.
+## Its first draw compiles the material variants even for unlit effects.
+## The pool bounds keep each draw in the render list. The warmup instances
+## themselves sit behind the camera until update replaces them.
+func warm_up(camera: Camera3D) -> void:
+	var transform := Transform3D(Basis(), camera.to_global(Vector3(0, 0, 2)))
+	for pool: MultiMesh in [_tracers, _impacts, _sparks, _flashes, _fireballs, _puffs]:
+		pool.set_instance_transform(0, transform)
+		pool.set_instance_color(0, Color.TRANSPARENT)
+		pool.visible_instance_count = 1
+
+
 ## flash shows the muzzle flash of another soldier's shot.
 func flash(muzzle: Vector3) -> void:
 	if _flash_position.size() == MAX_FLASHES:

@@ -232,7 +232,7 @@ func _bot_server(bots: int) -> Server:
 	settings.bots = bots
 	settings.seed = 6
 	var server: Server = Server.create(settings, Rules.new())
-	server.clock = func() -> float: return float(server.tick) / Game.TICK_RATE
+	server.clock = server.tick_time
 	cleanup(func() -> void: server.close())
 	return server
 
