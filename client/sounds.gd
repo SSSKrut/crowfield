@@ -14,6 +14,10 @@ const REMOTE_FOOTSTEP_RANGE := 16.0
 ## A distant shot is half as loud at this distance, before the spatial mix.
 const FALLOFF_DISTANCE := 20.0
 const QUIETEST := 0.03
+const SHOT_COVER_RAYS_PER_FRAME := 8
+const SHOT_COVER_GAIN := 0.60
+const COVER_FILTER_HZ := 1500.0
+const DIRECT_FILTER_HZ := 5000.0
 const WIND := preload("res://assets/audio/ambience/wind.ogg")
 const RIVER := preload("res://assets/audio/ambience/river.ogg")
 
@@ -46,6 +50,9 @@ var _shots := {}
 var _next := {}
 var _positional: Array[AudioStreamPlayer3D] = []
 var _next_positional := 0
+var _shot_cover_query := PhysicsRayQueryParameters3D.new()
+var _shot_cover_frame := -1
+var _shot_cover_rays := 0
 var _remote_boots: Array[AudioStreamPlayer3D] = []
 var _remote_step_number := 0
 var _dry: AudioStreamPlayer
@@ -74,6 +81,7 @@ func _init(volume: float) -> void:
 	if _volume <= 0:
 		return
 	_audible = true
+	_shot_cover_query.collision_mask = Game.LAYER_STATIC | Game.LAYER_VEHICLE
 	for kind in GUNSHOTS:
 		var stream: AudioStreamWAV = GUNSHOTS[kind]
 		var voices: Array[AudioStreamPlayer] = []
@@ -166,7 +174,25 @@ func shot_at(kind: int, position: Vector3) -> void:
 	var gain := 1.0 / (1.0 + relative_distance * relative_distance)
 	if gain < QUIETEST:
 		return
-	_play_at(GUNSHOTS[kind], position, gain * SHOT_VOLUMES[kind])
+	var covered := camera != null and distance > 0.1 and _shot_is_covered(camera, position)
+	if covered:
+		gain *= SHOT_COVER_GAIN
+	_play_at(GUNSHOTS[kind], position, gain * SHOT_VOLUMES[kind], covered)
+
+
+## Only spend ray queries on audible shots, with a per-frame budget for big
+## volleys. Beyond that budget the existing distance and direction cue plays.
+func _shot_is_covered(camera: Camera3D, position: Vector3) -> bool:
+	var frame := Engine.get_process_frames()
+	if frame != _shot_cover_frame:
+		_shot_cover_frame = frame
+		_shot_cover_rays = 0
+	if _shot_cover_rays >= SHOT_COVER_RAYS_PER_FRAME:
+		return false
+	_shot_cover_rays += 1
+	_shot_cover_query.from = camera.global_position
+	_shot_cover_query.to = position
+	return not camera.get_world_3d().direct_space_state.intersect_ray(_shot_cover_query).is_empty()
 
 
 ## Nearby bullet strikes add a dry localized cue. A short rate limit keeps
@@ -185,8 +211,9 @@ func impact_at(position: Vector3) -> void:
 	_play_at(STRIKE, position, 0.29 * (1.0 - distance / 16.0))
 
 
-func _play_at(stream: AudioStreamWAV, position: Vector3, volume: float) -> void:
+func _play_at(stream: AudioStreamWAV, position: Vector3, volume: float, covered: bool = false) -> void:
 	var player := _positional[_next_positional]
+	player.attenuation_filter_cutoff_hz = COVER_FILTER_HZ if covered else DIRECT_FILTER_HZ
 	_next_positional = (_next_positional + 1) % POSITIONAL_VOICES
 	_play_spatial(player, stream, position, volume, SHOT_PITCHES[_next_positional % SHOT_VOICES])
 
