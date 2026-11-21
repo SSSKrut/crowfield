@@ -32,6 +32,7 @@ const BOT_ANGLE_STEP := 1 << (YAW_BITS - BOT_YAW_BITS)
 
 const ALIVE := 1
 const GROUNDED := 2
+const CROUCHED := 4
 
 var id := 0
 var bot := false
@@ -74,7 +75,8 @@ static func create(soldier: Soldier) -> SoldierState:
 	state.hit_count = soldier.hit_count & ((1 << HIT_COUNT_BITS) - 1)
 	state.hit_box = soldier.hit_box & ((1 << HIT_BOX_BITS) - 1)
 	state.hit_yaw = quantize_turn(soldier.hit_yaw, HIT_YAW_BITS) >> (YAW_BITS - HIT_YAW_BITS)
-	state.flags = (ALIVE if soldier.alive else 0) | (GROUNDED if soldier.grounded else 0)
+	state.flags = (ALIVE if soldier.alive else 0) | (GROUNDED if soldier.grounded else 0) \
+		| (CROUCHED if soldier.crouched else 0)
 	var x := roundi(clampf(position.x * POSITION_UNITS_PER_METRE, -2147483648.0, 2147483647.0))
 	var y := roundi(clampf(position.y * POSITION_UNITS_PER_METRE, -2147483648.0, 2147483647.0))
 	var z := roundi(clampf(position.z * POSITION_UNITS_PER_METRE, -2147483648.0, 2147483647.0))
@@ -142,6 +144,7 @@ func apply(soldier: Soldier) -> void:
 	soldier.team = team
 	soldier.alive = flags & ALIVE != 0
 	soldier.grounded = flags & GROUNDED != 0
+	soldier.crouched = flags & CROUCHED != 0
 	soldier.controller = Game.Controller.BOT if bot else Game.Controller.PLAYER
 	soldier.position = Vector3(position) / POSITION_UNITS_PER_METRE
 	soldier.velocity = Vector3(velocity) / VELOCITY_UNITS_PER_METRE

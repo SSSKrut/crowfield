@@ -21,7 +21,7 @@ var allow_solo_replay := false
 
 const RECONNECT_WINDOW := 60.0
 const HELP_LINES := [
-	"WASD move | Space jump | Shift sprint | LMB fire | RMB aim | R reload | 1-3, wheel weapon",
+	"WASD move | Space jump | C crouch | Shift sprint | LMB fire | RMB aim | R reload | 1-3, wheel weapon",
 	"K ragdoll | Backspace respawn | L knock down nearest | F1 physics | F2 network | F3 camera | Esc menu",
 	"F4 save playtest state | Shift+F4 save state and screenshot",
 ]
@@ -40,7 +40,7 @@ const NATIVE_INPUT_EXTENSION := "res://.godot/playtest-native/native-input.gdext
 const NATIVE_INPUT_PATH_ENV := "CROWFIELD_NATIVE_INPUT_PATH"
 const NATIVE_INPUT_GAMEPLAY_ENV := "CROWFIELD_NATIVE_INPUT_GAMEPLAY"
 const MOVE_ACTIONS := ["move_forward", "move_back", "move_left", "move_right"]
-const HELD_ACTIONS := MOVE_ACTIONS + ["jump", "sprint", "fire", "aim"]
+const HELD_ACTIONS := MOVE_ACTIONS + ["jump", "crouch", "sprint", "fire", "aim"]
 const TRACE_ACTIONS := HELD_ACTIONS + ["reload", "weapon_1", "weapon_2", "weapon_3", "weapon_next", "weapon_previous"]
 const VIRTUAL_INTERFACES := ["lo", "docker", "br-", "veth", "virbr"]
 
@@ -833,6 +833,7 @@ func _process(delta: float) -> void:
 		_net_bytes = session.bytes
 		_net_window = 0.0
 	var own := _own_soldier()
+	var crouched := own != null and own.crouched
 	if settings["demo"] and own != null and not _ragdoll and _elapsed >= 1.2:
 		_die(predictor.drawn(_alpha), own.velocity)
 	if settings["demo"] and _ragdoll and _elapsed >= 3 and _demo_cycle + 1 < settings["cycles"]:
@@ -849,10 +850,10 @@ func _process(delta: float) -> void:
 		# Dead, or not yet predicted: where the server has the soldier.
 		feet = server_own.position
 	_feet = feet
-	_update_self(delta, feet, speed, server_own)
+	_update_self(delta, feet, speed, server_own, crouched)
 	bodies.update(delta)
 	_charge("bodies")
-	_update_camera(feet)
+	_update_camera(feet, crouched)
 	sounds.update_ambience(camera.global_position, delta)
 	var local_feedback := own != null and _first_person() and _focused and not menu.visible and _reconnect_since < 0
 	var footfall := view_model.footing(delta, feet, own != null and own.grounded,
@@ -863,7 +864,7 @@ func _process(delta: float) -> void:
 	effects.update(delta, local_feedback and view_model.aim < MUZZLE_SMOKE_AIM_LIMIT)
 	_charge("weapon")
 	soldier_views.update(session, delta, camera, scene)
-	soldier_views.aim(feet + Vector3(0, rules.movement.eye_height, 0), Game.view_direction(_yaw, _pitch), rules.movement.center_height())
+	soldier_views.aim(feet + Vector3.UP * rules.movement.view_height(crouched), Game.view_direction(_yaw, _pitch))
 	var aimed := 0
 	var aimed_updates := 0
 	if soldier_views.aimed != null:
@@ -964,6 +965,8 @@ func _command() -> InputCommand:
 			buttons |= InputCommand.JUMP
 		if Input.is_action_pressed("sprint"):
 			buttons |= InputCommand.SPRINT
+		if Input.is_action_pressed("crouch"):
+			buttons |= InputCommand.CROUCH
 		if Input.is_action_pressed("fire") or _fire_pressed:
 			buttons |= InputCommand.FIRE
 		if Input.is_action_pressed("aim"):
@@ -1055,6 +1058,7 @@ func _sample_input_trace() -> void:
 		"pitch_radians": _pitch,
 		"last_frame_ms": _last_frame_usec / 1000.0,
 		"health": session.player.health if session.player.processed else null,
+		"crouched": predictor.soldier.crouched if predictor.started else null,
 		"soldier": session.player.soldier if session.player.processed else null,
 		"weapon": WeaponTuning.kind_name(arsenal.weapon()) if armed else null,
 		"magazine": arsenal.magazine[arsenal.current] if armed else null,
@@ -1119,12 +1123,12 @@ func _team() -> int:
 
 ## _update_self shows the own soldier's model in third person, in overview
 ## and when it lies fallen; in first person the player sees its weapon only.
-func _update_self(delta: float, feet: Vector3, speed: float, server_own: Soldier) -> void:
+func _update_self(delta: float, feet: Vector3, speed: float, server_own: Soldier, crouched: bool) -> void:
 	var shown: bool = _ragdoll or ((_third_person or settings["overview"]) and server_own != null)
 	_self_view.visible = shown
 	if not _ragdoll:
 		_self_view.face(feet, _yaw)
-		_self_view.animate(delta, speed)
+		_self_view.animate(delta, speed, crouched)
 		_self_view.set_foot_terrain(scene.terrain if shown and server_own.grounded else null)
 	_self_view.update_fall(delta)
 	_self_view.set_tint(soldier_views.tint(_team()))
@@ -1146,7 +1150,7 @@ func _update_self(delta: float, feet: Vector3, speed: float, server_own: Soldier
 ## _update_camera looks where the player aims, turned by the kick of the
 ## weapon, which the aim of the next shot has too. Aiming down the sights
 ## narrows the field of view by the weapon's zoom.
-func _update_camera(feet: Vector3) -> void:
+func _update_camera(feet: Vector3, crouched := false) -> void:
 	var yaw := _yaw
 	var pitch := _pitch
 	var fov: float = settings["fov"]
@@ -1162,7 +1166,7 @@ func _update_camera(feet: Vector3) -> void:
 		_update_benchmark_camera()
 		return
 	var forward := Game.view_direction(yaw, pitch)
-	var eye := feet + Vector3(0, rules.movement.eye_height, 0)
+	var eye := feet + Vector3.UP * rules.movement.view_height(crouched)
 	if settings["overview"]:
 		# High above the south edge of the map: every soldier is in view.
 		var area := scene.play_area
@@ -1190,7 +1194,7 @@ func _update_weapon(delta: float, own: Soldier, speed: float) -> void:
 		return
 	var held := _buttons & InputCommand.AIM != 0
 	var aiming := held and arsenal.action == Arsenal.Action.READY
-	var sprinting := _buttons & InputCommand.SPRINT != 0 and not held and _buttons & InputCommand.FIRE == 0 \
+	var sprinting := not own.crouched and _buttons & InputCommand.SPRINT != 0 and not held and _buttons & InputCommand.FIRE == 0 \
 		and speed > rules.movement.walk_speed
 	view_model.update(delta, aiming, sprinting, own.grounded, speed / rules.movement.sprint_speed, _look)
 	var progress := 0.0
@@ -1248,7 +1252,7 @@ func _die(feet: Vector3, velocity: Vector3) -> void:
 		Game.view_direction(_yaw, 0) * 35 + Vector3(0, 20, 0))
 	var own := session.local_soldier()
 	if _fallen != 0 and own != null:
-		blow = SoldierViews.strike(feet, _yaw, own.hit_box, own.hit_yaw)
+		blow = SoldierViews.strike(feet, _yaw, own.hit_box, own.hit_yaw, own.crouched)
 	bodies.make_room(pool, camera.global_position)
 	if _self_view.fall(pool, velocity, blow):
 		_self_view.visible = true
@@ -1375,14 +1379,14 @@ func _draw_debug(spawned: bool) -> void:
 	for box in scene.boxes:
 		debug.box(box.transform, box.half_extents, Color.BLACK)
 	for entry in soldier_views.shown:
-		debug.hitboxes(entry.known.remote.position, entry.known.remote.yaw)
+		debug.hitboxes(entry.known.remote.position, entry.known.remote.yaw, entry.known.remote.crouched)
 	if spawned and not _ragdoll:
 		# The server's view of the own soldier, to compare with the prediction.
 		var server_own := session.local_soldier()
 		if server_own != null:
 			var radius := rules.movement.capsule_radius
 			debug.capsule(server_own.position + Vector3(0, radius, 0),
-				server_own.position + Vector3(0, 2 * rules.movement.center_height() - radius, 0), radius, Color.ORANGE)
+				server_own.position + Vector3(0, 2 * rules.movement.center_height(server_own.crouched) - radius, 0), radius, Color.ORANGE)
 	debug.grid(30, Color(0.4, 0.4, 0.4))
 	var origin := camera.global_position
 	var forward := -camera.global_basis.z

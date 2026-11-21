@@ -17,6 +17,7 @@ var velocity := Vector3.ZERO
 var yaw := 0.0
 var pitch := 0.0
 var grounded := false
+var crouched := false
 ## health runs from Game.MAX_HEALTH down to zero, at which the soldier dies.
 var health := 0
 var arsenal := Arsenal.new()
@@ -44,6 +45,7 @@ func copy() -> Soldier:
 	other.yaw = yaw
 	other.pitch = pitch
 	other.grounded = grounded
+	other.crouched = crouched
 	other.health = health
 	other.arsenal = arsenal.copy()
 	other.shots = shots

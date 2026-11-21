@@ -57,31 +57,39 @@ func face(position: Vector3, yaw: float) -> void:
 
 
 ## animate advances the animation of a soldier moving at speed.
-func animate(delta: float, speed: float) -> void:
+func animate(delta: float, speed: float, crouched := false) -> void:
 	if fallen:
 		return
 	flinch.advance(delta)
 	var next := CharacterAsset.Clip.IDLE
-	if speed >= RUN_SPEED:
+	if crouched:
+		next = CharacterAsset.Clip.CROUCH_WALKING if speed >= WALK_SPEED else CharacterAsset.Clip.CROUCH_IDLE
+	elif speed >= RUN_SPEED:
 		next = CharacterAsset.Clip.RUNNING
 	elif speed >= WALK_SPEED:
 		next = CharacterAsset.Clip.WALKING
 	if next != clip:
 		var phase := 0.0
-		if clip != CharacterAsset.Clip.IDLE and next != CharacterAsset.Clip.IDLE:
-			# Walking and running are the same gait: the phase carries over.
+		const WALKING_CLIPS := [CharacterAsset.Clip.WALKING, CharacterAsset.Clip.RUNNING, CharacterAsset.Clip.CROUCH_WALKING]
+		if clip in WALKING_CLIPS and next in WALKING_CLIPS:
 			phase = player.current_animation_position / asset.periods[clip]
-		player.play(CharacterAsset.CLIPS[next], BLEND_TIME)
+		var stance_changed := crouched != (clip >= CharacterAsset.Clip.CROUCH_IDLE)
+		# Stance is an exact tick state shared by shots and collision.
+		player.play(CharacterAsset.CLIPS[next], 0.0 if stance_changed else BLEND_TIME)
 		if phase > 0:
 			player.seek(phase * asset.periods[next])
+		if stance_changed:
+			player.advance(0.0)
 		clip = next
 	match clip:
-		CharacterAsset.Clip.IDLE:
+		CharacterAsset.Clip.IDLE, CharacterAsset.Clip.CROUCH_IDLE:
 			player.speed_scale = 1.0
 		CharacterAsset.Clip.WALKING:
 			player.speed_scale = clampf(speed / 4.25, 0.25, 1.4)
 		CharacterAsset.Clip.RUNNING:
 			player.speed_scale = clampf(speed / 6.65, 0.85, 1.4)
+		CharacterAsset.Clip.CROUCH_WALKING:
+			player.speed_scale = clampf(speed / 1.67, 0.25, 1.6)
 
 
 ## grip_shift keeps the held weapon with the animated trigger hand.

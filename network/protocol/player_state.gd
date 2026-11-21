@@ -27,6 +27,7 @@ var input_lead := NO_INPUT
 var soldier := 0
 var position := Vector3.ZERO
 var velocity := Vector3.ZERO
+var crouched := false
 ## health is zero while the soldier is dead; respawn is then how many ticks
 ## are left until the player comes back, at least one.
 var health := 0
@@ -40,8 +41,8 @@ func validate() -> String:
 	if not position.is_finite() or not velocity.is_finite():
 		return BitReader.INVALID_FLOAT
 	if soldier == 0:
-		if not arsenal.is_empty() or health != 0 or respawn != 0:
-			return "an arsenal or health without a soldier"
+		if not arsenal.is_empty() or health != 0 or respawn != 0 or crouched:
+			return "player state without a soldier"
 		return ""
 	var error := _validate_health(health, respawn)
 	if error != "":
@@ -89,7 +90,7 @@ func bits() -> int:
 	if processed:
 		count += 32
 	if soldier != 0:
-		count += 6 * 32 + HEALTH_BITS + _arsenal_bits()
+		count += 6 * 32 + 1 + HEALTH_BITS + _arsenal_bits()
 		if health == 0:
 			count += RESPAWN_BITS
 	return count
@@ -119,6 +120,7 @@ func write(w: BitWriter) -> void:
 		return
 	for value in [position.x, position.y, position.z, velocity.x, velocity.y, velocity.z]:
 		w.write_float32(value)
+	w.write_bool(crouched)
 	w.write_bits(health, HEALTH_BITS)
 	if health == 0:
 		w.write_bits(respawn, RESPAWN_BITS)
@@ -148,6 +150,7 @@ func read(r: BitReader) -> void:
 	soldier = r.read_bits(16)
 	position = Vector3.ZERO
 	velocity = Vector3.ZERO
+	crouched = false
 	health = 0
 	respawn = 0
 	arsenal = Arsenal.new()
@@ -161,6 +164,7 @@ func read(r: BitReader) -> void:
 	var vx := r.read_float32()
 	var vy := r.read_float32()
 	velocity = Vector3(vx, vy, r.read_float32())
+	crouched = r.read_bool()
 	health = r.read_bits(HEALTH_BITS)
 	if health == 0:
 		respawn = r.read_bits(RESPAWN_BITS)

@@ -97,7 +97,7 @@ func update(session: ClientSession, delta: float, camera: Camera3D, scene: MapSc
 		entry.distance = remote.position.distance_to(eye)
 		entry.view.face(remote.position, remote.yaw)
 		var speed := Game.horizontal_length(remote.velocity)
-		entry.view.animate(delta, speed)
+		entry.view.animate(delta, speed, remote.crouched)
 		if sounds != null:
 			var near_enough := entry.distance < Sounds.REMOTE_FOOTSTEP_RANGE
 			if entry.footstep_due(remote, speed / rules.movement.sprint_speed, delta, near_enough):
@@ -173,7 +173,7 @@ func _show_combat(known: KnownSoldier, view: CharacterView, render_tick: float) 
 		return false
 	known.hurt = false
 	var box := mini(known.soldier.hit_box, Hitboxes.COUNT - 1)
-	effects.hit(Hitboxes.center(box, remote.position, remote.yaw), Game.view_direction(known.soldier.hit_yaw, 0))
+	effects.hit(Hitboxes.center(box, remote.position, remote.yaw, remote.crouched), Game.view_direction(known.soldier.hit_yaw, 0))
 	return true
 
 
@@ -189,7 +189,7 @@ func _show_shot(kind: int, remote: RemoteSoldier, grip_shift: Vector3) -> void:
 	const SCATTER := 0.012
 	var direction := Game.view_direction(remote.yaw + SCATTER * (effects.random.randf() * 2 - 1),
 		remote.pitch + SCATTER * (effects.random.randf() * 2 - 1))
-	var eye := remote.position + Vector3(0, rules.movement.eye_height, 0)
+	var eye := remote.position + Vector3.UP * rules.movement.view_height(remote.crouched)
 	var end := eye + direction * tuning.range
 	_ray.from = eye
 	_ray.to = end
@@ -211,10 +211,10 @@ static func momentum(velocity: Vector3) -> Vector3:
 
 
 ## strike is the blow of the last hit on a soldier, for its fall.
-static func strike(soldier_position: Vector3, yaw: float, hit_box: int, hit_yaw: float) -> CharacterView.Strike:
+static func strike(soldier_position: Vector3, yaw: float, hit_box: int, hit_yaw: float, crouched := false) -> CharacterView.Strike:
 	var box := mini(hit_box, Hitboxes.COUNT - 1)
 	var impulse := Game.view_direction(hit_yaw, 0) * STRIKE_IMPULSE + Vector3(0, STRIKE_LIFT, 0)
-	return CharacterView.Strike.new(HITBOX_PARTS[box], Hitboxes.center(box, soldier_position, yaw), impulse)
+	return CharacterView.Strike.new(HITBOX_PARTS[box], Hitboxes.center(box, soldier_position, yaw, crouched), impulse)
 
 
 ## _fall turns a soldier that died into a ragdoll from its pose, struck where
@@ -227,7 +227,7 @@ func _fall(entry: Entry, known: KnownSoldier, eye: Vector3) -> void:
 		entry.view.queue_free()
 		return
 	bodies.make_room(pool, eye)
-	var blow := strike(remote.position, remote.yaw, known.soldier.hit_box, known.soldier.hit_yaw)
+	var blow := strike(remote.position, remote.yaw, known.soldier.hit_box, known.soldier.hit_yaw, remote.crouched)
 	if not entry.view.fall(pool, momentum(remote.last_alive_velocity()), blow):
 		entry.view.queue_free()
 		return
@@ -244,12 +244,13 @@ var bodies_parent: Node3D
 ## aim finds the soldier nearest to the line of sight, within a few degrees,
 ## as the server does for its priorities: from the soldier's eye along the
 ## command's direction, whatever the camera, to the middle of the body.
-func aim(eye: Vector3, forward: Vector3, center: float) -> void:
+func aim(eye: Vector3, forward: Vector3) -> void:
 	const LIMIT := 3.0 * PI / 180.0
 	aimed = null
 	var best := LIMIT
 	for entry in shown:
-		var to := entry.known.remote.position + Vector3(0, center, 0) - eye
+		var remote := entry.known.remote
+		var to := remote.position + Vector3.UP * rules.movement.center_height(remote.crouched) - eye
 		var length := to.length()
 		if length < 1e-3:
 			continue

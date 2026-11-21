@@ -178,3 +178,23 @@ func test_passive_bots_roam_without_getting_stuck() -> void:
 		check(soldier.position.y > -0.1 and soldier.position.y < 1.6, "a bot at height %.2f" % soldier.position.y)
 		check(start.has(soldier.id) and soldier.position.distance_to(start[soldier.id]) > 1, "bot 0x%04x hardly moved" % soldier.id)
 		check(still.get(soldier.id, 0) < 2 * Game.TICK_RATE, "bot 0x%04x stood still for %d ticks" % [soldier.id, still.get(soldier.id, 0)])
+
+
+func test_crouch_changes_hitbox_height_and_rewound_stance_discretely() -> void:
+	var soldier := Soldier.new()
+	soldier.alive = true
+	var soldiers := SoldierSet.new(2)
+	var id := soldiers.add(soldier)
+	var history := PoseHistory.new(2)
+	history.record(20, soldiers)
+	soldier.crouched = true
+	history.record(21, soldiers)
+	check_equal(history.at(id, 20.5)[3], false, "standing until the crouch tick")
+	check_equal(history.at(id, 21.0)[3], true, "crouched at the recorded tick")
+	var stand_ray := Vector3(0, 1.64, 3)
+	var low_ray := Vector3(0, 0.80, 3)
+	check(not Hitboxes.ray(stand_ray, Vector3.FORWARD, 7, Vector3.ZERO, 0.0).is_empty(), "standing head is hittable")
+	check(Hitboxes.ray(stand_ray, Vector3.FORWARD, 7, Vector3.ZERO, 0.0, true).is_empty(), "crouching clears the standing head ray")
+	var hit := Hitboxes.ray(low_ray, Vector3.FORWARD, 7, Vector3.ZERO, 0.0, true)
+	if check(not hit.is_empty(), "crouched head remains hittable"):
+		check_equal(Hitboxes.zone_of(hit[1]), Hitboxes.Zone.HEAD, "the lower ray strikes the crouched head")

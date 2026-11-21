@@ -3,7 +3,7 @@ extends RefCounted
 ## RemoteSoldier keeps the latest states of another soldier, so that it can be
 ## drawn smoothly in the recent past, between two states the client has
 ## (ARCHITECTURE.md, 6.7). evaluate() places it at a moment and leaves the
-## result in position, velocity, yaw, pitch, alive and grounded.
+## result in position, velocity, yaw, pitch, alive, grounded and crouched.
 
 const SAMPLES := 16
 ## Past the newest state a soldier keeps moving by its velocity for at most
@@ -27,6 +27,7 @@ var yaw := 0.0
 var pitch := 0.0
 var alive := true
 var grounded := false
+var crouched := false
 
 var _ticks := PackedInt64Array()
 var _positions := PackedVector3Array()
@@ -65,7 +66,8 @@ func add(tick: int, soldier: Soldier) -> void:
 	_velocities[at] = moving
 	_yaws[at] = soldier.yaw
 	_pitches[at] = soldier.pitch
-	_flags[at] = (SoldierState.ALIVE if soldier.alive else 0) | (SoldierState.GROUNDED if soldier.grounded else 0)
+	_flags[at] = (SoldierState.ALIVE if soldier.alive else 0) | (SoldierState.GROUNDED if soldier.grounded else 0) \
+		| (SoldierState.CROUCHED if soldier.crouched else 0)
 	if at == count % SAMPLES:
 		count += 1
 
@@ -122,6 +124,7 @@ func _take(sample: int) -> void:
 	pitch = _pitches[sample]
 	alive = _flags[sample] & SoldierState.ALIVE != 0
 	grounded = _flags[sample] & SoldierState.GROUNDED != 0
+	crouched = _flags[sample] & SoldierState.CROUCHED != 0
 
 
 func _hermite(earlier: int, later: int, render_tick: float) -> void:
@@ -144,3 +147,4 @@ func _hermite(earlier: int, later: int, render_tick: float) -> void:
 	# it, not halfway there: far soldiers come a second apart.
 	alive = _flags[earlier] & SoldierState.ALIVE != 0
 	grounded = _flags[earlier] & SoldierState.GROUNDED != 0
+	crouched = _flags[earlier] & SoldierState.CROUCHED != 0

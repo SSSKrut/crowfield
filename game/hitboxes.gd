@@ -19,6 +19,17 @@ const B := [
 	Vector3(-0.20, 1.22, 0.22), Vector3(0.255, 1.155, 0.105), Vector3(0.075, 1.215, 0.515), Vector3(0.085, 1.205, 0.26),
 ]
 const RADII := [0.118, 0.21, 0.105, 0.105, 0.082, 0.082, 0.069, 0.069]
+## Bent knees keep the legs rooted while the upper body and rifle sit
+## forward of the hips. The crouching crown stays below a bridge parapet.
+const CROUCH_A := [
+	Vector3(0, 0.735, 0.19), Vector3(0, 0.36, -0.17), Vector3(-0.118, 0.12, 0.03), Vector3(0.118, 0.12, 0.03),
+	Vector3(-0.22, 0.59, 0.04), Vector3(0.22, 0.59, 0.04), Vector3(-0.19, 0.53, 0.18), Vector3(0.23, 0.51, 0.12),
+]
+const CROUCH_B := [
+	Vector3(0, 0.770, 0.19), Vector3(0, 0.59, 0.06), Vector3(-0.118, 0.31, 0.21), Vector3(0.118, 0.31, 0.21),
+	Vector3(-0.19, 0.53, 0.18), Vector3(0.23, 0.51, 0.12), Vector3(0.06, 0.50, 0.35), Vector3(0.08, 0.49, 0.21),
+]
+const CROUCH_RADII := [0.117, 0.18, 0.105, 0.105, 0.082, 0.082, 0.069, 0.069]
 const ZONES := [Zone.HEAD, Zone.TORSO, Zone.LIMB, Zone.LIMB, Zone.LIMB, Zone.LIMB, Zone.LIMB, Zone.LIMB]
 
 ## COUNT is how many hitboxes a soldier has.
@@ -50,24 +61,29 @@ static func place(local: Vector3, position: Vector3, yaw: float) -> Vector3:
 
 
 ## center is the middle of a hitbox of a soldier at position looking along yaw.
-static func center(box: int, position: Vector3, yaw: float) -> Vector3:
-	return (place(A[box], position, yaw) + place(B[box], position, yaw)) * 0.5
+static func center(box: int, position: Vector3, yaw: float, crouched := false) -> Vector3:
+	var a: Vector3 = CROUCH_A[box] if crouched else A[box]
+	var b: Vector3 = CROUCH_B[box] if crouched else B[box]
+	return place((a + b) * 0.5, position, yaw)
 
 
 ## ray finds where a ray from origin along the unit direction first enters the
 ## hitboxes of a soldier standing at position and looking along yaw, no
 ## farther than limit. It returns [distance, hitbox], or [] for a miss.
-static func ray(origin: Vector3, direction: Vector3, limit: float, position: Vector3, yaw: float) -> Array:
+static func ray(origin: Vector3, direction: Vector3, limit: float, position: Vector3, yaw: float, crouched := false) -> Array:
 	var right := Vector3(cos(yaw), 0, sin(yaw))
 	var forward := Vector3(sin(yaw), 0, -cos(yaw))
 	var nearest := limit
 	var entered := -1
+	var first := CROUCH_A if crouched else A
+	var second := CROUCH_B if crouched else B
+	var radii := CROUCH_RADII if crouched else RADII
 	for i in COUNT:
-		var a: Vector3 = A[i]
-		var b: Vector3 = B[i]
+		var a: Vector3 = first[i]
+		var b: Vector3 = second[i]
 		var start := position + right * a.x + Vector3(0, a.y, 0) + forward * a.z
 		var end := position + right * b.x + Vector3(0, b.y, 0) + forward * b.z
-		var t := ray_capsule(origin, direction, start, end, RADII[i])
+		var t := ray_capsule(origin, direction, start, end, radii[i])
 		if t >= 0.0 and t <= nearest:
 			nearest = t
 			entered = i
