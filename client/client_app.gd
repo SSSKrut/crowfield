@@ -375,9 +375,9 @@ func _build_world() -> void:
 	world_environment.environment = preload("res://assets/sky/valley_environment.tres")
 	add_child(world_environment)
 	sun = DirectionalLight3D.new()
-	sun.rotation = Vector3(-0.58, 0.84, 0)
-	sun.light_color = Color(1.0, 0.91, 0.78)
-	sun.light_energy = 0.92
+	sun.rotation = Vector3(-0.39, 0.89, 0)
+	sun.light_color = Color(1.0, 0.91, 0.79)
+	sun.light_energy = 0.88
 	sun.shadow_enabled = true
 	if settings["graphics"] == "performance":
 		sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
