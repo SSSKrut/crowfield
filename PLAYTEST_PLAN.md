@@ -47,6 +47,8 @@ Automated tests protect rules and regressions. A scripted benchmark can compare 
 
 ## Comparative gameplay acceptance
 
+Use the [participant guide and response sheet](PLAYTEST_KIT.md) to run the same procedure with each player.
+
 Before accepting the solo infantry loop or calling it release-ready, run this test on the standalone Crowfield candidate. For a change to movement, combat, bots, map flow, capture rules, or the way a fight looks or sounds, include a hands-on before-and-after run of the affected scenario in its PR. Use the full comparison to decide whether the complete loop meets the quality bar.
 
 1. Use Valley with 24 bots and a recorded seed. Compare it with an unmodded **Point Match** on a stock map in the current stable Ravenfield build. Choose a comparable infantry start and use the same players in both games. Alternate which game they play first, keep hardware and input settings comparable, and start each session without coaching. Use stock **Arma Reforger Conflict** as the reference for one infantry engagement near an objective. Record differences in map scale, player count, and whether the opponents are bots or people.
