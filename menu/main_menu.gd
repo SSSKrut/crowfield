@@ -50,8 +50,10 @@ func _on_map_selected(index: int) -> void:
 	%Solo.text = "Play Valley solo" if valley else "Play practice map solo"
 
 
-func _on_network_toggled(open: bool) -> void:
-	%Network.visible = open
+func _on_multiplayer_pressed() -> void:
+	%NetworkStatus.hide()
+	%NetworkDialog.popup_centered()
+	_address.grab_focus()
 
 
 func _on_solo_pressed() -> void:
@@ -70,14 +72,19 @@ func _own_server() -> Array:
 func _on_join_pressed() -> void:
 	var address := _address.text.strip_edges()
 	if address == "":
-		_show_status("Type the address of the server, such as 192.168.1.20 or 192.168.1.20:7777.")
+		_show_network_status("Enter the server address, such as 192.168.1.20 or 192.168.1.20:7777.")
 		_address.grab_focus()
 		return
 	if ENetTransport.split_address(address).is_empty():
-		_show_status("%s is not an address: want host or host:port." % address)
+		_show_network_status("Enter a valid host or host:port.")
 		_address.grab_focus()
 		return
 	_start(["-connect=" + address])
+
+
+func _show_network_status(text: String) -> void:
+	%NetworkStatus.text = text
+	%NetworkStatus.show()
 
 
 func _on_address_submitted(_text: String) -> void:
@@ -124,8 +131,10 @@ func _start(arguments: Array) -> void:
 		player_name = "Player"
 	if player_name.to_utf8_buffer().size() > Protocol.MAX_NAME_BYTES:
 		_show_status("The name is too long: at most %d bytes." % Protocol.MAX_NAME_BYTES)
+		%NetworkDialog.hide()
 		_name.grab_focus()
 		return
+	%NetworkDialog.hide()
 	_save()
 	play.emit(PackedStringArray([
 		"-name=" + player_name,

@@ -142,66 +142,9 @@ theme_override_fonts/font = ExtResource("4_display")
 theme_override_font_sizes/font_size = 24
 text = "Play solo"
 
-[node name="NetworkToggle" type="CheckButton" parent="Center/Panel/Rows"]
-unique_name_in_owner = true
+[node name="Multiplayer" type="Button" parent="Center/Panel/Rows"]
 layout_mode = 2
-text = "Play over the network"
-
-[node name="Network" type="VBoxContainer" parent="Center/Panel/Rows"]
-unique_name_in_owner = true
-visible = false
-layout_mode = 2
-theme_override_constants/separation = 8
-
-[node name="HostTitle" type="Label" parent="Center/Panel/Rows/Network"]
-layout_mode = 2
-theme_override_colors/font_color = Color(0.69, 0.75, 0.75, 1)
-theme_override_font_sizes/font_size = 15
-text = "Host a match"
-
-[node name="HostRow" type="HBoxContainer" parent="Center/Panel/Rows/Network"]
-layout_mode = 2
-theme_override_constants/separation = 10
-
-[node name="PortLabel" type="Label" parent="Center/Panel/Rows/Network/HostRow"]
-layout_mode = 2
-text = "UDP port"
-
-[node name="Port" type="SpinBox" parent="Center/Panel/Rows/Network/HostRow"]
-unique_name_in_owner = true
-layout_mode = 2
-min_value = 1.0
-max_value = 65535.0
-value = 7777.0
-
-[node name="Host" type="Button" parent="Center/Panel/Rows/Network/HostRow"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 42)
-layout_mode = 2
-size_flags_horizontal = 3
-text = "Host game"
-
-[node name="JoinTitle" type="Label" parent="Center/Panel/Rows/Network"]
-layout_mode = 2
-theme_override_colors/font_color = Color(0.69, 0.75, 0.75, 1)
-theme_override_font_sizes/font_size = 15
-text = "Join a server"
-
-[node name="JoinRow" type="HBoxContainer" parent="Center/Panel/Rows/Network"]
-layout_mode = 2
-theme_override_constants/separation = 10
-
-[node name="Address" type="LineEdit" parent="Center/Panel/Rows/Network/JoinRow"]
-unique_name_in_owner = true
-layout_mode = 2
-size_flags_horizontal = 3
-placeholder_text = "192.168.1.20 or host:port"
-
-[node name="Join" type="Button" parent="Center/Panel/Rows/Network/JoinRow"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(130, 42)
-layout_mode = 2
-text = "Join"
+text = "Multiplayer"
 
 [node name="Status" type="Label" parent="Center/Panel/Rows"]
 unique_name_in_owner = true
@@ -233,6 +176,75 @@ custom_minimum_size = Vector2(0, 42)
 layout_mode = 2
 size_flags_horizontal = 3
 text = "Quit"
+
+[node name="NetworkDialog" type="AcceptDialog" parent="."]
+unique_name_in_owner = true
+theme = ExtResource("2_theme")
+title = "Multiplayer"
+exclusive = true
+visible = false
+ok_button_text = "Close"
+
+[node name="Network" type="VBoxContainer" parent="NetworkDialog"]
+custom_minimum_size = Vector2(440, 175)
+theme_override_constants/separation = 8
+
+[node name="HostTitle" type="Label" parent="NetworkDialog/Network"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.69, 0.75, 0.75, 1)
+theme_override_font_sizes/font_size = 15
+text = "Host a match"
+
+[node name="HostRow" type="HBoxContainer" parent="NetworkDialog/Network"]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="PortLabel" type="Label" parent="NetworkDialog/Network/HostRow"]
+layout_mode = 2
+text = "UDP port"
+
+[node name="Port" type="SpinBox" parent="NetworkDialog/Network/HostRow"]
+unique_name_in_owner = true
+layout_mode = 2
+min_value = 1.0
+max_value = 65535.0
+value = 7777.0
+
+[node name="Host" type="Button" parent="NetworkDialog/Network/HostRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 42)
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Host game"
+
+[node name="JoinTitle" type="Label" parent="NetworkDialog/Network"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.69, 0.75, 0.75, 1)
+theme_override_font_sizes/font_size = 15
+text = "Join a server"
+
+[node name="JoinRow" type="HBoxContainer" parent="NetworkDialog/Network"]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="Address" type="LineEdit" parent="NetworkDialog/Network/JoinRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+placeholder_text = "192.168.1.20 or host:port"
+
+[node name="Join" type="Button" parent="NetworkDialog/Network/JoinRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(130, 42)
+layout_mode = 2
+text = "Join"
+
+[node name="NetworkStatus" type="Label" parent="NetworkDialog/Network"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 0.55, 0.45, 1)
+autowrap_mode = 3
 
 [node name="Settings" type="AcceptDialog" parent="."]
 unique_name_in_owner = true
@@ -322,12 +334,12 @@ text = "[b]Gunshot Sounds[/b] — Vincent Sevedge (Tabasco), © 2009. Edited for
 [url=https://opengameart.org/content/gun-reload-sound-effects]Source[/url] · [url=https://creativecommons.org/publicdomain/zero/1.0/]CC0 1.0[/url]"
 
 [connection signal="pressed" from="Center/Panel/Rows/Solo" to="." method="_on_solo_pressed"]
-[connection signal="pressed" from="Center/Panel/Rows/Network/HostRow/Host" to="." method="_on_host_pressed"]
-[connection signal="text_submitted" from="Center/Panel/Rows/Network/JoinRow/Address" to="." method="_on_address_submitted"]
-[connection signal="pressed" from="Center/Panel/Rows/Network/JoinRow/Join" to="." method="_on_join_pressed"]
+[connection signal="pressed" from="NetworkDialog/Network/HostRow/Host" to="." method="_on_host_pressed"]
+[connection signal="text_submitted" from="NetworkDialog/Network/JoinRow/Address" to="." method="_on_address_submitted"]
+[connection signal="pressed" from="NetworkDialog/Network/JoinRow/Join" to="." method="_on_join_pressed"]
 [connection signal="pressed" from="Center/Panel/Rows/Footer/Quit" to="." method="_on_quit_pressed"]
 [connection signal="item_selected" from="Center/Panel/Rows/Fields/Map" to="." method="_on_map_selected"]
-[connection signal="toggled" from="Center/Panel/Rows/NetworkToggle" to="." method="_on_network_toggled"]
+[connection signal="pressed" from="Center/Panel/Rows/Multiplayer" to="." method="_on_multiplayer_pressed"]
 [connection signal="pressed" from="Center/Panel/Rows/Footer/CreditsButton" to="." method="_on_credits_pressed"]
 [connection signal="meta_clicked" from="Credits/CreditsText" to="." method="_on_credit_link_clicked"]
 [connection signal="pressed" from="Center/Panel/Rows/Footer/SettingsButton" to="." method="_on_settings_pressed"]
