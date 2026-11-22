@@ -112,11 +112,14 @@ func carry(weapons: ViewModel, kind: int, pitch: float) -> Transform3D:
 	var shoulder: Transform3D = skeleton.get_bone_global_pose(asset.bones["UpperArm.R"])
 	var running := _sprint * (1.0 - _aim)
 	var kick := clampf(1.0 - _shot_age / 0.16, 0.0, 1.0)
-	var offset := Vector3(0.118 + 0.045 * running, lerpf(-0.125, 0.062, _aim) - 0.079 * running, 0.28 - 0.04 * running)
+	var crouched := clip >= CharacterAsset.Clip.CROUCH_IDLE
+	var aim_height := 0.101 if crouched else 0.145
+	var offset := Vector3(lerpf(0.118, 0.148, _aim) + 0.045 * running,
+		lerpf(-0.125, aim_height, _aim) - 0.079 * running, 0.28 - 0.04 * running)
 	var at := shoulder.origin + offset - Vector3(0.0, 0.0, 0.05 * kick)
 	var looking := clampf(pitch, -1.08, 1.08)
 	var elevation := looking - lerpf(0.18, 0.0, _aim) - 0.20 * running + 0.076 * kick
-	if clip >= CharacterAsset.Clip.CROUCH_IDLE:
+	if crouched:
 		elevation = maxf(elevation, -0.67)
 	var turn := Basis(Vector3.UP, 0.05 * (1.0 - _aim) + 0.29 * running)
 	# The mesh faces -Z, while the character and elevation are authored along +Z.
