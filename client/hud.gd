@@ -113,6 +113,7 @@ func _draw_match() -> void:
 		var flag := match_state.flags[index]
 		var zone := map_scene.flags[index]
 		var x := (index - (map_scene.flags.size() - 1) * 0.5) * 108
+		var local_objective := show_bearings and zone.contains_flag_position(feet)
 		var tint: Color = team_colors.get(flag.owner, LIGHT_GRAY)
 		var status_tint := WHITE
 		var status := ""
@@ -124,8 +125,12 @@ func _draw_match() -> void:
 				status = "Losing %d%%" % flag.progress
 				status_tint = GOLD
 			else:
-				status = "%s +%d%%" % [Game.team_name(flag.challenger), flag.progress]
+				status = "Capturing %d%%" % flag.progress if local_objective and flag.challenger == team \
+					else "%s +%d%%" % [Game.team_name(flag.challenger), flag.progress]
 				status_tint = team_color(flag.challenger).lightened(0.40)
+		elif local_objective:
+			status = "Holding" if flag.owner == team else "Capturing"
+			status_tint = team_color(team).lightened(0.40)
 		var name_width := _measure(zone.name, 19, _DISPLAY) / _scale
 		var name_x := x - (name_width + 10) / 2
 		_box(center, name_x - 1, 39, 7, 7, INK)
@@ -134,16 +139,19 @@ func _draw_match() -> void:
 		var changing := not status.is_empty()
 		if not changing:
 			status = "Neutral" if flag.owner == Game.Team.NONE else Game.team_name(flag.owner).capitalize()
-		if show_bearings and not zone.contains_flag_position(feet):
+		if show_bearings and not local_objective:
 			_draw_flag_bearing(zone, center + Vector2(x, 61) * _scale, status, status_tint, not changing)
 		else:
-			_centered(status, center + Vector2(x, 52) * _scale, 15, status_tint, _DISPLAY)
+			var text_size := 17 if local_objective else 15
+			_centered(status, center + Vector2(x, 52) * _scale, text_size, status_tint, _DISPLAY)
+		if local_objective and flag.progress > 0:
+			_box(center, x - 35, 70, 70, 2, INK)
+			var progress_tint := GOLD if flag.contested else team_color(flag.challenger).lightened(0.34)
+			_box(center, x - 35, 70, 70.0 * flag.progress / 100.0, 2, progress_tint)
 	if match_state.result != MatchState.Result.ACTIVE:
 		_draw_result()
-	elif has_soldier and not dead:
-		if not reinforcement.is_empty():
-			_centered(reinforcement, center + Vector2(0, 78) * _scale, 16, WHITE)
-		_draw_capture()
+	elif show_bearings and not reinforcement.is_empty():
+		_centered(reinforcement, center + Vector2(0, 78) * _scale, 16, WHITE)
 
 
 ## The arrow turns with the player, including when the flag is behind them.
@@ -172,26 +180,6 @@ func _draw_flag_bearing(zone: MapScene.Zone, center: Vector2, label: String, tin
 	draw_polyline(arrow, INK, maxf(1.0, _scale), true)
 	if show_distance:
 		_text(meters, origin + Vector2(10, -9) * _scale, 15, WHITE, _DISPLAY)
-
-
-func _draw_capture() -> void:
-	for index in map_scene.flags.size():
-		var zone := map_scene.flags[index]
-		if not zone.contains_flag_position(feet):
-			continue
-		var flag := match_state.flags[index]
-		var label := "Holding " + zone.name
-		if flag.contested:
-			label = zone.name + " contested"
-		elif flag.challenger == team or flag.owner != team:
-			label = "Capturing " + zone.name
-		var center := Vector2(size.x / 2.0, size.y * 0.70)
-		_box(center, -142, 0, 284, 38, PANEL)
-		_centered(label, center + Vector2(0, 8) * _scale, 19, WHITE)
-		if flag.challenger != Game.Team.NONE:
-			_box(center, -130, 31, 260, 3, Color8(255, 255, 255, 65))
-			_box(center, -130, 31, 260.0 * flag.progress / 100.0, 3, GOLD if flag.contested else team_color(flag.challenger))
-		break
 
 
 func _draw_result() -> void:
