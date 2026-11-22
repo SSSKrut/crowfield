@@ -64,6 +64,16 @@ func _ready() -> void:
 	grenade.rings = 4
 	grenade.material = _paint(Color8(70, 82, 52))
 	_meshes[WeaponTuning.Kind.GRENADE] = grenade
+	# A tank shell flies too fast to see but by its glowing tracer.
+	var shell := CylinderMesh.new()
+	shell.top_radius = 0.05
+	shell.bottom_radius = 0.05
+	shell.height = 1.4
+	shell.radial_segments = 6
+	var glow := _paint(Color8(255, 214, 140))
+	glow.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	shell.material = glow
+	_meshes[WeaponTuning.Kind.TANK_CANNON] = shell
 
 
 static func _paint(color: Color) -> StandardMaterial3D:
@@ -189,7 +199,7 @@ func _fly(flight: Flight, view: float, state: PhysicsDirectSpaceState3D) -> bool
 		basis = Basis(side, along, side.cross(along))
 	flight.node.global_transform = Transform3D(basis, shown)
 	# The smoke starts a few metres out, clear of the eye of the one who fired.
-	if tuning.bounce <= 0 and effects != null and not flight.stopped and flight.drawn != Vector3.INF and projectile.travelled > TRAIL_START:
+	if projectile.kind == WeaponTuning.Kind.ROCKET_LAUNCHER and effects != null and not flight.stopped and flight.drawn != Vector3.INF and projectile.travelled > TRAIL_START:
 		flight.smoke += flight.drawn.distance_to(shown)
 		while flight.smoke >= TRAIL_SPACING:
 			flight.smoke -= TRAIL_SPACING

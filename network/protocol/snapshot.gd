@@ -11,6 +11,7 @@ const MAX_REMOVED := 255
 const BUDGET := 1100
 const _SOLDIER_COUNT_BITS := 10
 const _REMOVED_COUNT_BITS := 8
+const _VEHICLE_COUNT_BITS := 4
 
 ## sequence numbers every datagram; deltas name their base by it.
 var sequence := 0
@@ -18,6 +19,8 @@ var server_tick := 0
 var player := PlayerState.new()
 ## Null for a map without a round objective.
 var match_state: MatchState
+## Every vehicle of the map, in ascending number.
+var vehicles: Array[VehicleState] = []
 ## soldiers are in ascending slot order, which keeps their identifiers short.
 ## SnapshotPacker builds them so.
 var soldiers: Array[SoldierRecord] = []
@@ -43,7 +46,8 @@ func type() -> int:
 ## fixed_bits is the size of everything but the soldier records.
 func fixed_bits() -> int:
 	var match_bits := match_state.bits() if match_state != null else 0
-	return 8 + 16 + 32 + player.bits() + 1 + match_bits + _SOLDIER_COUNT_BITS + _REMOVED_COUNT_BITS + 16 * removed.size()
+	return 8 + 16 + 32 + player.bits() + 1 + match_bits + _VEHICLE_COUNT_BITS + VehicleState.BITS * vehicles.size() \
+		+ _SOLDIER_COUNT_BITS + _REMOVED_COUNT_BITS + 16 * removed.size()
 
 
 func write(w: BitWriter) -> String:
@@ -58,6 +62,16 @@ func write(w: BitWriter) -> String:
 		error = match_state.validate()
 		if error != "":
 			return error
+	if vehicles.size() > Vehicle.MAX_VEHICLES:
+		return "snapshot with %d vehicles" % vehicles.size()
+	var last_vehicle := 0
+	for vehicle in vehicles:
+		error = vehicle.validate()
+		if error != "":
+			return error
+		if vehicle.id <= last_vehicle:
+			return "snapshot vehicles must be in ascending order"
+		last_vehicle = vehicle.id
 	# The records are built from checked states (SoldierState.create) or
 	# decoded and checked; only their order is checked here.
 	var previous := -1
@@ -75,6 +89,9 @@ func write(w: BitWriter) -> String:
 	w.write_bits(int(match_state != null), 1)
 	if match_state != null:
 		match_state.write(w)
+	w.write_bits(vehicles.size(), _VEHICLE_COUNT_BITS)
+	for vehicle in vehicles:
+		vehicle.write(w)
 	if not out_states.is_empty():
 		w.write_bits(out_states.size(), _SOLDIER_COUNT_BITS)
 		previous = -1
@@ -107,6 +124,18 @@ func read(r: BitReader) -> void:
 	if r.read_bits(1) != 0:
 		match_state = MatchState.new()
 		match_state.read(r)
+	vehicles.clear()
+	var vehicle_count := r.read_bits(_VEHICLE_COUNT_BITS)
+	var last_vehicle := 0
+	for i in vehicle_count:
+		if r.error != "":
+			break
+		var vehicle := VehicleState.new()
+		vehicle.read(r)
+		if vehicle.id <= last_vehicle:
+			r.fail("snapshot vehicles must be in ascending order")
+		last_vehicle = vehicle.id
+		vehicles.append(vehicle)
 	soldiers.clear()
 	removed.resize(0)
 	var count := r.read_bits(_SOLDIER_COUNT_BITS)

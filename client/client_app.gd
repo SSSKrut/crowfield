@@ -21,7 +21,7 @@ var allow_solo_replay := false
 
 const RECONNECT_WINDOW := 60.0
 const HELP_LINES := [
-	"WASD move | Space jump | C crouch | Shift sprint | LMB fire | RMB aim | R reload | 1-7, wheel weapon",
+	"WASD move | Space jump | C crouch | Shift sprint | LMB fire | RMB aim | R reload | 1-7, wheel weapon | E tank",
 	"K ragdoll | Backspace respawn | L knock down nearest | F1 physics | F2 network | F3 camera | Esc menu",
 	"F4 save playtest state | Shift+F4 save state and screenshot",
 ]
@@ -36,6 +36,10 @@ const BENCHMARK_MAX_SECONDS := 120.0
 const BENCHMARK_MAX_SAMPLES := 262144
 const GAME_MENU := preload("res://menu/game_menu.tscn")
 const DESERT_ENVIRONMENT := preload("res://assets/sky/desert_environment.tres")
+## The camera of a driver circles its turret this far behind; the gunner's
+## sight narrows the view to TANK_SIGHT_FOV degrees.
+const TANK_CAMERA_DISTANCE := 9.0
+const TANK_SIGHT_FOV := 28.0
 const PlaytestTrace := preload("res://client/playtest_trace.gd")
 const NATIVE_INPUT_EXTENSION := "res://.godot/playtest-native/native-input.gdextension"
 const NATIVE_INPUT_PATH_ENV := "CROWFIELD_NATIVE_INPUT_PATH"
@@ -68,6 +72,10 @@ var debug: DebugDraw
 var camera: Camera3D
 var sun: DirectionalLight3D
 var _world_environment: WorldEnvironment
+## vehicle_views draws the tanks; _driving is the tank the player drives as
+## drawn, or null.
+var vehicle_views: VehicleViews
+var _driving: Vehicle
 
 var _graphics_viewport: Viewport
 var _previous_msaa := Viewport.MSAA_DISABLED
@@ -106,6 +114,7 @@ var _gameplay_capture_marked := false
 var _weapon := 0
 ## Keep short gameplay presses until the next command.
 var _jump_pressed := false
+var _interact_pressed := false
 var _fire_pressed := false
 var _reload_pressed := false
 ## Keep a keyboard movement tap even when key-up arrives before the next tick.
@@ -424,6 +433,10 @@ func _load_map(map_name: String) -> Variant:
 		_dress_desert()
 	map_view = MapView.new(scene)
 	add_child(map_view)
+	vehicle_views = VehicleViews.new(scene, get_world_3d().space, _map_collision[0] if scene.terrain != null else RID())
+	vehicle_views.effects = effects
+	vehicle_views.volume = clampf(settings["volume"], 0.0, 1.0)
+	add_child(vehicle_views)
 	sounds.start_ambience(scene)
 	return scene
 
@@ -668,6 +681,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		_mouse += event.screen_relative
 	elif event.is_action_pressed("jump"):
 		_jump_pressed = true
+	elif event.is_action_pressed("interact"):
+		_interact_pressed = true
 	elif event.is_action_pressed("fire"):
 		_fire_pressed = true
 	elif event.is_action_pressed("weapon_previous"):
@@ -829,12 +844,19 @@ func _process(delta: float) -> void:
 	# Ticks last a little more or less than TICK_DELTA while the session brings
 	# its commands to the right lead.
 	var sent := 0
+	# A driver's soldier is not predicted: it rides in the tank the server
+	# moves, and is predicted again from where it gets out.
+	var driving := vehicle_views.drivers().has(session.player.soldier)
+	if driving:
+		predictor.started = false
 	while _reconnect_since < 0 and _accumulator >= session.tick_duration():
 		_accumulator -= session.tick_duration()
 		var command := session.send_command(_command())
 		if command == null:
 			break
 		sent += 1
+		if driving:
+			continue
 		var result := predictor.predict(command)
 		_events |= result.events
 		if result.has(Arsenal.EVENT_FIRED):
@@ -857,6 +879,8 @@ func _process(delta: float) -> void:
 	var updated := false
 	if _reconnect_since < 0:
 		updated = session.poll()
+		if updated:
+			vehicle_views.observe(session.server_tick, session.vehicles)
 		feedback.take(session.news, session.player.soldier, sounds)
 		for event in session.news:
 			if event is Messages.Launch:
@@ -868,11 +892,13 @@ func _process(delta: float) -> void:
 		_lose(session.failure)
 		if _failed:
 			return
-	if updated:
+	driving = vehicle_views.drivers().has(session.player.soldier)
+	if updated and not driving:
 		var corrections := predictor.corrections
 		predictor.reconcile(session.player)
 		if predictor.corrections != corrections:
 			session.graph.correction(predictor.last_error)
+	if updated:
 		_follow_life()
 	predictor.smooth(delta)
 	session.clock.advance(delta)
@@ -899,6 +925,10 @@ func _process(delta: float) -> void:
 	elif server_own != null:
 		# Dead, or not yet predicted: where the server has the soldier.
 		feet = server_own.position
+	vehicle_views.update(delta, session.clock.render_tick, session.clock.render_tick + session.clock.delay * 0.5, session.player.soldier)
+	_driving = vehicle_views.driven(session.player.soldier)
+	if _driving != null:
+		feet = _driving.position
 	_feet = feet
 	_update_self(delta, feet, speed, server_own, crouched)
 	bodies.update(delta)
@@ -915,6 +945,7 @@ func _process(delta: float) -> void:
 	effects.update(delta, local_feedback and view_model.aim < MUZZLE_SMOKE_AIM_LIMIT)
 	_shake *= exp(-delta * 4.0)
 	_charge("weapon")
+	soldier_views.hidden = vehicle_views.drivers()
 	soldier_views.update(session, delta, camera, scene)
 	soldier_views.aim(feet + Vector3.UP * rules.movement.view_height(crouched), Game.view_direction(_yaw, _pitch))
 	var aimed := 0
@@ -1030,6 +1061,8 @@ func _command() -> InputCommand:
 			buttons |= InputCommand.AIM
 		if _reload_pressed:
 			buttons |= InputCommand.RELOAD
+		if _interact_pressed:
+			buttons |= InputCommand.INTERACT
 	_clear_pressed()
 	_buttons = buttons
 	var command := InputCommand.create(0, forward, right, yaw, _pitch, buttons)
@@ -1043,6 +1076,7 @@ func _movement_strength(action: StringName) -> float:
 
 func _clear_pressed() -> void:
 	_jump_pressed = false
+	_interact_pressed = false
 	_fire_pressed = false
 	_reload_pressed = false
 	_movement_pressed.clear()
@@ -1181,7 +1215,7 @@ func _team() -> int:
 ## _update_self shows the own soldier's model in third person, in overview
 ## and when it lies fallen; in first person the player sees its weapon only.
 func _update_self(delta: float, feet: Vector3, speed: float, server_own: Soldier, crouched: bool) -> void:
-	var shown: bool = _ragdoll or ((_third_person or settings["overview"]) and server_own != null)
+	var shown: bool = _ragdoll or ((_third_person or settings["overview"]) and server_own != null and _driving == null)
 	_self_view.visible = shown
 	if not _ragdoll:
 		_self_view.face(feet, _yaw)
@@ -1223,6 +1257,9 @@ func _update_camera(feet: Vector3, crouched := false) -> void:
 		if tuning != null and _first_person():
 			fov *= 1 + (tuning.aim_zoom - 1) * view_model.aim
 	camera.fov = fov
+	if _driving != null and not _ragdoll and not settings["overview"]:
+		_update_tank_camera(_driving)
+		return
 	if settings["benchmark-route"] == "valley":
 		_update_benchmark_camera()
 		return
@@ -1244,6 +1281,31 @@ func _update_camera(feet: Vector3, crouched := false) -> void:
 		var time := Time.get_ticks_msec() / 1000.0
 		camera.rotate_object_local(Vector3.RIGHT, _shake * 0.04 * sin(time * 47.0))
 		camera.rotate_object_local(Vector3.UP, _shake * 0.03 * sin(time * 59.0 + 1.3))
+
+
+## _update_tank_camera circles the turret of the player's tank from behind,
+## looking where the player looks, which the turret turns towards. Aiming
+## looks through the gunner's sight instead, narrower.
+func _update_tank_camera(vehicle: Vehicle) -> void:
+	var forward := Game.view_direction(_yaw, _pitch)
+	var turret := TankController.turret_transform(scene, vehicle)
+	if _buttons & InputCommand.AIM != 0:
+		camera.fov = TANK_SIGHT_FOV
+		var sight := turret * Vector3(0, 0.95, -0.4)
+		camera.look_at_from_position(sight, sight + forward)
+		return
+	var pivot := TankController.hull_transform(scene, vehicle.position, vehicle.yaw) * Vehicle.EYE
+	var at := pivot - forward * TANK_CAMERA_DISTANCE
+	var state := get_world_3d().direct_space_state
+	var query := PhysicsRayQueryParameters3D.create(pivot, at, Game.LAYER_STATIC)
+	var hit := state.intersect_ray(query)
+	if not hit.is_empty():
+		at = pivot.lerp(hit["position"], 0.9)
+	at.y = maxf(at.y, scene.ground_at(at.x, at.z) + 0.5)
+	camera.look_at_from_position(at, pivot + forward * 40.0)
+	if _shake > 0.01:
+		var time := Time.get_ticks_msec() / 1000.0
+		camera.rotate_object_local(Vector3.RIGHT, _shake * 0.03 * sin(time * 47.0))
 
 
 ## _update_weapon moves the weapon in hand for the frame and shows what the
@@ -1482,6 +1544,28 @@ func _draw_debug(spawned: bool) -> void:
 	debug.flush()
 
 
+## _update_vehicle_hud shows the tank the player drives, where its gun points
+## and, on foot by an empty tank, how to get in.
+func _update_vehicle_hud(feet: Vector3) -> void:
+	hud.vehicle = _driving
+	hud.gun_marker = Vector2(-1, -1)
+	hud.prompt = ""
+	if _driving != null:
+		var gun := TankController.gun_of(scene, _driving)
+		var muzzle := gun * Vector3(0, 0, -Vehicle.MUZZLE)
+		var along := gun.basis * Vector3.FORWARD
+		var query := PhysicsRayQueryParameters3D.create(muzzle, muzzle + along * 400.0, Game.LAYER_STATIC | Game.LAYER_VEHICLE)
+		var hit := get_world_3d().direct_space_state.intersect_ray(query)
+		var aim: Vector3 = hit["position"] if not hit.is_empty() else muzzle + along * 400.0
+		if not camera.is_position_behind(aim):
+			hud.gun_marker = camera.unproject_position(aim)
+		return
+	var player := session.player if session != null else null
+	if player != null and player.soldier != 0 and player.health > 0 and vehicle_views != null \
+			and vehicle_views.nearest_empty(feet + Vector3.UP * 0.9) != null:
+		hud.prompt = "Press E to drive the tank"
+
+
 func _update_hud(feet: Vector3, own: Soldier) -> void:
 	var lines := PackedStringArray()
 	var connected := session != null
@@ -1500,6 +1584,7 @@ func _update_hud(feet: Vector3, own: Soldier) -> void:
 	if _capture_notice != "" and Time.get_ticks_msec() < _capture_notice_until:
 		lines.append(_capture_notice)
 	hud.lines = lines
+	_update_vehicle_hud(feet)
 	var arsenal := _arsenal()
 	hud.arsenal = arsenal
 	hud.fov = camera.fov

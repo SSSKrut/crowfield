@@ -47,6 +47,8 @@ var received := 0
 var server_tick := 0
 var player := PlayerState.new()
 var match_state: MatchState
+## vehicles are the vehicles of the newest snapshot.
+var vehicles: Array[VehicleState] = []
 ## soldiers are the soldiers the client knows, by slot.
 var soldiers := {}
 var baselines := Baselines.new()
@@ -205,6 +207,7 @@ func _apply(snapshot: Snapshot) -> bool:
 	server_tick = snapshot.server_tick
 	player = snapshot.player
 	match_state = snapshot.match_state
+	vehicles = snapshot.vehicles.duplicate()
 	clock.observe(snapshot.server_tick)
 	var own := local_soldier()
 	if own != null:

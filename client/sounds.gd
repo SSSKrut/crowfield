@@ -25,7 +25,7 @@ enum ReloadContact { NONE, RELEASE, SEAT }
 const WIND := preload("res://assets/audio/ambience/wind.ogg")
 const RIVER := preload("res://assets/audio/ambience/river.ogg")
 
-const SHOT_VOLUMES := [0.0, 0.70, 0.82, 0.62, 0.82, 0.74, 0.29, 0.0]
+const SHOT_VOLUMES := [0.0, 0.70, 0.82, 0.62, 0.82, 0.74, 0.29, 0.0, 1.0]
 const SHOT_PITCHES := [1.0, 0.98, 1.02, 0.99, 1.01, 1.0]
 const GUNSHOTS := {
 	WeaponTuning.Kind.ASSAULT_RIFLE: preload("res://assets/audio/assault-shot.wav"),
@@ -54,6 +54,8 @@ const SYNTHESIZED_SHOTS := {
 	# The rush of a rocket leaving the tube, and the swish of a throw.
 	WeaponTuning.Kind.ROCKET_LAUNCHER: {"decay": 0.32, "smoothing": 0.1, "thump": 55.0},
 	WeaponTuning.Kind.GRENADE: {"decay": 0.05, "smoothing": 0.06, "thump": 0.0},
+	# The deep crack of the tank's gun.
+	WeaponTuning.Kind.TANK_CANNON: {"decay": 0.22, "smoothing": 0.2, "thump": 38.0},
 }
 ## A blast sounds like a shot of BLAST_VOICE and carries much farther: half
 ## as loud at BLAST_FALLOFF.

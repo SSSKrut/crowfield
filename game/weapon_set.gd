@@ -3,7 +3,7 @@ extends RefCounted
 ## WeaponSet is the tuning of every weapon. Its data file names the weapons by
 ## key and may give only the values it changes.
 
-const KEYS := ["assault_rifle", "rifle", "pistol", "shotgun", "rocket_launcher", "grenade", "medkit"]
+const KEYS := ["assault_rifle", "rifle", "pistol", "shotgun", "rocket_launcher", "grenade", "medkit", "tank_cannon"]
 
 var assault_rifle: WeaponTuning
 var rifle: WeaponTuning
@@ -12,13 +12,15 @@ var shotgun: WeaponTuning
 var rocket_launcher: WeaponTuning
 var grenade: WeaponTuning
 var medkit: WeaponTuning
+var tank_cannon: WeaponTuning
 var _by_kind: Array[WeaponTuning] = []
 
 
 ## create_default is the arsenal of the specification (6.1): an automatic
 ## assault rifle for middle range, a precise rifle that hits hard and a pistol
 ## that comes out quickly; and of its later stages (6.3): a shotgun that kills
-## with one shot up close, a rocket launcher, grenades and a medkit.
+## with one shot up close, a rocket launcher, grenades and a medkit; and the
+## cannon of the tank (14.1), whose shell flies flat and fast and bursts.
 static func create_default() -> WeaponSet:
 	var set := WeaponSet.new()
 	set.assault_rifle = WeaponTuning.create({
@@ -76,12 +78,23 @@ static func create_default() -> WeaponSet:
 		"kick_pitch": 0.0, "kick_yaw": 0.0, "kick_recovery": 0.0, "aim_zoom": 1.0,
 		"use": WeaponTuning.Use.HEAL, "heal": 50,
 	})
+	# The reload is the tank's own (Vehicle.RELOAD_TIME); the magazine only
+	# satisfies the checks every weapon passes.
+	set.tank_cannon = WeaponTuning.create({
+		"automatic": false, "rounds_per_minute": 17.0, "range": 400.0, "magazine": 1, "reserve": 0,
+		"reload_time": 3.5, "equip_time": 0.1, "damage": 140.0, "head_multiplier": 1.0, "limb_multiplier": 1.0,
+		"falloff_start": 0.0, "falloff_end": 0.0, "falloff_damage": 1.0, "hip_spread": 0.0, "aim_spread": 0.0,
+		"move_spread": 0.0, "air_spread": 0.0, "bloom": 0.0, "max_bloom": 0.0, "bloom_recovery": 0.0,
+		"kick_pitch": 0.0, "kick_yaw": 0.0, "kick_recovery": 0.0, "aim_zoom": 1.0,
+		"use": WeaponTuning.Use.PROJECTILE, "projectile_speed": 160.0, "projectile_gravity": 4.0,
+		"blast_radius": 7.0, "blast_inner": 1.6,
+	})
 	set._index()
 	return set
 
 
 func _index() -> void:
-	_by_kind = [null, assault_rifle, rifle, pistol, shotgun, rocket_launcher, grenade, medkit]
+	_by_kind = [null, assault_rifle, rifle, pistol, shotgun, rocket_launcher, grenade, medkit, tank_cannon]
 
 
 ## get_tuning returns the tuning of a kind, or null for none.

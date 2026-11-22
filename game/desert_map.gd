@@ -264,7 +264,8 @@ func _barrels(origin: Vector3, turn: float, x: float, z: float, level: float, co
 
 
 ## _base is a camp behind sandbags facing north, with a gate in the middle:
-## two containers for shelter, a water tower to find it by, drums and palms.
+## two containers for shelter, a water tower to find it by, drums, palms and
+## the team's tank.
 func _base(origin: Vector3, turn: float) -> void:
 	const GATE_HALF_WIDTH := 4.5
 	var level := BASE_LEVEL
@@ -279,6 +280,9 @@ func _base(origin: Vector3, turn: float) -> void:
 	_barrels(origin, turn, 6.5, -10.5, level, 2)
 	_model("palm_a", origin, turn, -13, 12, level, 0.4)
 	_model("palm_b", origin, turn, 14, -7, level, 2.1)
+	# The team's tank waits behind the gate, facing out.
+	var team := Game.Team.BLUE if turn == 0.0 else Game.Team.RED
+	_scene.vehicle_spawns.append(MapScene.VehicleSpawn.new(Vehicle.Kind.TANK, team, _local(origin, turn, 0, 6) + Vector3(0, level, 0), turn))
 
 
 ## _station is the pump station at a flag: containers on its flanks, pipe

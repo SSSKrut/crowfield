@@ -73,6 +73,10 @@ func tint(team: int) -> Color:
 
 ## update places every other soldier at the interpolation time, advances its
 ## animation and shows its combat. A soldier that is dead at that time falls.
+## hidden are the soldiers no one sees, the drivers inside their tanks.
+var hidden := {}
+
+
 func update(session: ClientSession, delta: float, camera: Camera3D, scene: MapScene) -> void:
 	_frame += 1
 	_render_tick = session.clock.render_tick
@@ -90,6 +94,10 @@ func update(session: ClientSession, delta: float, camera: Camera3D, scene: MapSc
 		remote.smooth(delta)
 		remote.evaluate(session.clock.render_tick)
 		var entry: Entry = _entries.get(id)
+		if hidden.has(id):
+			if entry != null:
+				_drop(id)
+			continue
 		if not remote.alive:
 			_show_combat(known, entry, session.clock.render_tick)
 			if entry != null:

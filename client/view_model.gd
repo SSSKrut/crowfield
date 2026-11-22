@@ -710,7 +710,7 @@ static func _glove(grip: Vector3, side: float) -> Array[Piece]:
 
 
 static func _weapon_shapes() -> Array[Shape]:
-	return [null, _carbine(), _marksman(), _sidearm(), _shotgun(), _launcher(), _grenade(), _medkit()]
+	return [null, _carbine(), _marksman(), _sidearm(), _shotgun(), _launcher(), _grenade(), _medkit(), null]
 
 
 static func _carbine() -> Shape:

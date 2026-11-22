@@ -261,7 +261,7 @@ func test_bots_carry_one_or_two_weapons() -> void:
 		check(Bots.REACH.has(carried[0]), "bot %d has no gun first: %s" % [bot.index, carried])
 		for kind in carried:
 			kinds[kind] = true
-	check_equal(kinds.size(), WeaponTuning.KINDS - 1, "kinds of weapons the bots carry")
+	check_equal(kinds.size(), WeaponTuning.CARRIED - 1, "kinds of weapons the bots carry")
 
 
 ## A bot with a rocket launcher fires it at an enemy it sees 40 m away.

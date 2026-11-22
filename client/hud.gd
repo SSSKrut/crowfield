@@ -59,6 +59,12 @@ var replay_available := false
 var reinforcement := ""
 var map_scene: MapScene
 var feet := Vector3.ZERO
+## vehicle is the tank the player drives, or null; gun_marker is where on the
+## screen its gun points, off the screen when it points behind; prompt is a
+## hint under the middle of the screen.
+var vehicle: Vehicle
+var gun_marker := Vector2(-1, -1)
+var prompt := ""
 
 var _font: Font
 var _scale := 1.0
@@ -73,7 +79,10 @@ func _init() -> void:
 
 func _draw() -> void:
 	_scale = clampf(size.y / 720.0, 0.75, 4.0)
-	if arsenal != null:
+	if vehicle != null:
+		_draw_crosshair()
+		_draw_vehicle()
+	elif arsenal != null:
 		if scoped:
 			_draw_scope()
 		else:
@@ -95,6 +104,8 @@ func _draw() -> void:
 			_text(reconnect_lines[i], Vector2(18, 160 + 28 * i) * _scale, 22, ORANGE)
 	if match_state != null and map_scene != null:
 		_draw_match()
+	if prompt != "":
+		_centered(prompt, Vector2(size.x / 2, size.y * 0.7), 19, WHITE)
 
 
 func _draw_match() -> void:
@@ -301,6 +312,29 @@ func _draw_arsenal() -> void:
 		_box(corner, -112, 3, 112, 4, INK)
 		_box(corner, -111, 4, 110 * done, 2, GOLD)
 	_text(label, corner + Vector2(-_measure(label, 15), -50 * _scale), 15, label_color)
+
+
+## _draw_vehicle marks where the gun of the player's tank points, which the
+## turret turns towards the crosshair, and shows the tank's armour and the
+## loading of its gun in the bottom right corner.
+func _draw_vehicle() -> void:
+	if gun_marker.x >= 0:
+		var loaded := vehicle.reload == 0
+		draw_arc(gun_marker, 9 * _scale, 0, TAU, 32, WHITE if loaded else GOLD, 2 * _scale, true)
+		draw_circle(gun_marker, 1.5 * _scale, WHITE)
+	var corner := Vector2(size.x - 24 * _scale, size.y - 23 * _scale)
+	var share := clampf(float(vehicle.health) / Vehicle.MAX_HEALTH, 0.0, 1.0)
+	var armour := str(vehicle.health)
+	var total := "/ %d" % Vehicle.MAX_HEALTH
+	var total_width := _measure(total, 19, _DISPLAY)
+	_text(total, corner + Vector2(-total_width, -19 * _scale), 19, LIGHT_GRAY, _DISPLAY)
+	_text(armour, corner + Vector2(-total_width - _measure(armour, 34, _DISPLAY) - 6 * _scale, -32 * _scale), 34,
+		WHITE if share >= 0.35 else ORANGE, _DISPLAY)
+	var loading := 1.0 - float(vehicle.reload) / Vehicle.reload_ticks()
+	var label := "Tank  ·  gun ready" if vehicle.reload == 0 else "Tank  ·  loading"
+	_box(corner, -112, 3, 112, 4, INK)
+	_box(corner, -111, 4, 110 * clampf(loading, 0.0, 1.0), 2, GOLD if vehicle.reload > 0 else WHITE)
+	_text(label, corner + Vector2(-_measure(label, 15), -50 * _scale), 15, GOLD if vehicle.reload > 0 else LIGHT_GRAY)
 
 
 ## _draw_health shows the player's health and team in the bottom left corner.

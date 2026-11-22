@@ -449,6 +449,14 @@ func _look(bot: Bot, soldier: Soldier) -> int:
 ## standing at a point, by rays through the static world.
 func _sees(soldier: Soldier, target: Soldier) -> bool:
 	var eye := soldier.position + Vector3(0, _eye, 0)
+	if target.vehicle != 0:
+		# A driver is seen by its tank, whose own armour does not hide it.
+		if _rays <= 0:
+			return false
+		_rays -= 1
+		var hull := target.position + Vector3.UP * Vehicle.HULL_CENTER.y
+		var length := eye.distance_to(hull)
+		return _server.cast_ray(eye, (hull - eye) / length, length, Game.LAYER_STATIC) < 0
 	for box in [1, 0]:
 		if _rays <= 0:
 			return false
@@ -532,6 +540,9 @@ func _fight(bot: Bot, soldier: Soldier) -> void:
 		seen_crouched = pose[3]
 	var eye := soldier.position + Vector3(0, _eye, 0)
 	var point := Hitboxes.center(1, seen, seen_yaw, true) if seen_crouched else seen + Vector3.UP * AIM_HEIGHT
+	if target.vehicle != 0:
+		# A rocket goes for the hull of a tank, not under it.
+		seen += Vector3.UP * (Vehicle.HULL_CENTER.y - ROCKET_HEIGHT)
 	var distance := eye.distance_to(point)
 	_plan_special(bot, soldier, distance)
 	if bot.special < 0:

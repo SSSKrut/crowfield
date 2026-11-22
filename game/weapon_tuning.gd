@@ -4,10 +4,13 @@ extends RefCounted
 ## seconds, as in the data file. The server and every client must use the
 ## same values: the client predicts its own weapon.
 
-enum Kind { NONE, ASSAULT_RIFLE, RIFLE, PISTOL, SHOTGUN, ROCKET_LAUNCHER, GRENADE, MEDKIT }
-const KINDS := 8
-const NAMES := ["none", "assault rifle", "rifle", "pistol", "shotgun", "rocket launcher", "grenade", "medkit"]
-const LABELS := ["", "Assault rifle", "Rifle", "Pistol", "Shotgun", "RPG", "Grenade", "Medkit"]
+## A soldier carries the kinds below CARRIED; the tank cannon is fitted to a
+## tank (Vehicle) and fired by its driver.
+enum Kind { NONE, ASSAULT_RIFLE, RIFLE, PISTOL, SHOTGUN, ROCKET_LAUNCHER, GRENADE, MEDKIT, TANK_CANNON }
+const KINDS := 9
+const CARRIED := 8
+const NAMES := ["none", "assault rifle", "rifle", "pistol", "shotgun", "rocket launcher", "grenade", "medkit", "tank cannon"]
+const LABELS := ["", "Assault rifle", "Rifle", "Pistol", "Shotgun", "RPG", "Grenade", "Medkit", "Tank cannon"]
 ## What a weapon does when it fires: BULLETS the server traces at once,
 ## shotgun pellets too; a PROJECTILE that flies until it bursts, a rocket or a
 ## grenade; or HEAL the one who uses it.

@@ -113,6 +113,9 @@ func _build(index: int) -> void:
 	var per_snapshot := float(server.settings.client_bandwidth) / server.settings.snapshot_rate
 	player.allowance = minf(player.allowance + per_snapshot, 2 * per_snapshot)
 	var snapshot := player.snapshot
+	snapshot.vehicles.clear()
+	for vehicle in server.vehicles.all:
+		snapshot.vehicles.append(VehicleState.of(vehicle))
 	if server.flag_match != null:
 		if snapshot.match_state == null:
 			snapshot.match_state = MatchState.new()

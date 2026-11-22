@@ -10,7 +10,7 @@ class_name Protocol
 ## A message implements type(), write(writer) -> error and read(reader); see
 ## Messages for the small ones.
 
-const VERSION := 13
+const VERSION := 14
 
 enum Type {
 	HELLO = 1, WELCOME, REJECT, READY, INPUT, SNAPSHOT, RESPAWN, HIT_CONFIRM, DAMAGE, DEATH,

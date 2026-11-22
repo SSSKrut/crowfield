@@ -51,6 +51,20 @@ class Water:
 	var center: Vector3
 	var half_extents: Vector2
 
+## VehicleSpawn is where a team's tank stands at the start of a round and
+## comes back after it was destroyed, looking along yaw.
+class VehicleSpawn:
+	var kind: int
+	var team: int
+	var position: Vector3
+	var yaw: float
+
+	func _init(vehicle_kind: int, vehicle_team: int, at: Vector3, heading: float) -> void:
+		kind = vehicle_kind
+		team = vehicle_team
+		position = at
+		yaw = heading
+
 ## Model is a sourced model the client draws, standing at a point and turned
 ## about the vertical, at size times its usual scale. Its collision is among
 ## the boxes.
@@ -74,6 +88,7 @@ var trees: Array[Plant] = []
 var bushes: Array[Plant] = []
 var waters: Array[Water] = []
 var models: Array[Model] = []
+var vehicle_spawns: Array[VehicleSpawn] = []
 ## roads are the dirt tracks the client paints on the ground, as lines
 ## through points; the ground under them is not changed.
 var roads: Array[PackedVector2Array] = []
@@ -213,6 +228,15 @@ func hash_value() -> int:
 		digest.start(HashingContext.HASH_SHA256)
 		digest.update(terrain.bytes())
 		bytes.append_array(digest.finish())
+	for spawn in vehicle_spawns:
+		var at := bytes.size()
+		bytes.resize(at + 18)
+		bytes.encode_u8(at, spawn.kind)
+		bytes.encode_u8(at + 1, spawn.team)
+		bytes.encode_float(at + 2, spawn.position.x)
+		bytes.encode_float(at + 6, spawn.position.y)
+		bytes.encode_float(at + 10, spawn.position.z)
+		bytes.encode_float(at + 14, spawn.yaw)
 	for flag in flags:
 		bytes.append_array(flag.name.to_utf8_buffer())
 		bytes.append(0)

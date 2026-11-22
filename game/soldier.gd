@@ -18,6 +18,9 @@ var yaw := 0.0
 var pitch := 0.0
 var grounded := false
 var crouched := false
+## vehicle is the vehicle the soldier drives, or 0; the soldier then rides
+## where the vehicle is and nothing hits it but the vehicle's end.
+var vehicle := 0
 ## health runs from Game.MAX_HEALTH down to zero, at which the soldier dies.
 var health := 0
 var arsenal := Arsenal.new()
@@ -46,6 +49,7 @@ func copy() -> Soldier:
 	other.pitch = pitch
 	other.grounded = grounded
 	other.crouched = crouched
+	other.vehicle = vehicle
 	other.health = health
 	other.arsenal = arsenal.copy()
 	other.shots = shots

@@ -44,6 +44,7 @@ var snapshot_interval := 3
 var match_seed := 0
 var navigation: Navigation
 var bots: Bots
+var vehicles: ServerVehicles
 var flag_match: FlagMatch
 ## random places the soldiers of players in the zones of their teams.
 var random := RandomNumberGenerator.new()
@@ -101,6 +102,7 @@ static func create(server_settings: ServerSettings, server_rules: Rules) -> Vari
 		server.match_seed = Crypto.new().generate_random_bytes(8).decode_s64(0)
 	server.random.seed = server.match_seed ^ 7919
 	server.navigation = Navigation.create(server.scene)
+	server.vehicles = ServerVehicles.new(server, server._collision[0] if server.scene.terrain != null else RID())
 	if server.scene.flags.size() == MatchState.FLAG_COUNT:
 		server.flag_match = FlagMatch.new(server.scene.flags)
 		server._build_reinforcement_sites()
@@ -123,6 +125,9 @@ func close() -> void:
 	for player in players:
 		if player != null and player.controller != null:
 			player.controller.close()
+	if vehicles != null:
+		vehicles.close()
+		vehicles = null
 	if space.is_valid():
 		MapScene.free_collision(_collision)
 		PhysicsServer3D.free_rid(space)
@@ -156,6 +161,7 @@ func step() -> void:
 	for player in players:
 		if player != null and player.soldier != 0:
 			_move_player(player)
+	vehicles.update()
 	profile.lap(TickProfile.System.PLAYERS)
 	bots.update()
 	profile.lap(TickProfile.System.BOTS)
@@ -202,11 +208,35 @@ func _move_player(player: ServerPlayer) -> void:
 	if not soldier.alive:
 		# The dead do not move or shoot; the commands still keep the clock.
 		return
+	if command.has(InputCommand.INTERACT):
+		_get_in_or_out(player, soldier)
+	var vehicle := vehicles.get_vehicle(soldier.vehicle)
+	if vehicle != null:
+		var shell := vehicles.drive(vehicle, soldier, command)
+		if shell != null:
+			_launch(soldier, shell, rules.weapons.get_tuning(shell.weapon))
+		return
 	var result := player.controller.run_command(rules.weapons, soldier, command, match_seed)
 	if result.has(Arsenal.EVENT_FIRED):
 		queue_shot(soldier, result.shot, _view_time(command))
 	if soldier.position.y < FALL_LIMIT:
 		player.controller.teleport(soldier, spawn_point(soldier.team, random))
+
+
+## _get_in_or_out puts a soldier on foot in a tank in reach, or takes a
+## driver out onto free ground beside its tank. A driver has no capsule.
+func _get_in_or_out(player: ServerPlayer, soldier: Soldier) -> void:
+	if soldier.vehicle == 0:
+		if vehicles.enter(soldier) != null:
+			player.controller.close()
+			player.controller = null
+		return
+	var at := vehicles.exit(soldier)
+	if not at.is_finite():
+		return
+	soldier.velocity = Vector3.ZERO
+	player.controller = CharacterController.new(space, rules.movement)
+	player.controller.teleport(soldier, at)
 
 
 ## queue_shot takes what a soldier fired this tick: bullets, to resolve with
@@ -542,6 +572,8 @@ func _respawn(session: Session) -> void:
 	var soldier := soldiers.get_soldier(player.soldier)
 	if not soldier.alive:
 		return
+	if soldier.vehicle != 0:
+		return
 	soldier.health = Game.MAX_HEALTH
 	soldier.arsenal = Arsenal.create(Arsenal.default_loadout(), rules.weapons)
 	player.controller.teleport(soldier, scene.spawn_of(soldier.team))
@@ -571,6 +603,7 @@ func _leave(session: Session, reason: String, by_peer: bool) -> void:
 	if player == null:
 		return
 	if player.soldier != 0:
+		vehicles.release(soldiers.get_soldier(player.soldier))
 		# Every other player's view of the slot notices the soldier is gone.
 		soldiers.remove(player.soldier)
 	if player.controller != null:
@@ -699,7 +732,7 @@ func _resolve_shots() -> void:
 			var taken := damage(victim, wound[0])
 			if victim.is_bot() and not taken[1]:
 				bots.hurt(victim.bot, pending.shooter)
-			_tell_hit(pending.shooter, pending.team, shot.weapon, wound[3], victim, wound[1], taken[0], taken[1])
+			tell_hit(pending.shooter, pending.team, shot.weapon, wound[3], victim, wound[1], taken[0], taken[1])
 	_shots.clear()
 
 
@@ -726,7 +759,8 @@ func _hitscan(pending: PendingShot, direction: Vector3) -> Array:
 	for i in count:
 		var id := ids[i]
 		var target := soldiers.get_soldier(id)
-		if id == pending.shooter or target == null or not target.alive:
+		# A driver sits inside the armour that stops the shot.
+		if id == pending.shooter or target == null or not target.alive or target.vehicle != 0:
 			continue
 		var pose := history.at(id, pending.view)
 		if pose.is_empty() or not pose[2]:
@@ -752,10 +786,10 @@ func cast_ray(origin: Vector3, direction: Vector3, length: float, mask: int) -> 
 	return origin.distance_to(hit["position"])
 
 
-## _tell_hit sends the events of a hit by a weapon along a direction: the
+## tell_hit sends the events of a hit by a weapon along a direction: the
 ## shooter learns it hit, the victim where from, and everyone a death, for the
 ## kill feed. name is the shooter's, when it may be gone by now.
-func _tell_hit(by: int, team: int, weapon: int, direction: Vector3, victim: Soldier, zone: int, taken: int, killed: bool, name: String = "") -> void:
+func tell_hit(by: int, team: int, weapon: int, direction: Vector3, victim: Soldier, zone: int, taken: int, killed: bool, name: String = "") -> void:
 	var shooter := soldiers.get_soldier(by)
 	var shooter_player := player_of(shooter)
 	if shooter_player != null:
@@ -789,10 +823,10 @@ func _tell_hit(by: int, team: int, weapon: int, direction: Vector3, victim: Sold
 	death.killer_name = name if name != "" and shooter == null else name_of(shooter)
 	death.weapon = weapon
 	death.zone = zone
-	_send_to_all(death)
+	send_to_all(death)
 
 
-func _send_to_all(message: Object) -> void:
+func send_to_all(message: Object) -> void:
 	for player in players:
 		if player != null and player.ready:
 			_send_event(player, message)
@@ -814,7 +848,7 @@ func _launch(soldier: Soldier, shot: Shot, tuning: WeaponTuning) -> void:
 	launch.owner = soldier.id
 	launch.position = projectile.position
 	launch.velocity = projectile.velocity
-	_send_to_all(launch)
+	send_to_all(launch)
 
 
 ## _move_projectiles moves every projectile for the tick and bursts those that
@@ -847,7 +881,7 @@ func _strike(projectile: Projectile, from: Vector3, to: Vector3) -> Vector3:
 	var nearest := length
 	for i in count:
 		var target := soldiers.get_soldier(ids[i])
-		if target == null or not target.alive or target.id == projectile.owner:
+		if target == null or not target.alive or target.id == projectile.owner or target.vehicle != 0:
 			continue
 		var hit := Hitboxes.ray(from, direction, nearest, target.position, target.yaw, target.crouched)
 		if not hit.is_empty():
@@ -869,7 +903,7 @@ func _blast(projectile: Projectile, tuning: WeaponTuning) -> void:
 	var ids := grid.ids.duplicate()
 	for i in count:
 		var victim := soldiers.get_soldier(ids[i])
-		if victim == null or not victim.alive or (victim.team == projectile.team and not settings.friendly_fire):
+		if victim == null or not victim.alive or victim.vehicle != 0 or (victim.team == projectile.team and not settings.friendly_fire):
 			continue
 		var center := victim.position + Vector3(0, CROUCHED_BODY_HEIGHT if victim.crouched else BODY_HEIGHT, 0)
 		var distance := at.distance_to(center)
@@ -885,13 +919,15 @@ func _blast(projectile: Projectile, tuning: WeaponTuning) -> void:
 		total_hits += 1
 		if victim.is_bot() and not taken[1]:
 			bots.hurt(victim.bot, projectile.owner)
-		_tell_hit(projectile.owner, projectile.team, projectile.kind, direction, victim, Hitboxes.Zone.NONE, taken[0], taken[1], name)
+		tell_hit(projectile.owner, projectile.team, projectile.kind, direction, victim, Hitboxes.Zone.NONE, taken[0], taken[1], name)
+	if not over:
+		vehicles.blast(at, tuning, projectile.kind, projectile.owner, projectile.team, name)
 	var blast := Messages.Blast.new()
 	blast.tick = tick
 	blast.projectile = projectile.id
 	blast.kind = projectile.kind
 	blast.position = at
-	_send_to_all(blast)
+	send_to_all(blast)
 
 
 ## BODY_HEIGHT is the middle of the body, where a blast is measured to, and
@@ -957,6 +993,7 @@ func damage(victim: Soldier, amount: int) -> Array:
 	victim.health = 0
 	victim.alive = false
 	victim.velocity = Vector3.ZERO
+	vehicles.release(victim)
 	profile.kills += 1
 	var back := tick + roundi(settings.respawn_delay * Game.TICK_RATE)
 	if victim.controller == Game.Controller.PLAYER:
