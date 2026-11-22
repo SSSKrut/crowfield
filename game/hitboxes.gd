@@ -19,17 +19,17 @@ const B := [
 	Vector3(-0.20, 1.22, 0.22), Vector3(0.255, 1.155, 0.105), Vector3(0.075, 1.215, 0.515), Vector3(0.085, 1.205, 0.26),
 ]
 const RADII := [0.118, 0.21, 0.105, 0.105, 0.082, 0.082, 0.069, 0.069]
-## Bent knees keep the legs rooted while the upper body and rifle sit
-## forward of the hips. The crouching crown stays below a bridge parapet.
+## A staggered crouch lowers the head and keeps the chest over bent legs.
+## A low bridge parapet hides the legs and lower torso, leaving the head exposed.
 const CROUCH_A := [
-	Vector3(0, 0.735, 0.19), Vector3(0, 0.36, -0.17), Vector3(-0.118, 0.12, 0.03), Vector3(0.118, 0.12, 0.03),
-	Vector3(-0.22, 0.59, 0.04), Vector3(0.22, 0.59, 0.04), Vector3(-0.19, 0.53, 0.18), Vector3(0.23, 0.51, 0.12),
+	Vector3(0, 1.04, 0.23), Vector3(0, 0.48, -0.025), Vector3(-0.11, 0.115, 0.28), Vector3(0.11, 0.12, -0.24),
+	Vector3(-0.21, 0.86, 0.17), Vector3(0.24, 0.88, 0.12), Vector3(-0.14, 0.65, 0.37), Vector3(0.21, 0.65, 0.24),
 ]
 const CROUCH_B := [
-	Vector3(0, 0.770, 0.19), Vector3(0, 0.59, 0.06), Vector3(-0.118, 0.31, 0.21), Vector3(0.118, 0.31, 0.21),
-	Vector3(-0.19, 0.53, 0.18), Vector3(0.23, 0.51, 0.12), Vector3(0.06, 0.50, 0.35), Vector3(0.08, 0.49, 0.21),
+	Vector3(0, 1.11, 0.23), Vector3(0, 0.84, 0.15), Vector3(-0.10, 0.51, 0.24), Vector3(0.13, 0.38, 0.02),
+	Vector3(-0.14, 0.65, 0.37), Vector3(0.21, 0.65, 0.24), Vector3(0.06, 0.77, 0.59), Vector3(0.13, 0.77, 0.29),
 ]
-const CROUCH_RADII := [0.117, 0.18, 0.105, 0.105, 0.082, 0.082, 0.069, 0.069]
+const CROUCH_RADII := [0.118, 0.18, 0.112, 0.112, 0.082, 0.082, 0.105, 0.105]
 const ZONES := [Zone.HEAD, Zone.TORSO, Zone.LIMB, Zone.LIMB, Zone.LIMB, Zone.LIMB, Zone.LIMB, Zone.LIMB]
 
 ## COUNT is how many hitboxes a soldier has.

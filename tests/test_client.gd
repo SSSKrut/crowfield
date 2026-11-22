@@ -116,6 +116,12 @@ func test_armed_pose_tracks_both_grips_and_keeps_the_stance_height() -> void:
 		var bore := -shouldered.basis.z.normalized()
 		var eye_offset := eye - rear_sight
 		check((eye_offset - eye_offset.dot(bore) * bore).length() < 0.09, "aim brings the sight to the eyeline")
+		if crouched:
+			var lead := skeleton.get_bone_global_pose(asset.bones["Foot.L"]).origin
+			var rear := skeleton.get_bone_global_pose(asset.bones["Foot.R"]).origin
+			var hips := skeleton.get_bone_global_pose(asset.bones["Hips"]).origin
+			check(lead.z - rear.z > 0.4, "crouched aim plants the lead boot and staggers the rear boot")
+			check(hips.y > 0.4, "crouched aim holds the pelvis above the deep squat")
 
 	view.animate(0.3, 0.0)
 	view.player.seek(0, true)

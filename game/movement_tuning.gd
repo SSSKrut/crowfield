@@ -9,8 +9,8 @@ const FIELDS := [
 ]
 
 const CROUCH_SPEED_SHARE := 0.52
-const CROUCH_HEIGHT_SHARE := 0.49
-const CROUCH_EYE_SHARE := 0.51
+const CROUCH_HEIGHT_SHARE := 0.69
+const CROUCH_EYE_SHARE := 0.67
 
 var walk_speed := 5.0
 var sprint_speed := 8.0

@@ -8,8 +8,8 @@ enum Clip { IDLE, WALKING, RUNNING, CROUCH_IDLE, CROUCH_WALKING }
 const _PERIODS := [2.6, 0.46, 0.43, 2.0, 0.42]
 const _STEP_LENGTH := [0.0, 0.98, 1.10, 0.0, 0.42]
 const _STANCE_PORTION := [0.0, 0.52, 0.40, 0.0, 0.60]
-const _CROUCH_HIP_SHIFT := 0.26
-const _CROUCH_ANKLE_DROP := 0.163
+const _CROUCH_HIP_SHIFT := 0.07
+const _CROUCH_ANKLE_DROP := 0.32
 
 const _SHADER := """
 shader_type spatial;
@@ -178,23 +178,26 @@ func _ready_pose(poses: Dictionary, phase: float) -> void:
 		poses["Foot." + side] = Vector3(leg.z, 0, 0)
 
 
-## Fold the knees beneath a lowered pelvis and lean the upper body forward.
-## Both ankles retain their full leg lengths and use the grounded sole solve.
+## Keep weight between staggered boots, bending at the knees and hips
+## without folding the chest down onto the thighs.
 func _crouch_pose(poses: Dictionary, clip: int, cycle: float) -> void:
 	var moving := clip == Clip.CROUCH_WALKING
 	var sway := sin(TAU * cycle)
-	poses["Hips"] = Vector3(0, -0.04 * sway if moving else 0, 0)
-	poses["Abdomen"] = Vector3(0.90 + 0.01 * sway, 0, 0)
-	poses["Torso_2"] = Vector3(0.27, 0.04 * sway if moving else 0, 0)
-	poses["Head_2"] = Vector3(-1.10, 0, 0)
+	poses["Hips"] = Vector3(0.02, -0.04 * sway if moving else -0.08, 0)
+	poses["Abdomen"] = Vector3(0.40 + 0.012 * sway, 0, 0)
+	poses["Torso_2"] = Vector3(0.23, 0.04 * sway if moving else -0.08, -0.025)
+	poses["Head_2"] = Vector3(-0.62, 0.15, 0.02)
 	for side in ["L", "R"]:
-		var offset := 0.0 if side == "L" else 0.5
-		var phase := fposmod(cycle + offset, 1.0)
-		var leg := _stride(phase, clip) if moving else _leg_angles(_CROUCH_ANKLE_DROP, _CROUCH_HIP_SHIFT + lerpf(-0.038, 0.038, offset * 2), 0.0)
+		var leading: bool = side == "L"
+		var phase := fposmod(cycle + (0.0 if leading else 0.5), 1.0)
+		var reach := 0.36 if leading else -0.16
+		var drop := _CROUCH_ANKLE_DROP if leading else _CROUCH_ANKLE_DROP - 0.017
+		var roll := 0.0 if leading else 0.22
+		var leg := _stride(phase, clip) if moving else _leg_angles(drop, reach, roll)
 		poses["UpperLeg." + side] = Vector3(leg.x, 0, 0)
 		poses["LowerLeg." + side] = Vector3(leg.y, 0, 0)
 		poses["Foot." + side] = Vector3(leg.z, 0, 0)
-		poses["UpperArm." + side] = Vector3(-1.05, 0, 0)
+		poses["UpperArm." + side] = Vector3(-0.61, 0, 0)
 
 
 ## The stance foot moves back along a level path at constant speed; the
