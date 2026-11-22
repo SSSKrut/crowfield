@@ -34,6 +34,14 @@ These are released into the public domain under [CC0 1.0](https://creativecommon
 | `models/rock_b.glb` | Rock Large | Quaternius | https://poly.pizza/m/li0YBlBEMz |
 | `models/rock_pillar.glb` | Rock Large | Quaternius | https://poly.pizza/m/d2VWOdthtR |
 
+## Generated models
+
+| File | Asset | Made with | Source | License |
+| --- | --- | --- | --- | --- |
+| `models/oil_cistern.glb` | Oil cistern | The Kimi 3.1 AI model, exported from Blender | Generated for Crowfield and added by the project owner on 22 November 2026 | No third-party source or license |
+
+The oil cistern is not sourced, artist-authored art. It is an exception to the rule in `AGENTS.md`, made at the project owner's request. Replace it if an artist-authored cistern is adopted. The cistern is used unmodified, in metres, and its collision is in `DesertMap.MODELS`.
+
 ## Textures
 
 These are unmodified 1K diffuse maps from [Poly Haven](https://polyhaven.com/license), under CC0 1.0. The ground shader tints them and mixes them by wear and slope.

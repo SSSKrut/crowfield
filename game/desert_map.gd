@@ -61,6 +61,15 @@ const MODELS := {
 		[Vector3(0, 3.7, 0), Vector3(1.7, 0.8, 1.7), PI / 4],
 		[Vector3(2.42, 2.25, 2.42), Vector3(0.12, 2.25, 0.12)], [Vector3(-2.42, 2.25, 2.42), Vector3(0.12, 2.25, 0.12)],
 		[Vector3(2.42, 2.25, -2.42), Vector3(0.12, 2.25, 0.12)], [Vector3(-2.42, 2.25, -2.42), Vector3(0.12, 2.25, 0.12)]] },
+	# A squat oil cistern on a concrete plinth, with a caged ladder and a pipe
+	# run along its wall.
+	"oil_cistern": { "boxes": [
+		[Vector3(0, 4.53, 0), Vector3(5.03, 4.53, 2.08), 0.0], [Vector3(0, 4.53, 0), Vector3(5.03, 4.53, 2.08), PI / 4],
+		[Vector3(0, 4.53, 0), Vector3(5.03, 4.53, 2.08), PI / 2], [Vector3(0, 4.53, 0), Vector3(5.03, 4.53, 2.08), 3 * PI / 4],
+		[Vector3(0, 0.245, 0), Vector3(5.48, 0.245, 2.27), 0.0], [Vector3(0, 0.245, 0), Vector3(5.48, 0.245, 2.27), PI / 4],
+		[Vector3(0, 0.245, 0), Vector3(5.48, 0.245, 2.27), PI / 2], [Vector3(0, 0.245, 0), Vector3(5.48, 0.245, 2.27), 3 * PI / 4],
+		[Vector3(3.04, 4.72, 4.33), Vector3(0.75, 4.34, 0.85), -0.96],
+		[Vector3(-2.9, 1.3, 4.9), Vector3(2.7, 1.35, 0.6)]] },
 	# The walking beam runs aslant from the crank up to the horse head.
 	"pumpjack": { "offset": Vector3(743917, 801.4, -586006), "scale": 1.8e-5, "boxes": [
 		[Vector3(-1.62, 0.09, -0.36), Vector3(2.58, 0.09, 1.95)],
@@ -124,7 +133,7 @@ func _build() -> MapScene:
 		_flats.append(Flat.new(_flat(BASE, sign), 20, 30, BASE_LEVEL))
 		_flats.append(Flat.new(_flat(STATION, sign), 16, 24, STATION_LEVEL))
 		_flats.append(Flat.new(_flat(OILFIELD, sign), 20, 28, FIELD_LEVEL))
-		_flats.append(Flat.new(_flat(TANK_FARM, sign), 20, 28, FIELD_LEVEL))
+		_flats.append(Flat.new(_flat(TANK_FARM, sign), 25, 33, FIELD_LEVEL))
 	_scene.terrain = Terrain.create(SIZE, _height)
 	_scene.set_zone(Game.Team.BLUE, _on_ground(MUSTER), MUSTER_RADIUS)
 	_scene.set_zone(Game.Team.RED, _on_ground(-MUSTER), MUSTER_RADIUS)
@@ -300,14 +309,15 @@ func _oilfield(origin: Vector3, turn: float) -> void:
 	_barrels(origin, turn, -12, 1, level, 2)
 
 
-## _tank_farm is four storage tanks in a square with lanes between them, a
-## water tower, a container and pipe runs.
+## _tank_farm is four storage tanks in a square with lanes between them, an
+## oil cistern on the outer flank, a water tower, a container and pipe runs.
 func _tank_farm(origin: Vector3, turn: float) -> void:
 	var level := FIELD_LEVEL
 	for corner: Vector2 in [Vector2(-7, -7), Vector2(7, -7), Vector2(-7, 7), Vector2(7, 7)]:
 		_model("storage_tank", origin, turn, corner.x, corner.y, level)
 	_model("pipes", origin, turn, 0, -12, level, PI / 2)
 	_model("pipes", origin, turn, 0, 12, level, PI / 2)
+	_model("oil_cistern", origin, turn, 18, -2, level)
 	_model("water_tower", origin, turn, 17, 12, level)
 	_model("container_green", origin, turn, -17, -2, level, PI / 2)
 	_barrels(origin, turn, 13, -13, level, 3)
@@ -369,7 +379,7 @@ func _clear(at: Vector2, margin: float) -> bool:
 	if at.length() < 44 + margin:
 		return false
 	for sign: float in [1.0, -1.0]:
-		for place: Array in [[BASE, 24.0], [STATION, 20.0], [OILFIELD, 24.0], [TANK_FARM, 24.0]]:
+		for place: Array in [[BASE, 24.0], [STATION, 20.0], [OILFIELD, 24.0], [TANK_FARM, 27.0]]:
 			var center := Vector2(place[0].x, place[0].z) * sign
 			if at.distance_to(center) < place[1] + margin:
 				return false
