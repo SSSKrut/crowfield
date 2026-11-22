@@ -120,7 +120,7 @@ func _carrier() -> void:
 		_pouch(TORSO, Vector3(x, 1.22, 0.185), Vector3(0.067, 0.042, 0.039), WEBBING)
 		_pouch(TORSO, Vector3(x, 1.19, 0.199), Vector3(0.015, 0.039, 0.008), CLOTH_DARK)
 
-	_pouch(TORSO, Vector3(0.023, 1.311, 0.172), Vector3(0.109, 0.037, 0.006), MARK)
+	_pouch(TORSO, Vector3(0.023, 1.311, 0.172), Vector3(0.148, 0.048, 0.006), MARK)
 	_pouch(TORSO, Vector3(0, 1.281, -0.146), Vector3(0.278, 0.275, 0.099), WEBBING)
 	_pouch(TORSO, Vector3(0, 1.334, -0.177), Vector3(0.274, 0.123, 0.056), ARMOUR)
 	_pouch(TORSO, Vector3(0, 1.233, -0.181), Vector3(0.221, 0.081, 0.044), CLOTH_DARK)
@@ -128,7 +128,7 @@ func _carrier() -> void:
 		var x: float = side * 0.084
 		_pouch(TORSO, Vector3(x, 1.278, -0.201), Vector3(0.026, 0.206, 0.011), WEBBING)
 		_pouch(TORSO, Vector3(x, 1.229, -0.207), Vector3(0.035, 0.025, 0.010), HARDWARE, Finish.POLYMER)
-	_pouch(TORSO, Vector3(0, 1.34, -0.211), Vector3(0.187, 0.080, 0.008), MARK)
+	_pouch(TORSO, Vector3(0, 1.34, -0.212), Vector3(0.247, 0.115, 0.008), MARK)
 
 
 func _head() -> void:
@@ -236,9 +236,9 @@ func _glove(bone: String, wrist: Vector3, support: bool) -> void:
 ## team textile on top even at the outer bend of the shoulder.
 func _armband(bone: String, shoulder: Vector3, elbow: Vector3) -> void:
 	_loft([
-		_ring(shoulder.lerp(elbow, 0.20), 0.085, 0.084, bone, "Torso_2", 0.12),
+		_ring(shoulder.lerp(elbow, 0.16), 0.087, 0.085, bone, "Torso_2", 0.14),
 		_ring(shoulder.lerp(elbow, 0.32), 0.083, 0.080, bone, "Torso_2", 0.048),
-		_ring(shoulder.lerp(elbow, 0.53), 0.076, 0.073, bone),
+		_ring(shoulder.lerp(elbow, 0.66), 0.074, 0.071, bone),
 	], MARK, 16, 0.0, Finish.FABRIC, 0.95)
 
 
