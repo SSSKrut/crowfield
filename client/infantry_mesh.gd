@@ -7,16 +7,19 @@ extends RefCounted
 const CLOTH := Color8(92, 99, 75)
 const CLOTH_LIGHT := Color8(108, 116, 89)
 const CLOTH_DARK := Color8(65, 73, 56)
-const ARMOUR := Color8(104, 103, 77)
-const WEBBING := Color8(77, 73, 54)
+const ARMOUR := Color8(111, 104, 76)
+const WEBBING := Color8(74, 69, 53)
 const HARDWARE := Color8(43, 48, 43)
-const BOOT := Color8(54, 50, 41)
+const BOOT := Color8(48, 46, 39)
+const GLOVE := Color8(58, 55, 43)
 const SOLE := Color8(32, 35, 33)
 const HELMET := Color8(71, 82, 60)
 const FACE := Color8(152, 115, 91)
 const MARK := Color(1, 1, 1, 0)
 const SOLE_CENTER := Vector3(0, -0.102, 0.058)
-const SOLE_RADII := Vector3(0.077, 0.018, 0.132)
+const SOLE_RADII := Vector3(0.085, 0.018, 0.132)
+const TRIGGER_CONTACT := Vector3(0.028, 0.006, 0.035)
+const SUPPORT_CONTACT := Vector3(-0.023, 0.031, 0.032)
 
 enum Finish { UNIFORM, FABRIC, POLYMER, METAL }
 
@@ -71,8 +74,8 @@ func _uniform() -> void:
 		_ring(Vector3(0, 1.057, 0.003), 0.192, 0.122, "Abdomen", "Hips", 0.20),
 		_ring(Vector3(0, 1.116, 0.003), 0.186, 0.115, "Abdomen", "Torso_2", 0.25),
 		_ring(Vector3(0, 1.197, 0.002), 0.204, 0.131, "Torso_2", "Abdomen", 0.22),
-		_ring(Vector3(0, 1.318, 0.003), 0.217, 0.143, "Torso_2"),
-		_ring(Vector3(0, 1.415, 0.000), 0.231, 0.115, "Torso_2"),
+		_ring(Vector3(0, 1.318, 0.003), 0.226, 0.150, "Torso_2"),
+		_ring(Vector3(0, 1.415, 0.000), 0.235, 0.122, "Torso_2"),
 		_ring(Vector3(0, 1.463, 0.015), 0.111, 0.083, "Torso_2"),
 		_ring(Vector3(0, 1.488, 0.011), 0.069, 0.065, "Neck", "Torso_2", 0.55),
 	], CLOTH, 18, 0.025, Finish.UNIFORM)
@@ -86,8 +89,8 @@ func _uniform() -> void:
 
 func _carrier() -> void:
 	const TORSO := "Torso_2"
-	_pouch(TORSO, Vector3(0, 1.282, 0.115), Vector3(0.357, 0.317, 0.093), ARMOUR)
-	_pouch(TORSO, Vector3(0, 1.329, 0.154), Vector3(0.306, 0.221, 0.056), CLOTH_DARK)
+	_pouch(TORSO, Vector3(0, 1.282, 0.115), Vector3(0.384, 0.289, 0.101), ARMOUR)
+	_pouch(TORSO, Vector3(0, 1.329, 0.154), Vector3(0.323, 0.206, 0.058), CLOTH_DARK)
 	for side in [-1, 1]:
 		var x: float = side * 0.149
 		_pouch(TORSO, Vector3(x, 1.431, -0.003), Vector3(0.053, 0.073, 0.221), WEBBING)
@@ -100,8 +103,8 @@ func _carrier() -> void:
 		_pouch(TORSO, Vector3(x, 1.257, 0.195), Vector3(0.059, 0.038, 0.057), ARMOUR)
 		_pouch(TORSO, Vector3(x, 1.246, 0.225), Vector3(0.020, 0.016, 0.006), HARDWARE, Finish.POLYMER)
 
-	_pouch(TORSO, Vector3(0, 1.355, 0.185), Vector3(0.163, 0.052, 0.014), CLOTH_DARK)
-	_pouch(TORSO, Vector3(0, 1.355, 0.193), Vector3(0.143, 0.038, 0.010), MARK)
+	_pouch(TORSO, Vector3(0, 1.355, 0.185), Vector3(0.188, 0.061, 0.014), CLOTH_DARK)
+	_pouch(TORSO, Vector3(0, 1.355, 0.193), Vector3(0.169, 0.048, 0.010), MARK)
 	_pouch(TORSO, Vector3(0, 1.276, -0.149), Vector3(0.335, 0.306, 0.146), CLOTH_DARK)
 	_pouch(TORSO, Vector3(0, 1.291, -0.219), Vector3(0.252, 0.223, 0.066), ARMOUR)
 	_pouch(TORSO, Vector3(0, 1.211, -0.260), Vector3(0.203, 0.093, 0.034), CLOTH_DARK)
@@ -111,8 +114,8 @@ func _carrier() -> void:
 		_pouch(TORSO, Vector3(x, 1.212, -0.260), Vector3(0.040, 0.027, 0.015), HARDWARE, Finish.POLYMER)
 	# A sewn ID panel fills the upper pack flap. The neutral rim gives its
 	# edge enough contrast to read against both grass and bare walls.
-	_pouch(TORSO, Vector3(0, 1.340, -0.254), Vector3(0.246, 0.113, 0.018), CLOTH_DARK)
-	_pouch(TORSO, Vector3(0, 1.340, -0.264), Vector3(0.220, 0.091, 0.010), MARK)
+	_pouch(TORSO, Vector3(0, 1.340, -0.254), Vector3(0.258, 0.132, 0.018), CLOTH_DARK)
+	_pouch(TORSO, Vector3(0, 1.340, -0.264), Vector3(0.233, 0.109, 0.010), MARK)
 
 
 func _head() -> void:
@@ -121,12 +124,12 @@ func _head() -> void:
 	_round(HEAD, Vector3(0, 1.646, 0.070), Vector3(0.067, 0.040, 0.029), FACE)
 	_round(HEAD, Vector3(0, 1.599, 0.028), Vector3(0.079, 0.066, 0.082), CLOTH_DARK)
 	_loft([
-		_ring(Vector3(0, 1.675, 0.003), 0.102, 0.106, HEAD),
-		_ring(Vector3(0, 1.690, 0.003), 0.107, 0.109, HEAD),
-		_ring(Vector3(0, 1.740, -0.006), 0.103, 0.104, HEAD),
-		_ring(Vector3(0, 1.775, -0.008), 0.076, 0.073, HEAD),
+		_ring(Vector3(0, 1.675, 0.003), 0.106, 0.114, HEAD),
+		_ring(Vector3(0, 1.690, 0.003), 0.113, 0.115, HEAD),
+		_ring(Vector3(0, 1.740, -0.006), 0.109, 0.106, HEAD),
+		_ring(Vector3(0, 1.775, -0.008), 0.078, 0.076, HEAD),
 		_ring(Vector3(0, 1.789, -0.011), 0.001, 0.001, HEAD),
-	], HELMET, 18, 0.012, Finish.POLYMER)
+	], HELMET, 14, 0.006, Finish.POLYMER, 0.83)
 	_pouch(HEAD, Vector3(0, 1.666, 0.084), Vector3(0.172, 0.043, 0.026), HARDWARE, Finish.POLYMER)
 	_pouch(HEAD, Vector3(0, 1.668, 0.098), Vector3(0.144, 0.028, 0.012), Color8(72, 77, 62), Finish.POLYMER)
 	for side in [-1, 1]:
@@ -145,35 +148,57 @@ func _sleeve(side: String) -> void:
 	var hand := _joint(palm)
 	var outer := Vector3.RIGHT if side == "L" else Vector3.LEFT
 	_loft([
-		_ring(shoulder.lerp(elbow, -0.13), 0.044, 0.048, upper),
-		_ring(shoulder.lerp(elbow, 0.06), 0.073, 0.075, upper),
-		_ring(shoulder.lerp(elbow, 0.36), 0.069, 0.068, upper),
-		_ring(shoulder.lerp(elbow, 0.77), 0.061, 0.060, upper, lower, 0.08),
-		_ring(elbow, 0.062, 0.061, upper, lower, 0.50),
-		_ring(elbow.lerp(hand, 0.24), 0.060, 0.061, lower, upper, 0.10),
-		_ring(elbow.lerp(hand, 0.62), 0.052, 0.054, lower),
-		_ring(elbow.lerp(hand, 0.85), 0.043, 0.046, lower),
+		_ring(shoulder.lerp(elbow, -0.13), 0.047, 0.053, upper),
+		_ring(shoulder.lerp(elbow, 0.06), 0.085, 0.085, upper),
+		_ring(shoulder.lerp(elbow, 0.36), 0.081, 0.075, upper),
+		_ring(shoulder.lerp(elbow, 0.77), 0.068, 0.064, upper, lower, 0.08),
+		_ring(elbow, 0.065, 0.062, upper, lower, 0.50),
+		_ring(elbow.lerp(hand, 0.24), 0.063, 0.063, lower, upper, 0.10),
+		_ring(elbow.lerp(hand, 0.62), 0.057, 0.057, lower),
+		_ring(elbow.lerp(hand, 0.85), 0.047, 0.048, lower),
 		_ring(hand, 0.038, 0.042, lower, palm, 0.15),
-	], CLOTH, 14, 0.050, Finish.UNIFORM)
+	], CLOTH, 14, 0.027, Finish.UNIFORM, 0.88)
 	_armband(upper, shoulder, elbow)
 	_round(lower, elbow.lerp(hand, 0.11) + outer * 0.048, Vector3(0.020, 0.060, 0.049), WEBBING)
 	_pouch(lower, elbow.lerp(hand, 0.87) + Vector3.UP * 0.026, Vector3(0.061, 0.032, 0.052), WEBBING)
-	_round(palm, hand, Vector3(0.049, 0.036, 0.062), HARDWARE)
-	_pouch(palm, hand + Vector3(0, 0.025, 0.014), Vector3(0.071, 0.027, 0.066), BOOT, Finish.POLYMER)
+	_glove(palm, hand, side == "L")
+
+
+## Give the knuckles and pads independent silhouettes. The pads finish on
+## the opposite side of the grip, so the hand reads as closed even in profile.
+func _glove(bone: String, wrist: Vector3, support: bool) -> void:
+	var grip := wrist + (SUPPORT_CONTACT if support else TRIGGER_CONTACT)
+	_round(bone, wrist, Vector3(0.037, 0.032, 0.037), GLOVE)
+	if support:
+		_round(bone, grip + Vector3(0.013, -0.022, -0.011), Vector3(0.032, 0.020, 0.041), GLOVE)
+		_pouch(bone, grip + Vector3(0.035, 0.002, -0.016), Vector3(0.021, 0.050, 0.034), BOOT)
+		for i in 4:
+			var z := -0.020 + 0.014 * i
+			_round(bone, grip + Vector3(-0.020, 0.011, z), Vector3(0.015, 0.023, 0.009), GLOVE)
+			_round(bone, grip + Vector3(-0.009, 0.035, z), Vector3(0.019, 0.009, 0.009), HARDWARE)
+		_round(bone, grip + Vector3(0.024, 0.024, 0.021), Vector3(0.014, 0.024, 0.012), GLOVE)
+	else:
+		_pouch(bone, grip + Vector3(-0.024, -0.011, -0.010), Vector3(0.026, 0.072, 0.049), GLOVE)
+		_pouch(bone, grip + Vector3(-0.040, -0.007, -0.005), Vector3(0.014, 0.055, 0.032), BOOT)
+		for i in 4:
+			var y := 0.016 - 0.014 * i
+			_round(bone, grip + Vector3(-0.011, y, 0.025), Vector3(0.023, 0.009, 0.012), GLOVE)
+			_round(bone, grip + Vector3(0.013, y, 0.017), Vector3(0.009, 0.009, 0.020), GLOVE)
+		_round(bone, grip + Vector3(0.014, 0.019, -0.017), Vector3(0.013, 0.011, 0.022), GLOVE)
 
 
 ## Tailor both seams to the taper of the sleeve. The identification wraps
 ## the existing fabric, so it reads in profile without an extra hard plate.
 func _armband(bone: String, shoulder: Vector3, elbow: Vector3) -> void:
-	var edges := PackedFloat32Array([0.122, 0.147, 0.505, 0.530])
+	var edges := PackedFloat32Array([0.13, 0.17, 0.66, 0.69])
 	var colors := [CLOTH_DARK, MARK, CLOTH_DARK]
 	for index in colors.size():
 		var from := edges[index]
 		var to := edges[index + 1]
 		_loft([
-			_ring(shoulder.lerp(elbow, from), lerpf(0.079, 0.066, from), lerpf(0.081, 0.064, from), bone),
-			_ring(shoulder.lerp(elbow, to), lerpf(0.079, 0.066, to), lerpf(0.081, 0.064, to), bone),
-		], colors[index], 14)
+			_ring(shoulder.lerp(elbow, from), lerpf(0.093, 0.075, from), lerpf(0.097, 0.069, from), bone),
+			_ring(shoulder.lerp(elbow, to), lerpf(0.093, 0.075, to), lerpf(0.097, 0.069, to), bone),
+		], colors[index], 14, 0.0, Finish.FABRIC, 0.88)
 
 
 func _trousers(side: String) -> void:
@@ -185,23 +210,23 @@ func _trousers(side: String) -> void:
 	var ankle := _joint(foot)
 	var outer := Vector3.RIGHT if side == "L" else Vector3.LEFT
 	_loft([
-		_ring(hip.lerp(knee, -0.09), 0.103, 0.104, upper, "Hips", 0.26),
-		_ring(hip.lerp(knee, 0.13), 0.107, 0.114, upper),
-		_ring(hip.lerp(knee, 0.37), 0.101, 0.103, upper),
-		_ring(hip.lerp(knee, 0.73), 0.089, 0.089, upper, lower, 0.13),
-		_ring(knee, 0.082, 0.077, lower, upper, 0.50),
-		_ring(knee.lerp(ankle, 0.24), 0.078, 0.078, lower, upper, 0.13),
-		_ring(knee.lerp(ankle, 0.52), 0.072, 0.075, lower),
-		_ring(knee.lerp(ankle, 0.78), 0.059, 0.066, lower),
-		_ring(ankle, 0.059, 0.062, lower, foot, 0.22),
-	], CLOTH_DARK, 16, 0.051, Finish.UNIFORM)
+		_ring(hip.lerp(knee, -0.09), 0.109, 0.112, upper, "Hips", 0.26),
+		_ring(hip.lerp(knee, 0.13), 0.115, 0.116, upper),
+		_ring(hip.lerp(knee, 0.37), 0.109, 0.107, upper),
+		_ring(hip.lerp(knee, 0.73), 0.093, 0.094, upper, lower, 0.13),
+		_ring(knee, 0.088, 0.082, lower, upper, 0.50),
+		_ring(knee.lerp(ankle, 0.24), 0.084, 0.082, lower, upper, 0.13),
+		_ring(knee.lerp(ankle, 0.52), 0.080, 0.077, lower),
+		_ring(knee.lerp(ankle, 0.78), 0.065, 0.072, lower),
+		_ring(ankle, 0.067, 0.068, lower, foot, 0.22),
+	], CLOTH_DARK, 16, 0.031, Finish.UNIFORM, 0.88)
 	_pouch(upper, hip.lerp(knee, 0.42) + outer * 0.078, Vector3(0.057, 0.131, 0.131), CLOTH)
 	_pouch(upper, hip.lerp(knee, 0.29) + outer * 0.088, Vector3(0.054, 0.037, 0.140), CLOTH_LIGHT)
 	_round(lower, knee + Vector3(0, -0.042, 0.066), Vector3(0.066, 0.084, 0.035), WEBBING)
 	_pouch(lower, knee + Vector3(0, -0.042, 0.085), Vector3(0.094, 0.113, 0.031), HARDWARE, Finish.POLYMER)
 	_round(lower, ankle + Vector3(0, 0.067, 0.002), Vector3(0.064, 0.097, 0.069), BOOT)
-	_pouch(foot, ankle + Vector3(0, -0.066, 0.050), Vector3(0.139, 0.087, 0.235), BOOT, Finish.POLYMER)
-	_round(foot, ankle + Vector3(0, -0.050, 0.080), Vector3(0.068, 0.060, 0.100), BOOT)
+	_pouch(foot, ankle + Vector3(0, -0.066, 0.050), Vector3(0.156, 0.087, 0.235), BOOT, Finish.POLYMER)
+	_round(foot, ankle + Vector3(0, -0.050, 0.080), Vector3(0.077, 0.060, 0.100), BOOT)
 	_round(foot, ankle + SOLE_CENTER, SOLE_RADII, SOLE, Finish.POLYMER)
 
 

@@ -53,6 +53,67 @@ func test_grounded_boots_lift_only_leg_pose_on_a_slope() -> void:
 	pool.close()
 
 
+func test_armed_pose_tracks_both_grips_and_keeps_the_stance_height() -> void:
+	var tree := Engine.get_main_loop() as SceneTree
+	await tree.process_frame
+	var weapons := ViewModel.new()
+	tree.root.add_child(weapons)
+	cleanup(weapons.free)
+	var asset := CharacterAsset.load_asset()
+	var view := asset.instantiate()
+	tree.root.add_child(view)
+	cleanup(view.free)
+	view.set_detail(false)
+	view.face(Vector3(5, 2, 10), 0.71)
+	var skeleton := view.skeleton
+	var head: int = asset.bones["Head_2"]
+	var crown := Vector3(0, 0.239, -0.011)
+	for stance in [
+		Vector3.ZERO, Vector3(4.25, 0, 0), Vector3(6.65, 0, 0),
+		Vector3(0, 1, 0), Vector3(1.67, 1, 0), Vector3(0, 0, 1), Vector3(0, 1, 1),
+	]:
+		var crouched: bool = stance.y > 0
+		view.animate(0.3, stance.x, crouched, stance.z > 0)
+		var limit: float = (Hitboxes.CROUCH_B[0].y + Hitboxes.CROUCH_RADII[0]) if crouched else (Hitboxes.B[0].y + Hitboxes.RADII[0])
+		for phase: float in [0.0, 0.23, 0.48, 0.65, 0.88]:
+			for kind in [WeaponTuning.Kind.ASSAULT_RIFLE, WeaponTuning.Kind.RIFLE, WeaponTuning.Kind.PISTOL]:
+				for pitch: float in [-0.75, 0.0, 0.75]:
+					skeleton.reset_bone_poses()
+					view.player.seek(view.player.current_animation_length * phase, true)
+					var carried := view.carry(weapons, kind, pitch)
+					view.armed_pose.apply_pose()
+					for side: String in ["R", "L"]:
+						var support := side == "L"
+						var contact := InfantryMesh.SUPPORT_CONTACT if support else InfantryMesh.TRIGGER_CONTACT
+						var palm := skeleton.get_bone_global_pose(asset.bones["Palm1." + side])
+						var aim := carried * weapons.held_grip(kind, support)
+						var actual := skeleton.global_transform * (palm * contact)
+						check(aim.distance_to(actual) < 0.025,
+							"%s must reach %s at %.2f pitch and %.2f phase in %s (gap %.3f)" % [side, kind, pitch, phase, view.player.current_animation, aim.distance_to(actual)])
+					var y := (skeleton.get_bone_global_pose(head) * crown).y
+					check(y < limit + 0.015 and y > limit - 0.17, "%s crown %.3f tracks hitbox %.3f" % [view.player.current_animation, y, limit])
+
+	skeleton.reset_bone_poses()
+	view.player.seek(0, true)
+	var steady := view.carry(weapons, WeaponTuning.Kind.ASSAULT_RIFLE, 0.0)
+	var looking_up := view.carry(weapons, WeaponTuning.Kind.ASSAULT_RIFLE, 0.42)
+	var looking_down := view.carry(weapons, WeaponTuning.Kind.ASSAULT_RIFLE, -0.42)
+	check(-looking_up.basis.z.y > 0.25 and -looking_down.basis.z.y < -0.25,
+		"the muzzle follows the slope of aim in both directions")
+	view.fired()
+	var recoil := view.carry(weapons, WeaponTuning.Kind.ASSAULT_RIFLE, 0.0)
+	check(recoil.origin.distance_to(steady.origin) > 0.035, "a shot moves the carried weapon")
+	check(recoil.basis.z.y < steady.basis.z.y, "a shot tips the barrel upward")
+
+	view.animate(0.3, 0.0)
+	view.player.seek(0, true)
+	var ready := view.carry(weapons, WeaponTuning.Kind.ASSAULT_RIFLE, 0.0)
+	view.fired()
+	var first_shot := view.carry(weapons, WeaponTuning.Kind.ASSAULT_RIFLE, 0.0)
+	check(first_shot.origin.y > ready.origin.y + 0.11, "the first shot comes from a raised weapon")
+	check(absf(first_shot.basis.z.y) < 0.07, "the first shot from ready is aligned with the aim")
+
+
 func test_valley_ambience_tracks_the_water_and_respects_mute() -> void:
 	var root := (Engine.get_main_loop() as SceneTree).root
 	await root.get_tree().process_frame

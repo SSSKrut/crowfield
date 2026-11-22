@@ -506,11 +506,17 @@ static func held_transform(position: Vector3, yaw: float, pitch: float) -> Trans
 
 ## held_muzzle is where the weapon a soldier carries fires from, or
 ## Vector3.INF when the kind has no model.
-func held_muzzle(kind: int, position: Vector3, yaw: float, pitch: float) -> Vector3:
+func held_muzzle(kind: int, carried: Transform3D) -> Vector3:
 	var shape := _shape_of(kind)
 	if shape == null:
 		return Vector3.INF
-	return held_transform(position, yaw, pitch) * _forward(shape.muzzle)
+	return carried * _forward(shape.muzzle)
+
+
+## Contact points on the carried weapon, in the same mesh space as its muzzle.
+func held_grip(kind: int, support: bool) -> Vector3:
+	var shape := _shape_of(kind)
+	return _forward(shape.support_grip if support else shape.trigger_grip)
 
 
 func _shape_of(kind: int) -> Shape:
@@ -644,6 +650,7 @@ class Shape:
 	var support_elbow: Vector3
 	var magazine_grip: Vector3
 	var support_grip: Vector3
+	var trigger_grip: Vector3
 	var magazine_throw := 0.19
 	var muzzle: Vector3
 	var hip: Vector3
@@ -750,7 +757,8 @@ static func _carbine() -> Shape:
 				Vector3(0.002, 0.025, 0.003), GUN_EDGE.darkened(0.34), Finish.POLYMER, false, MAGAZINE_PITCH))
 	shape.support_grip = Vector3(-0.014, -0.085, 0.307)
 	shape.magazine_grip = Vector3(-0.019, -0.178, 0.107)
-	shape.right_arm = _arm(Vector3(0.004, -0.119, -0.073), Vector3(0.115, -0.28, -0.42), 1.0)
+	shape.trigger_grip = Vector3(0.004, -0.119, -0.073)
+	shape.right_arm = _arm(shape.trigger_grip, Vector3(0.115, -0.28, -0.42), 1.0)
 	shape.support_elbow = Vector3(-0.18, -0.29, 0.017)
 	shape.muzzle = Vector3(0, -0.045, 0.601)
 	shape.hip = Vector3(0.152, -0.148, 0.245)
@@ -799,7 +807,8 @@ static func _marksman() -> Shape:
 	shape.support_grip = Vector3(-0.025, -0.096, 0.244)
 	shape.magazine_grip = Vector3(-0.024, -0.130, 0.089)
 	shape.magazine_throw = 0.15
-	shape.right_arm = _arm(Vector3(0.006, -0.120, -0.123), Vector3(0.124, -0.28, -0.47), 1.0)
+	shape.trigger_grip = Vector3(0.006, -0.120, -0.123)
+	shape.right_arm = _arm(shape.trigger_grip, Vector3(0.124, -0.28, -0.47), 1.0)
 	shape.support_elbow = Vector3(-0.168, -0.26, -0.02)
 	shape.muzzle = Vector3(0, -0.042, 0.674)
 	shape.hip = Vector3(0.143, -0.127, 0.285)
@@ -837,7 +846,8 @@ static func _sidearm() -> Shape:
 	shape.support_grip = Vector3(-0.024, -0.090, -0.034)
 	shape.magazine_grip = Vector3(-0.020, -0.140, -0.054)
 	shape.magazine_throw = 0.18
-	shape.right_arm = _arm(Vector3(0.006, -0.077, -0.045), Vector3(0.113, -0.234, -0.408), 1.0)
+	shape.trigger_grip = Vector3(0.006, -0.077, -0.045)
+	shape.right_arm = _arm(shape.trigger_grip, Vector3(0.113, -0.234, -0.408), 1.0)
 	shape.support_elbow = Vector3(-0.146, -0.232, -0.363)
 	shape.muzzle = Vector3(0, -0.013, 0.126)
 	shape.hip = Vector3(0.105, -0.103, 0.388)

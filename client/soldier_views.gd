@@ -79,10 +79,8 @@ func update(session: ClientSession, delta: float, camera: Camera3D, scene: MapSc
 		remote.smooth(delta)
 		remote.evaluate(session.clock.render_tick)
 		var entry: Entry = _entries.get(id)
-		var hit := _show_combat(known, entry.view if entry != null else null, session.clock.render_tick)
-		if hit and entry != null and remote.alive and remote.position.distance_to(eye) < FLINCH_DISTANCE:
-			entry.view.hit(HITBOX_PARTS[mini(known.soldier.hit_box, Hitboxes.COUNT - 1)], Game.view_direction(known.soldier.hit_yaw, 0))
 		if not remote.alive:
+			_show_combat(known, entry, session.clock.render_tick)
 			if entry != null:
 				_entries.erase(id)
 				_fall(entry, known, eye)
@@ -102,7 +100,6 @@ func update(session: ClientSession, delta: float, camera: Camera3D, scene: MapSc
 			var near_enough := entry.distance < Sounds.REMOTE_FOOTSTEP_RANGE
 			if entry.footstep_due(remote, speed / rules.movement.sprint_speed, delta, near_enough):
 				sounds.footstep_at(remote.position, scene, entry.distance)
-		_hold(entry, known.soldier.arsenal.weapon(), remote, known.soldier.team)
 		shown.append(entry)
 	drawn = shown.size()
 	full = 0
@@ -127,6 +124,12 @@ func update(session: ClientSession, delta: float, camera: Camera3D, scene: MapSc
 			if (_frame + entry.known.soldier.id) % COARSE_FRAMES == 0:
 				entry.view.player.advance(entry.coarse)
 				entry.coarse = 0.0
+		var known := entry.known
+		var remote := known.remote
+		_hold(entry, known.soldier.arsenal.weapon(), remote, known.soldier.team)
+		var hit := _show_combat(known, entry, session.clock.render_tick)
+		if hit and entry.distance < FLINCH_DISTANCE:
+			entry.view.hit(HITBOX_PARTS[mini(known.soldier.hit_box, Hitboxes.COUNT - 1)], Game.view_direction(known.soldier.hit_yaw, 0))
 
 
 ## _hold puts the weapon the soldier carries in its hands.
@@ -140,8 +143,9 @@ func _hold(entry: Entry, kind: int, remote: RemoteSoldier, team: int) -> void:
 		entry.held_kind = kind
 		if entry.held != null:
 			add_child(entry.held)
+	var carried := entry.view.carry(view_model, kind, remote.pitch)
 	if entry.held != null:
-		entry.held.transform = ViewModel.held_transform(remote.position + entry.view.grip_shift(), remote.yaw, remote.pitch)
+		entry.held.transform = carried
 
 
 func _drop(id: int) -> void:
@@ -156,16 +160,25 @@ func _drop(id: int) -> void:
 ## interpolation reaches them: a flash at the muzzle of its weapon, a tracer to
 ## where its aim meets the world, the sound, and sparks off the hitbox that was
 ## struck. It reports a hit shown.
-func _show_combat(known: KnownSoldier, view: CharacterView, render_tick: float) -> bool:
+func _show_combat(known: KnownSoldier, entry: Entry, render_tick: float) -> bool:
 	if effects == null:
 		known.shots.clear()
 		known.hurt = false
 		return false
 	var remote := known.remote
 	var shown_shots := 0
+	var kind := known.soldier.arsenal.weapon()
+	var fired := false
 	while shown_shots < known.shots.size() and known.shots[shown_shots] <= render_tick:
 		if known.shots[shown_shots] >= render_tick - STALE_SHOTS:
-			_show_shot(known.soldier.arsenal.weapon(), remote, view.grip_shift() if view != null else Vector3.ZERO)
+			var carried := ViewModel.held_transform(remote.position, remote.yaw, remote.pitch)
+			if entry != null and entry.held != null:
+				if remote.alive and not fired:
+					entry.view.fired()
+					entry.held.transform = entry.view.carry(view_model, kind, remote.pitch)
+					fired = true
+				carried = entry.held.transform
+			_show_shot(kind, remote, carried)
 		shown_shots += 1
 	if shown_shots > 0:
 		known.shots = known.shots.slice(shown_shots)
@@ -179,11 +192,11 @@ func _show_combat(known: KnownSoldier, view: CharacterView, render_tick: float) 
 
 ## _show_shot shows one shot of another soldier. Its spread is the server's
 ## secret; a little scatter keeps a burst from drawing one line.
-func _show_shot(kind: int, remote: RemoteSoldier, grip_shift: Vector3) -> void:
+func _show_shot(kind: int, remote: RemoteSoldier, carried: Transform3D) -> void:
 	var tuning := rules.weapons.get_tuning(kind)
 	if tuning == null or view_model == null:
 		return
-	var muzzle := view_model.held_muzzle(kind, remote.position + grip_shift, remote.yaw, remote.pitch)
+	var muzzle := view_model.held_muzzle(kind, carried)
 	if muzzle == Vector3.INF:
 		return
 	const SCATTER := 0.012

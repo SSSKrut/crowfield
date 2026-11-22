@@ -17,6 +17,7 @@ var body: MeshInstance3D
 var clip := CharacterAsset.Clip.IDLE
 var flinch: FlinchModifier
 var grounded_feet: GroundedFeet
+var armed_pose: ArmedPose
 ## ragdoll is the ragdoll of the pool while the soldier falls; fallen tells
 ## it lies as a ragdoll or a frozen body.
 var ragdoll: Ragdoll
@@ -24,6 +25,9 @@ var fallen := false
 ## fallen_at is where the hips of a fallen soldier are.
 var fallen_at := Vector3.ZERO
 var _model: Node3D
+var _shot_age := 1.0
+var _aim := 0.0
+var _sprint := 0.0
 var _ragdoll_age := 0.0
 var _base_locals: Array[Transform3D] = []
 
@@ -42,6 +46,10 @@ func setup(character: CharacterAsset, model: Node3D) -> void:
 	grounded_feet.setup(asset)
 	grounded_feet.active = false
 	skeleton.add_child(grounded_feet)
+	armed_pose = ArmedPose.new()
+	armed_pose.setup(asset)
+	armed_pose.active = false
+	skeleton.add_child(armed_pose)
 	player.play(CharacterAsset.CLIPS[clip])
 
 
@@ -57,10 +65,13 @@ func face(position: Vector3, yaw: float) -> void:
 
 
 ## animate advances the animation of a soldier moving at speed.
-func animate(delta: float, speed: float, crouched := false) -> void:
+func animate(delta: float, speed: float, crouched := false, aiming := false) -> void:
 	if fallen:
 		return
 	flinch.advance(delta)
+	_shot_age += delta
+	_aim = move_toward(_aim, 1.0 if aiming or _shot_age < 0.24 else 0.0, 8.0 * delta)
+	_sprint = move_toward(_sprint, 1.0 if not crouched and speed >= RUN_SPEED else 0.0, 6.5 * delta)
 	var next := CharacterAsset.Clip.IDLE
 	if crouched:
 		next = CharacterAsset.Clip.CROUCH_WALKING if speed >= WALK_SPEED else CharacterAsset.Clip.CROUCH_IDLE
@@ -81,23 +92,42 @@ func animate(delta: float, speed: float, crouched := false) -> void:
 		if stance_changed:
 			player.advance(0.0)
 		clip = next
-	match clip:
-		CharacterAsset.Clip.IDLE, CharacterAsset.Clip.CROUCH_IDLE:
-			player.speed_scale = 1.0
-		CharacterAsset.Clip.WALKING:
-			player.speed_scale = clampf(speed / 4.25, 0.25, 1.4)
-		CharacterAsset.Clip.RUNNING:
-			player.speed_scale = clampf(speed / 6.65, 0.85, 1.4)
-		CharacterAsset.Clip.CROUCH_WALKING:
-			player.speed_scale = clampf(speed / 1.67, 0.25, 1.6)
+	if clip in [CharacterAsset.Clip.IDLE, CharacterAsset.Clip.CROUCH_IDLE]:
+		player.speed_scale = 1.0
+	else:
+		player.speed_scale = minf(speed / asset.stride_speed(clip), 1.65)
+
+## Start a brief shoulder and weapon response for visible third-person shots.
+func fired() -> void:
+	_aim = maxf(_aim, 0.72)
+	_shot_age = 0.0
 
 
-## grip_shift keeps the held weapon with the animated trigger hand.
-func grip_shift() -> Vector3:
-	var hand := asset.bones["Palm1.R"] as int
-	var at := skeleton.get_bone_global_pose(hand).origin
-	var rest := skeleton.get_bone_global_rest(hand).origin
-	return skeleton.global_basis * (at - rest)
+## Both hands, the displayed weapon and muzzle effects share this transform.
+## The shoulder carries the stock as the torso leans under the rifle.
+func carry(weapons: ViewModel, kind: int, pitch: float) -> Transform3D:
+	armed_pose.active = kind != WeaponTuning.Kind.NONE and not fallen
+	if not armed_pose.active:
+		return global_transform
+	var shoulder: Transform3D = skeleton.get_bone_global_pose(asset.bones["UpperArm.R"])
+	var running := _sprint * (1.0 - _aim)
+	var kick := clampf(1.0 - _shot_age / 0.16, 0.0, 1.0)
+	var offset := Vector3(0.118 + 0.045 * running, lerpf(-0.125, 0.062, _aim) - 0.079 * running, 0.28 - 0.04 * running)
+	var at := shoulder.origin + offset - Vector3(0.0, 0.0, 0.05 * kick)
+	var looking := clampf(pitch, -1.08, 1.08)
+	var elevation := looking - lerpf(0.18, 0.0, _aim) - 0.20 * running + 0.076 * kick
+	if clip >= CharacterAsset.Clip.CROUCH_IDLE:
+		elevation = maxf(elevation, -0.67)
+	var turn := Basis(Vector3.UP, 0.05 * (1.0 - _aim) + 0.29 * running)
+	# The mesh faces -Z, while the character and elevation are authored along +Z.
+	var rifle := turn * Basis(Vector3.RIGHT, -elevation) * Basis(Vector3.UP, PI)
+	armed_pose.weapon = Transform3D(rifle.scaled(Vector3.ONE * ViewModel.HELD_SCALE), at)
+	armed_pose.trigger = weapons.held_grip(kind, false)
+	armed_pose.support = weapons.held_grip(kind, true)
+	armed_pose.aim = _aim
+	armed_pose.pitch = looking
+	armed_pose.recoil = kick
+	return skeleton.global_transform * armed_pose.weapon
 
 
 ## set_detail lets the animation run every frame near the camera and less
@@ -135,6 +165,9 @@ func fall(pool: RagdollPool, velocity: Vector3, strike: Strike) -> bool:
 	if grounded_feet.active:
 		grounded_feet.place_boots()
 		grounded_feet.active = false
+	if armed_pose.active:
+		armed_pose.apply_pose()
+		armed_pose.active = false
 	_base_locals.clear()
 	for i in skeleton.get_bone_count():
 		_base_locals.append(skeleton.get_bone_pose(i))
@@ -156,6 +189,14 @@ func copy_pose(other: CharacterView) -> void:
 	player.active = false
 	for i in skeleton.get_bone_count():
 		skeleton.set_bone_pose(i, other.skeleton.get_bone_pose(i))
+	if other.armed_pose.active:
+		armed_pose.weapon = other.armed_pose.weapon
+		armed_pose.trigger = other.armed_pose.trigger
+		armed_pose.support = other.armed_pose.support
+		armed_pose.aim = other.armed_pose.aim
+		armed_pose.pitch = other.armed_pose.pitch
+		armed_pose.recoil = other.armed_pose.recoil
+		armed_pose.active = true
 
 
 ## ragdoll_active reports whether the fall is still simulated.
@@ -192,10 +233,14 @@ func stand_up() -> void:
 	freeze()
 	if fallen:
 		fallen = false
+		_shot_age = 1.0
+		_aim = 0.0
+		_sprint = 0.0
 		player.active = true
 		flinch.active = true
 		for i in _base_locals.size():
 			skeleton.set_bone_pose(i, _base_locals[i])
+		player.advance(0.0)
 
 
 ## _apply moves the bones with ragdoll parts to their bodies. The other bones
