@@ -1,7 +1,8 @@
 extends TestCase
-## The maps: the valley is the same for both teams and for every build, its
-## terrain lies where its collision is, its navigation reaches every place
-## worth fighting for, and soldiers appear on the ground of their bases.
+## The maps: the valley and the desert are the same for both teams and for
+## every build, their terrain lies where its collision is, their navigation
+## reaches every place worth fighting for, and soldiers appear on the ground
+## of their bases.
 
 
 func _valley() -> MapScene:
@@ -11,7 +12,10 @@ func _valley() -> MapScene:
 ## Turned half a turn around its centre, the valley is the same: the
 ## terrain, the bases, the boxes and the places bots go.
 func test_valley_is_the_same_for_both_teams() -> void:
-	var scene := _valley()
+	_check_turns_into_itself(_valley())
+
+
+func _check_turns_into_itself(scene: MapScene) -> void:
 	var terrain := scene.terrain
 	var worst := 0.0
 	for z in terrain.samples:
@@ -71,7 +75,10 @@ func test_terrain_height_is_where_the_collision_is() -> void:
 ## From each base a path on the navigation mesh leads to every place worth
 ## fighting for and to the other base.
 func test_navigation_reaches_every_place() -> void:
-	var scene := _valley()
+	_check_navigation(_valley())
+
+
+func _check_navigation(scene: MapScene) -> void:
 	var navigation := Navigation.create(scene)
 	cleanup(func() -> void: navigation.close())
 	for team in [Game.Team.BLUE, Game.Team.RED]:
@@ -109,8 +116,12 @@ func test_valley_base_gate_stays_open() -> void:
 
 ## Soldiers appear on the ground inside the zone of their team, not in a box.
 func test_soldiers_appear_on_the_ground_of_their_base() -> void:
+	_check_spawns("valley", ValleyMap.GATE_HALF_WIDTH)
+
+
+func _check_spawns(map: String, gate_half_width: float) -> void:
 	var settings := ServerSettings.new()
-	settings.map = "valley"
+	settings.map = map
 	settings.seed = 4
 	var server: Server = Server.create(settings, Rules.new())
 	cleanup(func() -> void: server.close())
@@ -120,7 +131,7 @@ func test_soldiers_appear_on_the_ground_of_their_base() -> void:
 			var at := server.spawn_point(team, server.random)
 			var flat := Vector2(at.x - zone.center.x, at.z - zone.center.z).length()
 			check(flat <= zone.radius + 0.5, "a %s soldier appears %.1f m from its base" % [Game.team_name(team), flat])
-			check(absf(at.x) + server.rules.movement.capsule_radius < ValleyMap.GATE_HALF_WIDTH,
+			check(absf(at.x) + server.rules.movement.capsule_radius < gate_half_width,
 				"%s deploys directly behind the gate" % Game.team_name(team))
 			var down := server.cast_ray(at + Vector3(0, 0.3, 0), Vector3.DOWN, 1.0, Game.LAYER_STATIC)
 			check(down >= 0.25 and down <= 0.35, "a %s soldier appears %.2f m above the ground at %s" % [Game.team_name(team), 0.3 - down, at])
@@ -173,3 +184,71 @@ func test_valley_ford_has_two_walkable_covered_entries_per_team() -> void:
 			check(flag.contains_flag_position(soldier.position), "entry from %s ended outside capture" % staging)
 	check(not flag.contains_flag_position(Vector3(0, scene.ground_at(0, 0), 0)),
 		"the channel below the court can capture the Ford")
+
+
+# The desert.
+
+
+func _desert() -> MapScene:
+	return MapScene.named("desert")
+
+
+func test_desert_is_the_same_for_both_teams() -> void:
+	_check_turns_into_itself(_desert())
+
+
+func test_desert_builds_the_same_every_time() -> void:
+	var first := _desert()
+	check_equal(first.hash_value(), _desert().hash_value(), "hash of two builds")
+	check(first.hash_value() != _valley().hash_value(), "the desert and the valley hash alike")
+	check_equal(first.flags.size(), MatchState.FLAG_COUNT, "flags")
+
+
+func test_desert_navigation_reaches_every_place() -> void:
+	_check_navigation(_desert())
+
+
+func test_desert_soldiers_appear_on_the_ground_of_their_base() -> void:
+	_check_spawns("desert", 4.5)
+
+
+## Every model the desert places has its file and stands on the ground, and
+## its collision boxes are among the map's.
+func test_desert_models_stand_on_the_ground() -> void:
+	var scene := _desert()
+	var collision := 0
+	for model in scene.models:
+		check(ResourceLoader.exists(DesertScenery.MODEL_ROOT + model.name + ".glb"), "no file for the %s" % model.name)
+		var at := model.transform.origin
+		var ground := scene.ground_at(at.x, at.z)
+		if not model.name.begins_with("rock"):
+			check(absf(at.y - ground) < 0.05, "the %s at %s stands %.2f m off the ground" % [model.name, at, at.y - ground])
+		collision += DesertMap.MODELS[model.name]["boxes"].size()
+	var invisible := scene.boxes.filter(func(box: MapScene.Box) -> bool: return box.kind == MapScene.Kind.INVISIBLE)
+	# The four walls round the play area are invisible too.
+	check_equal(invisible.size(), collision + 4, "invisible boxes")
+
+
+## A soldier walks in under a storage tank between its legs and out the far
+## side, and down the main street from the gate to the square.
+func test_desert_tanks_and_streets_let_soldiers_through() -> void:
+	var scene := _desert()
+	var space := PhysicsServer3D.space_create()
+	var made := scene.build_collision(space)
+	var controller := CharacterController.new(space, MovementTuning.new())
+	cleanup(func() -> void:
+		controller.close()
+		MapScene.free_collision(made)
+		PhysicsServer3D.free_rid(space))
+	var tank := DesertMap.TANK_FARM + Vector3(7, 0, 7)
+	for walk: Array in [[tank + Vector3(-7, 0, 0), PI / 2, tank + Vector3(5.5, 0, 0)], [Vector3(0, 0, 58), 0.0, Vector3(0, 0, 2)]]:
+		var from: Vector3 = walk[0]
+		var to: Vector3 = walk[2]
+		var soldier := Soldier.new()
+		controller.teleport(soldier, Vector3(from.x, scene.ground_at(from.x, from.z), from.z))
+		for tick in 12 * Game.TICK_RATE:
+			controller.step(soldier, InputCommand.create(tick, 1.0, 0.0, walk[1], 0.0, 0))
+			if Game.horizontal_length(soldier.position - from) >= Game.horizontal_length(to - from):
+				break
+		check(Game.horizontal_length(soldier.position - from) >= Game.horizontal_length(to - from) - 0.5,
+			"a soldier walking from %s to %s stopped at %s" % [from, to, soldier.position])

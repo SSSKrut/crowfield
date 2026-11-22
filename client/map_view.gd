@@ -3,7 +3,8 @@ extends Node3D
 ## MapView draws a map: the terrain as one mesh coloured in its vertices, the
 ## boxes as one MultiMesh for each kind, tree crowns, bushes and water, which
 ## only the client has, and the balls of the prototype, which roll in the
-## client's own physics. Valley adds instanced scenery and weathered materials.
+## client's own physics. Valley adds instanced scenery and weathered materials;
+## the desert, sourced models over sand.
 
 ## The colour of each kind of box; an instance varies it a little.
 const VALLEY_GROUND := preload("res://assets/valley/ground.gdshader")
@@ -14,6 +15,9 @@ const ROCK_DETAIL := preload("res://assets/valley/rocky_terrain_02-diff.jpg")
 const PLASTER_DETAIL := preload("res://assets/valley/painted_plaster_wall-diff.jpg")
 const PLANK_DETAIL := preload("res://assets/valley/wood_planks_dirt-diff.jpg")
 const SANDBAG_CANVAS := preload("res://assets/valley/sandbag-canvas.png")
+const DESERT_GROUND := preload("res://assets/desert/ground.gdshader")
+const SAND_DETAIL := preload("res://assets/desert/aerial_sand-diff.jpg")
+const HARDPAN_DETAIL := preload("res://assets/desert/aerial_ground_rock-diff.jpg")
 
 const COLORS := {
 	MapScene.Kind.GROUND: Color8(115, 125, 115),
@@ -60,7 +64,10 @@ func _ready() -> void:
 	_fine = _detail_texture(Color(0.88, 0.88, 0.88), Color(1.04, 1.04, 1.04))
 	if scene.terrain != null:
 		var wear := _build_terrain()
-		add_child(ValleyScenery.new(scene, wear))
+		if _valley():
+			add_child(ValleyScenery.new(scene, wear))
+		else:
+			add_child(DesertScenery.new(scene))
 	_build_boxes()
 	for water in scene.waters:
 		_build_water(water)
@@ -147,6 +154,18 @@ func reset() -> void:
 		props[i].angular_velocity = Vector3.ZERO
 
 
+## _valley tells whether the map is the valley, whose scenery reshapes the
+## ground it draws and tints its village.
+func _valley() -> bool:
+	return scene.name == "valley"
+
+
+## _visual_height is where the ground is drawn at a point: the valley lifts
+## and lowers it under its scenery; elsewhere it is the collision.
+func _visual_height(height: float, x: float, z: float) -> float:
+	return ValleyScenery.visual_height(height, x, z, scene.play_area) if _valley() else height
+
+
 static func _detail_texture(dark: Color, light: Color) -> NoiseTexture2D:
 	var noise := FastNoiseLite.new()
 	noise.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
@@ -196,11 +215,11 @@ func _build_terrain() -> PackedFloat32Array:
 			var i := z * count + x
 			var world_x := x - half
 			var world_z := z - half
-			var h := ValleyScenery.visual_height(terrain.heights[i], world_x, world_z, scene.play_area)
-			var dx := ValleyScenery.visual_height(terrain.sample(x + 1, z), world_x + 1, world_z, scene.play_area) \
-				- ValleyScenery.visual_height(terrain.sample(x - 1, z), world_x - 1, world_z, scene.play_area)
-			var dz := ValleyScenery.visual_height(terrain.sample(x, z + 1), world_x, world_z + 1, scene.play_area) \
-				- ValleyScenery.visual_height(terrain.sample(x, z - 1), world_x, world_z - 1, scene.play_area)
+			var h := _visual_height(terrain.heights[i], world_x, world_z)
+			var dx := _visual_height(terrain.sample(x + 1, z), world_x + 1, world_z) \
+				- _visual_height(terrain.sample(x - 1, z), world_x - 1, world_z)
+			var dz := _visual_height(terrain.sample(x, z + 1), world_x, world_z + 1) \
+				- _visual_height(terrain.sample(x, z - 1), world_x, world_z - 1)
 			var normal := Vector3(-dx, 2.0, -dz).normalized()
 			vertices[i] = Vector3(x - half, h, z - half)
 			normals[i] = normal
@@ -230,10 +249,16 @@ func _build_terrain() -> PackedFloat32Array:
 	var mesh := ArrayMesh.new()
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 	var material := ShaderMaterial.new()
-	material.shader = VALLEY_GROUND
-	material.set_shader_parameter("meadow", MEADOW_DETAIL)
-	material.set_shader_parameter("track", DIRT_DETAIL)
-	material.set_shader_parameter("shale", ROCK_DETAIL)
+	if _valley():
+		material.shader = VALLEY_GROUND
+		material.set_shader_parameter("meadow", MEADOW_DETAIL)
+		material.set_shader_parameter("track", DIRT_DETAIL)
+		material.set_shader_parameter("shale", ROCK_DETAIL)
+	else:
+		material.shader = DESERT_GROUND
+		material.set_shader_parameter("sand", SAND_DETAIL)
+		material.set_shader_parameter("hardpan", HARDPAN_DETAIL)
+		material.set_shader_parameter("stone", ROCK_DETAIL)
 	mesh.surface_set_material(0, material)
 	var instance := MeshInstance3D.new()
 	instance.name = "Terrain"
@@ -305,10 +330,10 @@ func _build_boxes() -> void:
 				var position := box.transform.origin
 				if kind == MapScene.Kind.TRUNK and scene.terrain != null:
 					var ground := scene.terrain.height_at(position.x, position.z)
-					position.y += ValleyScenery.visual_height(ground, position.x, position.z, scene.play_area) - ground
+					position.y += _visual_height(ground, position.x, position.z) - ground
 				transforms.append(Transform3D(basis, position))
 				var shade := _surface_shade(i, kind)
-				if scene.terrain != null:
+				if _valley():
 					shade *= CustomsScenery.surface_tint(kind, position)
 				shades.append(shade)
 		var multimesh := MultiMesh.new()

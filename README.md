@@ -4,4 +4,4 @@ Crowfield is a team shooter where two sides fight over three river crossings. Ca
 
 https://github.com/user-attachments/assets/378918e3-4b11-4b71-98d8-73729bfb0c7c
 
-Play **Valley** solo with bots or bring friends online. Open the prebuilt `Crowfield.app` on macOS, or see the [setup and multiplayer guide](DEVELOPMENT.md).
+Play **Valley** or **Desert**, an oil town between pumpjack fields and tank farms, solo with bots or bring friends online. Open the prebuilt `Crowfield.app` on macOS, or see the [setup and multiplayer guide](DEVELOPMENT.md).

@@ -105,6 +105,7 @@ var _landing: AudioStreamPlayer
 var _damage: AudioStreamPlayer
 var _step_number := 0
 var _last_impact_usec := -1000000
+var _wind: AudioStreamPlayer
 var _river: AudioStreamPlayer3D
 var _river_water: MapScene.Water
 var _river_gain := 0.0
@@ -162,13 +163,16 @@ func _init(volume: float) -> void:
 		_remote_boots.append(_spatial_player())
 
 
-## Valley has one water surface. The visible river meanders across it.
+## Wind blows over every open map. Valley has one water surface besides,
+## whose visible river meanders across it.
 func start_ambience(scene: MapScene) -> void:
-	if not _audible or _river != null or scene.name != "valley" or scene.waters.is_empty():
+	if not _audible or _wind != null or scene.terrain == null:
 		return
-	var wind := _player(WIND, 0.12)
-	wind.name = "ValleyWind"
-	wind.play()
+	_wind = _player(WIND, 0.12 if scene.name == "valley" else 0.16)
+	_wind.name = "Wind"
+	_wind.play()
+	if scene.name != "valley" or scene.waters.is_empty():
+		return
 	_river_water = scene.waters[0]
 	_river = _spatial_player()
 	_river.name = "ValleyRiver"

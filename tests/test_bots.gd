@@ -124,8 +124,18 @@ func test_bot_answers_a_shot_from_behind() -> void:
 ## other, walk the map, stay on the ground within the play area and keep
 ## moving.
 func test_bots_fight_a_battle_on_the_valley() -> void:
+	_check_battle("valley")
+
+
+## In the desert the bots find their way round the houses, pumpjacks and
+## tanks as well.
+func test_bots_fight_a_battle_on_the_desert() -> void:
+	_check_battle("desert")
+
+
+func _check_battle(map: String) -> void:
 	var settings := ServerSettings.new()
-	settings.map = "valley"
+	settings.map = map
 	settings.bots = 24
 	settings.seed = 9
 	var server: Server = Server.create(settings, Rules.new())

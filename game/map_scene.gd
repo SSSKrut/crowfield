@@ -8,7 +8,7 @@ extends RefCounted
 ## Kind tells the client how to draw a box; the simulation does not care.
 enum Kind { GROUND, CONCRETE, PLASTER, ROOF, WOOD, PLANKS, SANDBAG, ROCK, METAL, TRUNK, HAY, BLUE_CLOTH, RED_CLOTH, INVISIBLE, MASONRY, SLATE, COBBLES }
 
-const MAPS := ["valley", "prototype"]
+const MAPS := ["valley", "desert", "prototype"]
 
 ## Box is a static box of the map; Sphere is a prop, decoration of the client
 ## that the server does not simulate.
@@ -51,6 +51,14 @@ class Water:
 	var center: Vector3
 	var half_extents: Vector2
 
+## Model is a sourced model the client draws, standing at a point and turned
+## about the vertical, at size times its usual scale. Its collision is among
+## the boxes.
+class Model:
+	var name: String
+	var transform: Transform3D
+	var size := 1.0
+
 var name := "prototype"
 var terrain: Terrain
 var boxes: Array[Box] = []
@@ -65,6 +73,7 @@ var flags: Array[Zone] = []
 var trees: Array[Plant] = []
 var bushes: Array[Plant] = []
 var waters: Array[Water] = []
+var models: Array[Model] = []
 ## roads are the dirt tracks the client paints on the ground, as lines
 ## through points; the ground under them is not changed.
 var roads: Array[PackedVector2Array] = []
@@ -87,6 +96,8 @@ static func named(map_name: String) -> MapScene:
 			return prototype()
 		"valley":
 			return ValleyMap.build()
+		"desert":
+			return DesertMap.build()
 	return null
 
 

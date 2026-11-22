@@ -336,7 +336,7 @@ func kill() -> void:
 ## comes, then move, aim and fire.
 func update() -> void:
 	var round := _server.flag_match
-	if _ai and _scene.name == "valley" and round != null:
+	if _ai and round != null:
 		if not round.started:
 			return
 		if _opening_until < 0:

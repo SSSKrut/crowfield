@@ -103,8 +103,7 @@ static func create(server_settings: ServerSettings, server_rules: Rules) -> Vari
 	server.navigation = Navigation.create(server.scene)
 	if server.scene.flags.size() == MatchState.FLAG_COUNT:
 		server.flag_match = FlagMatch.new(server.scene.flags)
-		if server.scene.name == "valley":
-			server._build_reinforcement_sites()
+		server._build_reinforcement_sites()
 	server.bots = Bots.new(server)
 	server.bots.spawn_all(server_settings.bots)
 	return server

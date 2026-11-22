@@ -50,10 +50,19 @@ func _position_panel() -> void:
 
 
 func _on_map_selected(index: int) -> void:
-	var valley: bool = MapScene.MAPS[index] == "valley"
-	%Mode.text = "VALLEY  /  FLAG CONTROL" if valley else "PRACTICE RANGE"
-	%Subtitle.text = "Hold crossings to score and open forward reinforcements." if valley else "Practice movement and combat."
-	%Solo.text = "Play Valley solo" if valley else "Play practice map solo"
+	match MapScene.MAPS[index]:
+		"valley":
+			%Mode.text = "VALLEY  /  FLAG CONTROL"
+			%Subtitle.text = "Hold crossings to score and open forward reinforcements."
+			%Solo.text = "Play Valley solo"
+		"desert":
+			%Mode.text = "DESERT  /  FLAG CONTROL"
+			%Subtitle.text = "Hold the wells and the town square to score."
+			%Solo.text = "Play Desert solo"
+		_:
+			%Mode.text = "PRACTICE RANGE"
+			%Subtitle.text = "Practice movement and combat."
+			%Solo.text = "Play practice map solo"
 
 
 func _on_multiplayer_pressed() -> void:

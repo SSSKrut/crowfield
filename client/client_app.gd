@@ -35,6 +35,7 @@ const PERFORMANCE_SHADOW_DISTANCE := 45.0
 const BENCHMARK_MAX_SECONDS := 120.0
 const BENCHMARK_MAX_SAMPLES := 262144
 const GAME_MENU := preload("res://menu/game_menu.tscn")
+const DESERT_ENVIRONMENT := preload("res://assets/sky/desert_environment.tres")
 const PlaytestTrace := preload("res://client/playtest_trace.gd")
 const NATIVE_INPUT_EXTENSION := "res://.godot/playtest-native/native-input.gdextension"
 const NATIVE_INPUT_PATH_ENV := "CROWFIELD_NATIVE_INPUT_PATH"
@@ -66,6 +67,7 @@ var menu: GameMenu
 var debug: DebugDraw
 var camera: Camera3D
 var sun: DirectionalLight3D
+var _world_environment: WorldEnvironment
 
 var _graphics_viewport: Viewport
 var _previous_msaa := Viewport.MSAA_DISABLED
@@ -380,9 +382,9 @@ func _render_diagnostics() -> Dictionary:
 
 
 func _build_world() -> void:
-	var world_environment := WorldEnvironment.new()
-	world_environment.environment = preload("res://assets/sky/valley_environment.tres")
-	add_child(world_environment)
+	_world_environment = WorldEnvironment.new()
+	_world_environment.environment = preload("res://assets/sky/valley_environment.tres")
+	add_child(_world_environment)
 	sun = DirectionalLight3D.new()
 	sun.rotation = Vector3(-0.39, 0.89, 0)
 	sun.light_color = Color(1.0, 0.91, 0.79)
@@ -418,10 +420,27 @@ func _load_map(map_name: String) -> Variant:
 		return "the client has no such map"
 	scene = built
 	_map_collision = scene.build_collision(get_world_3d().space)
+	if scene.name == "desert":
+		_dress_desert()
 	map_view = MapView.new(scene)
 	add_child(map_view)
 	sounds.start_ambience(scene)
 	return scene
+
+
+## _dress_desert puts the world under the desert sky: a hazy midday with a
+## higher, whiter sun than the valley's.
+func _dress_desert() -> void:
+	_world_environment.environment = DESERT_ENVIRONMENT
+	if RenderingServer.get_current_rendering_method() == "gl_compatibility":
+		# The Compatibility renderer draws the panorama darker; the bright
+		# midday would turn to dusk.
+		var environment := DESERT_ENVIRONMENT.duplicate(true) as Environment
+		(environment.sky.sky_material as PanoramaSkyMaterial).energy_multiplier = 0.95
+		_world_environment.environment = environment
+	sun.rotation = Vector3(-0.72, 2.2, 0)
+	sun.light_color = Color(1.0, 0.94, 0.84)
+	sun.light_energy = 1.05
 
 
 func _build_soldiers() -> void:
@@ -1330,7 +1349,7 @@ func _die(feet: Vector3, velocity: Vector3) -> void:
 func _follow_life() -> void:
 	var player := session.player
 	var dead := player.soldier != 0 and player.health == 0
-	if scene.name == "valley" and not dead and player.soldier != 0 and player.soldier != _view_soldier_id:
+	if not scene.flags.is_empty() and not dead and player.soldier != 0 and player.soldier != _view_soldier_id:
 		var deployed := session.local_soldier()
 		if deployed != null:
 			_yaw = PI if deployed.team == Game.Team.RED else 0.0

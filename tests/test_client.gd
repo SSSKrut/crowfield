@@ -137,14 +137,14 @@ func test_valley_ambience_tracks_the_water_and_respects_mute() -> void:
 		sounds.free()
 		muted.free())
 	sounds.start_ambience(MapScene.prototype())
-	check(sounds.get_node_or_null("ValleyWind") == null, "the practice map has no wind loop")
+	check(sounds.get_node_or_null("Wind") == null, "the practice map has no wind loop")
 	check(sounds.get_node_or_null("ValleyRiver") == null, "the practice map has no river loop")
 	var valley := MapScene.named("valley")
 	muted.start_ambience(valley)
 	check_equal(muted.get_child_count(), 0, "muted games create no audio players")
 
 	sounds.start_ambience(valley)
-	var wind := sounds.get_node_or_null("ValleyWind") as AudioStreamPlayer
+	var wind := sounds.get_node_or_null("Wind") as AudioStreamPlayer
 	var river := sounds.get_node_or_null("ValleyRiver") as AudioStreamPlayer3D
 	if not check(wind != null and river != null, "Valley has both ambient voices"):
 		return
@@ -160,6 +160,19 @@ func test_valley_ambience_tracks_the_water_and_respects_mute() -> void:
 	check(river.volume_db > -20.0, "river plays at the bank")
 	sounds.update_ambience(source + Vector3(0, 2, 50), 1.0)
 	check(river.volume_db <= -79.0, "the river falls silent away from water")
+
+
+## The desert has the wind of every open map and no river.
+func test_desert_ambience_is_wind_alone() -> void:
+	var root := (Engine.get_main_loop() as SceneTree).root
+	await root.get_tree().process_frame
+	var sounds := Sounds.new(1.0)
+	root.add_child(sounds)
+	cleanup(sounds.free)
+	sounds.start_ambience(MapScene.named("desert"))
+	check(sounds.get_node_or_null("Wind") != null, "the desert has no wind")
+	check(sounds.get_node_or_null("ValleyRiver") == null, "the desert has a river")
+	sounds.update_ambience(Vector3.ZERO, 1.0)
 
 
 func test_reload_audio_tracks_visible_contacts_without_repeating() -> void:
