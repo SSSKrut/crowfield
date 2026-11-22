@@ -12,6 +12,7 @@ var authored := preload("res://prototypes/authored-infantry/authored_soldier.gd"
 var map := MapScene.named("valley")
 var output := ""
 var baseline := false
+var broad_marks := true
 
 func _initialize() -> void:
 	call_deferred("_run")
@@ -28,6 +29,7 @@ func _run() -> void:
 		return
 	output = args[0]
 	baseline = args.has("baseline")
+	broad_marks = not args.has("narrow-marks")
 	if DirAccess.make_dir_recursive_absolute(output) != OK:
 		push_error("Could not create " + output)
 		quit(1)
@@ -155,4 +157,4 @@ func _set_tint(team: int) -> void:
 	if baseline:
 		soldier.set_tint(color)
 	else:
-		authored.set_tint(color)
+		authored.set_tint(color, broad_marks)

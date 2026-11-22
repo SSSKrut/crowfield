@@ -45,11 +45,11 @@ func setup() -> void:
 			# Bound the resulting skinned geometry in native mesh space.
 			mesh.custom_aabb = AABB(Vector3(-1.0, -1.0, -1.0), Vector3(2.0, 3.0, 3.2))
 
-		if mesh.name == &"Object_105" or mesh.name == &"Object_107":
+		if mesh.name in [&"Object_105", &"Object_107", &"Object_109"]:
 			_marked_meshes.append(mesh)
 
 
-func set_tint(color: Color) -> void:
+func set_tint(color: Color, broad := true) -> void:
 	for mesh in _marked_meshes:
 		if mesh.material_override == null:
 			var material := ShaderMaterial.new()
@@ -61,9 +61,11 @@ func set_tint(color: Color) -> void:
 			material.set_shader_parameter("normal_scale", source.normal_scale)
 			material.set_shader_parameter("roughness_scale", source.roughness)
 			material.set_shader_parameter("specular_scale", source.metallic_specular)
-			material.set_shader_parameter("vest", mesh.name == &"Object_105")
+			var layout := 2 if mesh.name == &"Object_109" else (1 if mesh.name == &"Object_105" else 0)
+			material.set_shader_parameter("layout_kind", layout)
 			mesh.material_override = material
 		mesh.set_instance_shader_parameter("team_color", color)
+		mesh.set_instance_shader_parameter("broad_marks", broad)
 
 
 func retarget(driver: CharacterView) -> void:
