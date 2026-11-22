@@ -297,6 +297,8 @@ func _build_boxes() -> void:
 			for box in boxes:
 				_stack_sandbags(box, transforms, shades)
 		else:
+			if kind == MapScene.Kind.TRUNK and scene.terrain != null:
+				box_mesh = _trunk_mesh()
 			for i in boxes.size():
 				var box: MapScene.Box = boxes[i]
 				var basis := box.transform.basis.scaled_local(box.half_extents * 2)
@@ -358,6 +360,47 @@ func _box_material(kind: int, color: Color) -> StandardMaterial3D:
 static func _surface_shade(index: int, kind: int) -> Color:
 	var shade := 0.87 + 0.21 * fposmod(sin(index * 91.7 + kind * 13.1) * 4375.85, 1.0)
 	return Color(shade, shade, shade)
+
+
+## Keep the full width of the collision box through the lower stem, then
+## taper inside the crown. Small bevels take the edge off the square section.
+static func _trunk_mesh() -> ArrayMesh:
+	const OUTLINE := [
+		Vector2(0.5, -0.4), Vector2(0.5, 0.4), Vector2(0.4, 0.5), Vector2(-0.4, 0.5),
+		Vector2(-0.5, 0.4), Vector2(-0.5, -0.4), Vector2(-0.4, -0.5), Vector2(0.4, -0.5),
+	]
+	const PROFILE := [Vector2(-0.5, 1.06), Vector2(-0.35, 1.0), Vector2(0.23, 1.0), Vector2(0.5, 0.28)]
+	var surface := SurfaceTool.new()
+	surface.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for ring in PROFILE.size() - 1:
+		var low: Vector2 = PROFILE[ring]
+		var high: Vector2 = PROFILE[ring + 1]
+		for side in OUTLINE.size():
+			var next := (side + 1) % OUTLINE.size()
+			var a: Vector2 = OUTLINE[side]
+			var b: Vector2 = OUTLINE[next]
+			var positions := [
+				Vector3(a.x * low.y, low.x, a.y * low.y), Vector3(b.x * low.y, low.x, b.y * low.y),
+				Vector3(a.x * high.y, high.x, a.y * high.y), Vector3(b.x * high.y, high.x, b.y * high.y),
+			]
+			var u := float(side) / OUTLINE.size()
+			var v := float(side + 1) / OUTLINE.size()
+			var uvs := [
+				Vector2(u, low.x + 0.5), Vector2(v, low.x + 0.5),
+				Vector2(u, high.x + 0.5), Vector2(v, high.x + 0.5),
+			]
+			for vertex in [0, 1, 2, 1, 3, 2]:
+				surface.set_uv(uvs[vertex])
+				surface.add_vertex(positions[vertex])
+	for side in OUTLINE.size():
+		var a: Vector2 = OUTLINE[side] * PROFILE[-1].y
+		var b: Vector2 = OUTLINE[(side + 1) % OUTLINE.size()] * PROFILE[-1].y
+		for point: Vector2 in [Vector2.ZERO, a, b]:
+			surface.set_uv(point + Vector2(0.5, 0.5))
+			surface.add_vertex(Vector3(point.x, PROFILE[-1].x, point.y))
+	surface.generate_normals()
+	surface.index()
+	return surface.commit()
 
 
 ## Four cross sections form the filled body and pinched, stitched end.

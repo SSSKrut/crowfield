@@ -13,3 +13,5 @@ The border-post buildings also use these unmodified 1K diffuse maps from Poly Ha
 - [Old Stone Wall](https://polyhaven.com/a/old_stone_wall), Charlotte Baglioni
 - [Roof Slates 02](https://polyhaven.com/a/roof_slates_02), Rob Tuytel
 - [Cobblestone 01](https://polyhaven.com/a/cobblestone_01), Rob Tuytel
+
+`woodland-fir.png` and `woodland-leaves.png` were created for Crowfield.

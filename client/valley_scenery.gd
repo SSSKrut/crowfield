@@ -4,6 +4,8 @@ extends Node3D
 ## continue to use the original map geometry.
 
 const ROUTE_FONT := preload("res://assets/type/BarlowCondensed-Bold.ttf")
+const LEAF_TEXTURE := preload("res://assets/valley/woodland-leaves.png")
+const FIR_TEXTURE := preload("res://assets/valley/woodland-fir.png")
 const GRASS_SHADER := preload("res://assets/valley/grass.gdshader")
 const RIDGE_SHADER := preload("res://assets/valley/skyline.gdshader")
 const RIDGE_MEADOW := preload("res://assets/valley/aerial_grass_rock-diff.jpg")
@@ -16,6 +18,16 @@ const RIDGE_FAR := 612.0
 const RIDGE_BANDS := [Vector3(192.0, 34.0, 47.0), Vector3(331.0, 51.0, 77.0), Vector3(507.0, 68.0, 122.0)]
 const GRASS_TILE := 18
 const GRASS_BLADE_COUNT := 6
+## Uneven limbs build the crown around the existing trunk. The upright last
+## limb keeps the crown from looking like a flat ring at a distance.
+const BOUGH_TIPS := [
+	Vector3(1.19, 2.98, 0.03),
+	Vector3(0.43, 3.53, 1.05),
+	Vector3(-0.83, 2.75, 0.74),
+	Vector3(-1.18, 3.33, -0.22),
+	Vector3(0.16, 3.09, -1.19),
+	Vector3(0.24, 4.14, -0.27),
+]
 
 var _scene: MapScene
 var _terrain: Terrain
@@ -138,27 +150,46 @@ func _build_woodland() -> void:
 	var pine_colors: Array[Color] = []
 	var leaf_transforms: Array[Transform3D] = []
 	var leaf_colors: Array[Color] = []
+	var bark_colors: Array[Color] = []
 	var random := RandomNumberGenerator.new()
 	random.seed = 12019
 	for tree in _scene.trees:
 		var yaw := random.randf_range(0.0, TAU)
+		var tint := random.randf()
 		var size := tree.size
 		var position := tree.position
 		position.y = visual_height(position.y, position.x, position.z, _scene.play_area)
 		if tree.pine:
 			var basis := Basis(Vector3.UP, yaw).scaled_local(Vector3(0.9, 1.0, 0.9) * size)
 			pine_transforms.append(Transform3D(basis, position))
-			pine_colors.append(Color8(44, 75, 53).lerp(Color8(70, 100, 65), random.randf()))
+			pine_colors.append(Color8(62, 93, 67).lerp(Color8(88, 111, 72), tint))
 		else:
-			var color := Color8(51, 78, 54).lerp(Color8(89, 112, 68), random.randf())
-			for branch in 6:
-				var angle := yaw + TAU * float(branch) / 5.0
-				var reach := size * (0.0 if branch == 5 else random.randf_range(0.55, 1.15))
-				var offset := Vector3(cos(angle) * reach, 2.7 * size, sin(angle) * reach)
-				offset.y += (1.4 if branch == 5 else random.randf_range(-0.2, 0.55)) * size
-				var dimensions := Vector3(0.94, 0.90, 0.88) * size * random.randf_range(0.8, 1.22)
-				leaf_transforms.append(Transform3D(Basis(Vector3.UP, angle).scaled_local(dimensions), position + offset))
-				leaf_colors.append(color.lerp(Color8(111, 127, 74), random.randf() * 0.27))
+			var proportions := Vector3(lerpf(0.93, 1.13, tint), 1.0, lerpf(1.07, 0.92, tint))
+			var basis := Basis(Vector3.UP, yaw).scaled_local(proportions * size)
+			leaf_transforms.append(Transform3D(basis, position))
+			leaf_colors.append(Color8(78, 111, 58).lerp(Color8(119, 142, 70), tint))
+			bark_colors.append(Color8(80, 68, 51).lerp(Color8(96, 79, 58), tint))
+	_tree_canopy("DeciduousCanopy", _broadleaf_mesh(), _broadleaf_mesh(true), leaf_transforms, leaf_colors, LEAF_TEXTURE)
+	_instances("TreeBoughs", _bough_mesh(), leaf_transforms, bark_colors, _plant_material())
+	_tree_canopy("FirCanopy", _fir_mesh(), _fir_mesh(true), pine_transforms, pine_colors, FIR_TEXTURE)
+	_build_bushes(_foliage_material())
+
+
+## A tighter opaque shape casts the main canopy shadow without resampling
+## both cutout textures in each directional cascade.
+func _tree_canopy(label: String, mesh: Mesh, shadow: Mesh, transforms: Array[Transform3D],
+		colors: Array[Color], texture: Texture2D) -> void:
+	_instances(label, mesh, transforms, colors, _foliage_material(texture), false)
+	var caster := _instances(label + "Shadow", shadow, transforms, colors, _foliage_material())
+	if caster != null:
+		caster.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY
+
+
+func _build_bushes(foliage: Material) -> void:
+	var transforms: Array[Transform3D] = []
+	var colors: Array[Color] = []
+	var random := RandomNumberGenerator.new()
+	random.seed = 78823
 	for bush in _scene.bushes:
 		var yaw := random.randf() * TAU
 		var position := bush.position
@@ -168,18 +199,125 @@ func _build_woodland() -> void:
 			var size := bush.size * random.randf_range(0.53, 0.83)
 			var offset := Vector3(cos(angle) * size * 0.52, size * 0.50, sin(angle) * size * 0.52)
 			var dimensions := Vector3(0.65, 0.58, 0.67) * size
-			leaf_transforms.append(Transform3D(Basis(Vector3.UP, angle).scaled_local(dimensions), position + offset))
-			leaf_colors.append(Color8(56, 76, 57).lerp(Color8(103, 116, 64), random.randf()))
-	var leaf_mesh := _canopy_mesh()
-	var foliage := _plant_material()
-	foliage.cull_mode = BaseMaterial3D.CULL_DISABLED
-	foliage.backlight_enabled = true
-	foliage.backlight = Color(0.11, 0.15, 0.095)
-	_instances("DeciduousCanopy", leaf_mesh, leaf_transforms, leaf_colors, foliage)
-	_instances("FirCanopy", _fir_mesh(), pine_transforms, pine_colors, foliage)
+			transforms.append(Transform3D(Basis(Vector3.UP, angle).scaled_local(dimensions), position + offset))
+			colors.append(Color8(56, 76, 57).lerp(Color8(103, 116, 64), random.randf()))
+	_instances("BushCanopy", _bush_mesh(), transforms, colors, foliage)
 
 
-static func _canopy_mesh() -> ArrayMesh:
+static func _bough_mesh() -> ArrayMesh:
+	var mesh := SurfaceTool.new()
+	mesh.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for tip: Vector3 in BOUGH_TIPS:
+		var start := Vector3(0, minf(tip.y - 0.85, 2.75), 0)
+		var elbow := start.lerp(tip, 0.52) - Vector3.UP * 0.13
+		_wood_segment(mesh, start, elbow, 0.105, 0.065)
+		_wood_segment(mesh, elbow, tip, 0.065, 0.025)
+	mesh.generate_normals()
+	return mesh.commit()
+
+
+static func _wood_segment(mesh: SurfaceTool, from: Vector3, to: Vector3,
+		start_radius: float, end_radius: float) -> void:
+	const SIDES := 5
+	var axis := (to - from).normalized()
+	var right := axis.cross(Vector3.FORWARD).normalized()
+	var up := right.cross(axis)
+	for side in SIDES:
+		var angle := TAU * float(side) / SIDES
+		var next_angle := TAU * float(side + 1) / SIDES
+		var a := right * cos(angle) + up * sin(angle)
+		var b := right * cos(next_angle) + up * sin(next_angle)
+		var shade := 0.82 + 0.16 * sin(angle * 2.0 + 1.0)
+		_plant_triangle(mesh, from + a * start_radius, to + a * end_radius,
+			from + b * start_radius, shade)
+		_plant_triangle(mesh, from + b * start_radius, to + a * end_radius,
+			to + b * end_radius, shade)
+
+
+static func _broadleaf_mesh(shadow := false) -> ArrayMesh:
+	var mesh := SurfaceTool.new()
+	mesh.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for limb in BOUGH_TIPS.size():
+		var tip: Vector3 = BOUGH_TIPS[limb]
+		var azimuth := atan2(tip.z, tip.x)
+		for fork in 5:
+			var angle := azimuth + (fork - 2) * 0.90 + 0.23 * sin(limb * 3.5 + fork)
+			var forward := Vector3(cos(angle), 0, sin(angle))
+			var side := Vector3(-forward.z, 0, forward.x)
+			var reach := 1.58 + 0.31 * sin(limb * 3.81 + fork * 2.17)
+			var lift := 0.22 + 0.75 * cos(limb * 1.66 + fork * 3.3)
+			var base := tip - forward * reach * 0.57 + Vector3.UP * (fork - 2) * 0.15
+			var end := base + forward * reach + Vector3.UP * lift
+			var span := (side + Vector3.UP * sin(limb * 2.7 + fork * 2.4) * 0.93) * reach * 0.59
+			var shade := 0.86 + 0.13 * sin(limb * 1.81 + fork * 4.3)
+			_spray(mesh, base, end, span, reach * 0.15, shade, shadow)
+	mesh.generate_normals()
+	return mesh.commit()
+
+
+static func _fir_mesh(shadow := false) -> ArrayMesh:
+	var mesh := SurfaceTool.new()
+	mesh.begin(Mesh.PRIMITIVE_TRIANGLES)
+	const HEIGHTS := [1.58, 2.08, 2.59, 3.11, 3.62, 4.19, 4.66, 5.10, 5.42]
+	const REACHES := [1.64, 1.96, 1.85, 1.55, 1.27, 0.99, 0.73, 0.54, 0.39]
+	for layer in HEIGHTS.size():
+		var branches := 13 if layer < 5 else 9
+		for branch in branches:
+			var azimuth := TAU * float(branch) / branches + layer * 1.26
+			azimuth += 0.16 * sin(branch * 3.4 + layer * 2.2)
+			var dir := Vector3(cos(azimuth), 0.0, sin(azimuth))
+			var side := Vector3(-dir.z, 0.0, dir.x)
+			var reach: float = REACHES[layer] * (0.88 + 0.18 * sin(azimuth * 2.7 + layer * 1.8))
+			var root := Vector3(0, HEIGHTS[layer] + reach * 0.10 * cos(branch * 2.8), 0)
+			var drop := reach * (0.18 + sin(layer * 1.37 + branch * 4.72) * 0.34)
+			var tip := root + dir * reach - Vector3.UP * drop
+			var span := (side + Vector3.UP * sin(branch * 4.1) * 0.71) * reach * 0.65
+			var shade := 0.76 + 0.16 * sin(azimuth + layer * 2.0)
+			_spray(mesh, root, tip, span, reach * 0.17, shade, shadow)
+	for side in 6:
+		var angle := TAU * side / 6.0
+		var root := Vector3(cos(angle) * 0.32, 5.42, sin(angle) * 0.32)
+		var span := Vector3(-sin(angle), 0, cos(angle)) * 0.17
+		_spray(mesh, root, Vector3(0.02, 5.96, -0.03), span, 0.02, 0.97, shadow)
+	mesh.generate_normals()
+	return mesh.commit()
+
+
+## The fitted outline omits empty corners of the alpha-scissor texture. Four
+## faces bend each spray so it still has a profile when viewed from the side.
+static func _spray(mesh: SurfaceTool, base: Vector3, tip: Vector3, span: Vector3,
+		rise: float, shade: float, shadow: bool) -> void:
+	if shadow:
+		var start := base.lerp(tip, 0.17)
+		var end := base.lerp(tip, 0.87)
+		var shoulder := base.lerp(tip, 0.51) + Vector3.UP * rise * 0.5
+		_plant_triangle(mesh, start, shoulder + span * 0.48, end, 1.0)
+		_plant_triangle(mesh, start, end, shoulder - span * 0.48, 1.0)
+		return
+	var left := base.lerp(tip, 0.48) + span
+	var right := base.lerp(tip, 0.53) - span
+	var center := base.lerp(tip, 0.48) + Vector3.UP * rise
+	var points := [base, left, tip, right]
+	var uvs := [Vector2(0.0, 0.5), Vector2(0.48, 0.0), Vector2(1.0, 0.5), Vector2(0.53, 1.0)]
+	for side in 4:
+		var next := (side + 1) % 4
+		mesh.set_color(Color(shade, shade, shade))
+		mesh.set_uv(uvs[side])
+		mesh.add_vertex(points[side])
+		mesh.set_uv(Vector2(0.48, 0.5))
+		mesh.add_vertex(center)
+		mesh.set_uv(uvs[next])
+		mesh.add_vertex(points[next])
+
+
+static func _plant_triangle(mesh: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, shade: float) -> void:
+	mesh.set_color(Color(shade, shade, shade))
+	mesh.add_vertex(a)
+	mesh.add_vertex(c)
+	mesh.add_vertex(b)
+
+
+static func _bush_mesh() -> ArrayMesh:
 	var mesh := SurfaceTool.new()
 	mesh.begin(Mesh.PRIMITIVE_TRIANGLES)
 	const SIDES := 11
@@ -200,34 +338,6 @@ static func _canopy_mesh() -> ArrayMesh:
 				_foliage_triangle(mesh, points[a], points[b], points[a + SIDES])
 			if step != STEPS - 1:
 				_foliage_triangle(mesh, points[b], points[b + SIDES], points[a + SIDES])
-	mesh.generate_normals()
-	return mesh.commit()
-
-
-static func _fir_mesh() -> ArrayMesh:
-	var mesh := SurfaceTool.new()
-	mesh.begin(Mesh.PRIMITIVE_TRIANGLES)
-	const BRANCHES := 14
-	const WHORLS := 8
-	for layer in WHORLS:
-		var t := float(layer) / (WHORLS - 1)
-		var root := 1.75 + t * 4.06
-		var reach := lerpf(1.86, 0.20, t)
-		for branch in BRANCHES:
-			var azimuth := TAU * float(branch) / BRANCHES + layer * 0.61
-			var dir := Vector3(cos(azimuth), 0.0, sin(azimuth))
-			var across := Vector3(-dir.z, 0.0, dir.x)
-			var length := reach * (0.91 + 0.13 * sin(azimuth * 3.0 + layer * 3.2))
-			var center := Vector3(0.0, root + reach * 0.46, 0.0)
-			var shoulder := Vector3(0.0, root, 0.0) + dir * length * 0.48
-			var left := shoulder + across * reach * 0.24
-			var right := shoulder - across * reach * 0.24
-			var tip := Vector3(0.0, root - 0.09 + 0.18 * sin(azimuth * 5.0), 0.0) + dir * length
-			var underside := shoulder - Vector3.UP * reach * 0.2
-			_foliage_triangle(mesh, center, left, tip)
-			_foliage_triangle(mesh, center, tip, right)
-			_foliage_triangle(mesh, left, underside, tip)
-			_foliage_triangle(mesh, tip, underside, right)
 	mesh.generate_normals()
 	return mesh.commit()
 
@@ -468,6 +578,18 @@ func _build_gate_signs() -> void:
 			label.position = ValleyMap.BASE * side + marking.rotated(Vector3.UP, turn)
 			label.rotation.y = turn
 			add_child(label)
+
+
+static func _foliage_material(texture: Texture2D = null) -> StandardMaterial3D:
+	var material := _plant_material()
+	material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	material.backlight_enabled = true
+	material.backlight = Color(0.11, 0.15, 0.095)
+	if texture != null:
+		material.albedo_texture = texture
+		material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
+		material.alpha_scissor_threshold = 0.34
+	return material
 
 
 static func _plant_material() -> StandardMaterial3D:
