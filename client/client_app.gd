@@ -74,6 +74,7 @@ var _conditions: NetworkConditions
 var _handshake: Handshake
 var _connector: Connector
 var _local: ServerRunner
+var _solo_clock := false
 var _local_listeners: Array[Listener] = []
 ## _fingerprint is the certificate fingerprint of a host.
 var _fingerprint := ""
@@ -494,6 +495,7 @@ func _open() -> String:
 	# Going back to the spawn at will is for solo play only.
 	server_settings.allow_respawn = settings["host"] == ""
 	var host: String = settings["host"]
+	_solo_clock = host == "" and _conditions.is_none()
 	var certificate: Array = []
 	if host != "":
 		server_settings.max_players = Game.MAX_PLAYERS
@@ -793,11 +795,13 @@ func _process(delta: float) -> void:
 	_accumulator += delta
 	# Ticks last a little more or less than TICK_DELTA while the session brings
 	# its commands to the right lead.
+	var sent := 0
 	while _reconnect_since < 0 and _accumulator >= session.tick_duration():
 		_accumulator -= session.tick_duration()
 		var command := session.send_command(_command())
 		if command == null:
 			break
+		sent += 1
 		var result := predictor.predict(command)
 		_events |= result.events
 		if result.has(Arsenal.EVENT_FIRED):
@@ -809,6 +813,12 @@ func _process(delta: float) -> void:
 			})
 	_alpha = _accumulator / session.tick_duration()
 	_charge("ticks")
+	if _solo_clock:
+		for _tick in sent:
+			_local.server.step()
+		# The server records its own profile.
+		if _lap > 0:
+			_lap = Time.get_ticks_usec()
 	var updated := false
 	if _reconnect_since < 0:
 		updated = session.poll()
@@ -924,6 +934,11 @@ func _connect(_delta: float) -> bool:
 		return false
 	session = _handshake.session
 	_handshake = null
+	if _solo_clock:
+		# Solo simulation uses the same bounded frame budget as input. The
+		# server advances only through the ticks the client has sent.
+		_local.set_process(false)
+		session.use_local_clock(_local.server.tick)
 	predictor.join(session.welcome.match_seed)
 	_trace_match()
 	return true
