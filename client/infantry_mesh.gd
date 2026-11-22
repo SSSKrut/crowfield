@@ -4,17 +4,21 @@ extends RefCounted
 ## rings across the joints use both adjacent bones so the uniform bends with
 ## the wearer. The assembled uniform remains one skinned draw surface.
 
-const CLOTH := Color8(92, 99, 75)
-const CLOTH_LIGHT := Color8(108, 116, 89)
-const CLOTH_DARK := Color8(65, 73, 56)
-const ARMOUR := Color8(111, 104, 76)
-const WEBBING := Color8(74, 69, 53)
+const CLOTH := Color8(101, 104, 83)
+const CLOTH_LIGHT := Color8(117, 118, 94)
+const CLOTH_DARK := Color8(78, 81, 64)
+const ARMOUR := Color8(83, 73, 55)
+const WEBBING := Color8(51, 46, 36)
 const HARDWARE := Color8(43, 48, 43)
-const BOOT := Color8(48, 46, 39)
+const BOOT := Color8(55, 44, 33)
 const GLOVE := Color8(58, 55, 43)
 const SOLE := Color8(32, 35, 33)
-const HELMET := Color8(71, 82, 60)
-const FACE := Color8(152, 115, 91)
+const HELMET := Color8(48, 54, 45)
+const FACE := Color8(148, 115, 94)
+const SCARF := Color8(69, 70, 62)
+const EYEWEAR := Color8(36, 40, 34)
+const LENS := Color8(46, 55, 49)
+const TROUSER_SIDES := 16
 const MARK := Color(1, 1, 1, 0)
 const SOLE_CENTER := Vector3(0, -0.102, 0.058)
 const SOLE_RADII := Vector3(0.085, 0.018, 0.132)
@@ -47,9 +51,9 @@ func build(skeleton: Skeleton3D) -> ArrayMesh:
 	_uniform()
 	_carrier()
 	_head()
-	for side in ["L", "R"]:
-		_sleeve(side)
-		_trousers(side)
+	_join_trousers(_trousers("L"), _trousers("R"))
+	_sleeve("L")
+	_sleeve("R")
 
 	var arrays := []
 	arrays.resize(Mesh.ARRAY_MAX)
@@ -67,76 +71,113 @@ func build(skeleton: Skeleton3D) -> ArrayMesh:
 
 
 func _uniform() -> void:
+	# The blouse sits over a separate waistband. Its shoulder runs into the
+	# inset sleeve cap, while a rising collar wraps the actual neck.
 	_loft([
-		_ring(Vector3(0, 0.862, 0), 0.127, 0.094, "Hips"),
-		_ring(Vector3(0, 0.920, 0), 0.201, 0.120, "Hips"),
-		_ring(Vector3(0, 0.985, 0), 0.205, 0.128, "Hips", "Abdomen", 0.20),
-		_ring(Vector3(0, 1.057, 0.003), 0.192, 0.122, "Abdomen", "Hips", 0.20),
-		_ring(Vector3(0, 1.116, 0.003), 0.186, 0.115, "Abdomen", "Torso_2", 0.25),
-		_ring(Vector3(0, 1.197, 0.002), 0.204, 0.131, "Torso_2", "Abdomen", 0.22),
-		_ring(Vector3(0, 1.318, 0.003), 0.226, 0.150, "Torso_2"),
-		_ring(Vector3(0, 1.415, 0.000), 0.235, 0.122, "Torso_2"),
-		_ring(Vector3(0, 1.463, 0.015), 0.111, 0.083, "Torso_2"),
-		_ring(Vector3(0, 1.488, 0.011), 0.069, 0.065, "Neck", "Torso_2", 0.55),
-	], CLOTH, 18, 0.025, Finish.UNIFORM)
+		_ring(Vector3(0, 0.960, 0), 0.188, 0.127, "Hips"),
+		_ring(Vector3(0, 0.988, 0), 0.193, 0.128, "Hips"),
+		_ring(Vector3(0, 1.066, 0.003), 0.180, 0.117, "Abdomen", "Hips", 0.15),
+		_ring(Vector3(0, 1.142, 0.003), 0.184, 0.121, "Abdomen", "Torso_2", 0.38),
+		_ring(Vector3(0, 1.232, 0.001), 0.206, 0.131, "Torso_2", "Abdomen", 0.12),
+		_ring(Vector3(0, 1.341, 0.002), 0.222, 0.122, "Torso_2"),
+		_ring(Vector3(0, 1.408, 0.002), 0.235, 0.105, "Torso_2"),
+		_ring(Vector3(0, 1.450, 0.008), 0.202, 0.087, "Torso_2"),
+		_ring(Vector3(0, 1.475, 0.013), 0.089, 0.061, "Torso_2", "Neck", 0.20),
+		_ring(Vector3(0, 1.500, 0.015), 0.062, 0.062, "Neck", "Torso_2", 0.22),
+	], CLOTH, 18, 0.018, Finish.UNIFORM, 0.94)
 	_loft([
-		_ring(Vector3(0, 0.998, 0), 0.198, 0.133, "Hips"),
-		_ring(Vector3(0, 1.040, 0), 0.196, 0.132, "Hips"),
-	], WEBBING)
-	_pouch("Hips", Vector3(0, 1.019, 0.134), Vector3(0.081, 0.037, 0.019), HARDWARE, Finish.METAL)
-	_round("Neck", Vector3(0, 1.522, 0.013), Vector3(0.065, 0.065, 0.064), CLOTH_DARK)
+		_ring(Vector3(0, 1.458, 0.014), 0.087, 0.072, "Torso_2", "Neck", 0.18),
+		_ring(Vector3(0, 1.484, 0.018), 0.072, 0.067, "Neck", "Torso_2", 0.35),
+		_ring(Vector3(0, 1.508, 0.021), 0.059, 0.059, "Neck"),
+		_ring(Vector3(0, 1.532, 0.027), 0.054, 0.056, "Neck", "Head_2", 0.35),
+		_ring(Vector3(0, 1.578, 0.032), 0.053, 0.057, "Head_2", "Neck", 0.10),
+	], SCARF, 16, 0.018, Finish.FABRIC, 0.91)
+	_loft([
+		_ring(Vector3(0, 0.985, 0), 0.195, 0.134, "Hips"),
+		_ring(Vector3(0, 1.016, 0), 0.193, 0.131, "Hips"),
+	], WEBBING, 18, 0.0, Finish.FABRIC, 0.78)
+	_pouch("Hips", Vector3(0.015, 1.001, 0.131), Vector3(0.062, 0.027, 0.017), HARDWARE, Finish.METAL)
+	_pouch("Hips", Vector3(0.156, 0.978, -0.088), Vector3(0.075, 0.113, 0.086), WEBBING)
 
 
 func _carrier() -> void:
 	const TORSO := "Torso_2"
-	_pouch(TORSO, Vector3(0, 1.282, 0.115), Vector3(0.384, 0.289, 0.101), ARMOUR)
-	_pouch(TORSO, Vector3(0, 1.329, 0.154), Vector3(0.323, 0.206, 0.058), CLOTH_DARK)
+	# A low chest rig leaves the blouse and shoulder visible. Webbing crosses
+	# the real shoulder shape and the rig is held by a separate side strap.
+	_pouch(TORSO, Vector3(0, 1.240, 0.120), Vector3(0.327, 0.223, 0.072), WEBBING)
+	_pouch(TORSO, Vector3(0, 1.284, 0.147), Vector3(0.286, 0.096, 0.043), ARMOUR)
 	for side in [-1, 1]:
-		var x: float = side * 0.149
-		_pouch(TORSO, Vector3(x, 1.431, -0.003), Vector3(0.053, 0.073, 0.221), WEBBING)
-		_pouch(TORSO, Vector3(x, 1.397, 0.137), Vector3(0.034, 0.036, 0.018), HARDWARE, Finish.POLYMER)
-		_pouch(TORSO, Vector3(side * 0.182, 1.225, -0.004), Vector3(0.057, 0.125, 0.202), WEBBING)
+		var x: float = side * 0.123
+		_pouch(TORSO, Vector3(x, 1.380, 0.103), Vector3(0.046, 0.135, 0.047), WEBBING)
+		_pouch(TORSO, Vector3(x, 1.446, 0.022), Vector3(0.042, 0.045, 0.146), WEBBING)
+		_pouch(TORSO, Vector3(x, 1.387, -0.076), Vector3(0.047, 0.107, 0.047), WEBBING)
+		_pouch(TORSO, Vector3(side * 0.174, 1.203, -0.008), Vector3(0.043, 0.056, 0.199), WEBBING)
+		_pouch(TORSO, Vector3(x, 1.348, 0.132), Vector3(0.029, 0.033, 0.014), HARDWARE, Finish.POLYMER)
 
 	for index in [-1, 0, 1]:
 		var x: float = index * 0.077
-		_pouch(TORSO, Vector3(x, 1.202, 0.178), Vector3(0.066, 0.122, 0.078), WEBBING)
-		_pouch(TORSO, Vector3(x, 1.257, 0.195), Vector3(0.059, 0.038, 0.057), ARMOUR)
-		_pouch(TORSO, Vector3(x, 1.246, 0.225), Vector3(0.020, 0.016, 0.006), HARDWARE, Finish.POLYMER)
+		_pouch(TORSO, Vector3(x, 1.185, 0.164), Vector3(0.071, 0.107, 0.069), ARMOUR)
+		_pouch(TORSO, Vector3(x, 1.22, 0.185), Vector3(0.067, 0.042, 0.039), WEBBING)
+		_pouch(TORSO, Vector3(x, 1.19, 0.199), Vector3(0.015, 0.039, 0.008), CLOTH_DARK)
 
-	_pouch(TORSO, Vector3(0, 1.355, 0.185), Vector3(0.188, 0.061, 0.014), CLOTH_DARK)
-	_pouch(TORSO, Vector3(0, 1.355, 0.193), Vector3(0.169, 0.048, 0.010), MARK)
-	_pouch(TORSO, Vector3(0, 1.276, -0.149), Vector3(0.335, 0.306, 0.146), CLOTH_DARK)
-	_pouch(TORSO, Vector3(0, 1.291, -0.219), Vector3(0.252, 0.223, 0.066), ARMOUR)
-	_pouch(TORSO, Vector3(0, 1.211, -0.260), Vector3(0.203, 0.093, 0.034), CLOTH_DARK)
+	_pouch(TORSO, Vector3(0.023, 1.311, 0.172), Vector3(0.148, 0.048, 0.006), MARK)
+	_pouch(TORSO, Vector3(0, 1.281, -0.146), Vector3(0.278, 0.275, 0.099), WEBBING)
+	_pouch(TORSO, Vector3(0, 1.334, -0.177), Vector3(0.274, 0.123, 0.056), ARMOUR)
+	_pouch(TORSO, Vector3(0, 1.233, -0.181), Vector3(0.221, 0.081, 0.044), CLOTH_DARK)
 	for side in [-1, 1]:
-		var x: float = side * 0.105
-		_pouch(TORSO, Vector3(x, 1.276, -0.246), Vector3(0.030, 0.230, 0.018), WEBBING)
-		_pouch(TORSO, Vector3(x, 1.212, -0.260), Vector3(0.040, 0.027, 0.015), HARDWARE, Finish.POLYMER)
-	# A sewn ID panel fills the upper pack flap. The neutral rim gives its
-	# edge enough contrast to read against both grass and bare walls.
-	_pouch(TORSO, Vector3(0, 1.340, -0.254), Vector3(0.258, 0.132, 0.018), CLOTH_DARK)
-	_pouch(TORSO, Vector3(0, 1.340, -0.264), Vector3(0.233, 0.109, 0.010), MARK)
+		var x: float = side * 0.084
+		_pouch(TORSO, Vector3(x, 1.278, -0.201), Vector3(0.026, 0.206, 0.011), WEBBING)
+		_pouch(TORSO, Vector3(x, 1.229, -0.207), Vector3(0.035, 0.025, 0.010), HARDWARE, Finish.POLYMER)
+	_pouch(TORSO, Vector3(0, 1.34, -0.212), Vector3(0.247, 0.115, 0.008), MARK)
 
 
 func _head() -> void:
 	const HEAD := "Head_2"
-	_round(HEAD, Vector3(0, 1.629, 0.013), Vector3(0.088, 0.104, 0.085), CLOTH_DARK)
-	_round(HEAD, Vector3(0, 1.646, 0.070), Vector3(0.067, 0.040, 0.029), FACE)
-	_round(HEAD, Vector3(0, 1.599, 0.028), Vector3(0.079, 0.066, 0.082), CLOTH_DARK)
+	# A tucked field scarf meets the jaw below protective lenses.
+	# The visible skin is a small band between the upper scarf and the helmet.
 	_loft([
-		_ring(Vector3(0, 1.675, 0.003), 0.106, 0.114, HEAD),
-		_ring(Vector3(0, 1.690, 0.003), 0.113, 0.115, HEAD),
-		_ring(Vector3(0, 1.740, -0.006), 0.109, 0.106, HEAD),
-		_ring(Vector3(0, 1.775, -0.008), 0.078, 0.076, HEAD),
-		_ring(Vector3(0, 1.789, -0.011), 0.001, 0.001, HEAD),
-	], HELMET, 14, 0.006, Finish.POLYMER, 0.83)
-	_pouch(HEAD, Vector3(0, 1.666, 0.084), Vector3(0.172, 0.043, 0.026), HARDWARE, Finish.POLYMER)
-	_pouch(HEAD, Vector3(0, 1.668, 0.098), Vector3(0.144, 0.028, 0.012), Color8(72, 77, 62), Finish.POLYMER)
+		_ring(Vector3(0, 1.541, 0.033), 0.049, 0.052, HEAD, "Neck", 0.48),
+		_ring(Vector3(0, 1.580, 0.033), 0.061, 0.067, HEAD),
+		_ring(Vector3(0, 1.610, 0.030), 0.072, 0.075, HEAD),
+		_ring(Vector3(0, 1.633, 0.030), 0.070, 0.077, HEAD),
+	], SCARF, 16, 0.014, Finish.FABRIC, 0.82)
+	_loft([
+		_ring(Vector3(0, 1.625, 0.022), 0.066, 0.071, HEAD),
+		_ring(Vector3(0, 1.660, 0.014), 0.073, 0.077, HEAD),
+		_ring(Vector3(0, 1.698, 0.005), 0.073, 0.079, HEAD),
+		_ring(Vector3(0, 1.723, 0.002), 0.069, 0.074, HEAD),
+	], FACE, 14, 0.0, Finish.FABRIC, 0.77)
+	# The wraparound goggles stay flush with the face at the temples.
+	_loft([
+		_ring(Vector3(0, 1.639, 0.071), 0.063, 0.031, HEAD),
+		_ring(Vector3(0, 1.645, 0.071), 0.078, 0.038, HEAD),
+		_ring(Vector3(0, 1.670, 0.069), 0.080, 0.039, HEAD),
+		_ring(Vector3(0, 1.677, 0.066), 0.071, 0.033, HEAD),
+	], EYEWEAR, 16, 0.0, Finish.POLYMER, 0.52, Vector3.UP)
+	_loft([
+		_ring(Vector3(0, 1.646, 0.092), 0.061, 0.016, HEAD),
+		_ring(Vector3(0, 1.651, 0.094), 0.071, 0.019, HEAD),
+		_ring(Vector3(0, 1.666, 0.090), 0.072, 0.021, HEAD),
+		_ring(Vector3(0, 1.671, 0.086), 0.064, 0.020, HEAD),
+	], LENS, 16, 0.0, Finish.POLYMER, 0.57, Vector3.UP)
 	for side in [-1, 1]:
-		var x: float = side * 0.090
-		_pouch(HEAD, Vector3(x, 1.666, -0.019), Vector3(0.036, 0.059, 0.072), HARDWARE, Finish.POLYMER)
-		_strap(HEAD, Vector3(x, 1.655, 0.014), Vector3(side * 0.057, 1.580, 0.071), 0.008)
-	_pouch(HEAD, Vector3(0, 1.705, -0.103), Vector3(0.076, 0.024, 0.012), WEBBING)
+		_pouch(HEAD, Vector3(side * 0.075, 1.654, 0.020),
+			Vector3(0.014, 0.018, 0.111), WEBBING)
+		_strap(HEAD, Vector3(side * 0.080, 1.683, 0.008), Vector3(side * 0.053, 1.575, 0.058), 0.005)
+	_loft([
+		_ring(Vector3(0, 1.682, -0.011), 0.083, 0.087, HEAD),
+		_ring(Vector3(0, 1.691, 0.004), 0.100, 0.109, HEAD),
+		_ring(Vector3(0, 1.701, 0.004), 0.100, 0.112, HEAD),
+	], HARDWARE, 16, 0.0, Finish.POLYMER, 0.82, Vector3.UP)
+	_loft([
+		_ring(Vector3(0, 1.698, 0.002), 0.098, 0.109, HEAD),
+		_ring(Vector3(0, 1.716, -0.004), 0.099, 0.107, HEAD),
+		_ring(Vector3(0, 1.754, -0.013), 0.091, 0.095, HEAD),
+		_ring(Vector3(0, 1.774, -0.014), 0.073, 0.079, HEAD),
+		_ring(Vector3(0, 1.784, -0.014), 0.049, 0.054, HEAD),
+		_ring(Vector3(0, 1.787, -0.014), 0.001, 0.001, HEAD),
+	], HELMET, 16, 0.0, Finish.POLYMER, 0.82, Vector3.UP)
+	_pouch(HEAD, Vector3(0, 1.721, 0.102), Vector3(0.039, 0.030, 0.012), HARDWARE, Finish.POLYMER)
 
 
 func _sleeve(side: String) -> void:
@@ -146,21 +187,25 @@ func _sleeve(side: String) -> void:
 	var shoulder := _joint(upper)
 	var elbow := _joint(lower)
 	var hand := _joint(palm)
-	var outer := Vector3.RIGHT if side == "L" else Vector3.LEFT
+	var inset := shoulder.lerp(Vector3(0, 1.409, 0.0), 0.27)
 	_loft([
-		_ring(shoulder.lerp(elbow, -0.13), 0.047, 0.053, upper),
-		_ring(shoulder.lerp(elbow, 0.06), 0.085, 0.085, upper),
-		_ring(shoulder.lerp(elbow, 0.36), 0.081, 0.075, upper),
-		_ring(shoulder.lerp(elbow, 0.77), 0.068, 0.064, upper, lower, 0.08),
-		_ring(elbow, 0.065, 0.062, upper, lower, 0.50),
-		_ring(elbow.lerp(hand, 0.24), 0.063, 0.063, lower, upper, 0.10),
-		_ring(elbow.lerp(hand, 0.62), 0.057, 0.057, lower),
-		_ring(elbow.lerp(hand, 0.85), 0.047, 0.048, lower),
-		_ring(hand, 0.038, 0.042, lower, palm, 0.15),
-	], CLOTH, 14, 0.027, Finish.UNIFORM, 0.88)
+		_ring(inset, 0.059, 0.054, "Torso_2", upper, 0.31),
+		_ring(shoulder.lerp(elbow, 0.045), 0.083, 0.081, upper, "Torso_2", 0.24),
+		_ring(shoulder.lerp(elbow, 0.28), 0.081, 0.077, upper, "Torso_2", 0.06),
+		_ring(shoulder.lerp(elbow, 0.58), 0.072, 0.068, upper),
+		_ring(shoulder.lerp(elbow, 0.79), 0.065, 0.062, upper, lower, 0.16),
+		_ring(elbow, 0.060, 0.061, upper, lower, 0.50),
+		_ring(elbow.lerp(hand, 0.22), 0.061, 0.058, lower, upper, 0.15),
+		_ring(elbow.lerp(hand, 0.42), 0.057, 0.056, lower),
+		_ring(elbow.lerp(hand, 0.61), 0.051, 0.050, lower),
+		_ring(elbow.lerp(hand, 0.83), 0.046, 0.044, lower),
+		_ring(elbow.lerp(hand, 0.98), 0.039, 0.041, lower, palm, 0.19),
+	], CLOTH, 16, 0.025, Finish.UNIFORM, 0.95)
 	_armband(upper, shoulder, elbow)
-	_round(lower, elbow.lerp(hand, 0.11) + outer * 0.048, Vector3(0.020, 0.060, 0.049), WEBBING)
-	_pouch(lower, elbow.lerp(hand, 0.87) + Vector3.UP * 0.026, Vector3(0.061, 0.032, 0.052), WEBBING)
+	_loft([
+		_ring(elbow.lerp(hand, 0.86), 0.045, 0.045, lower),
+		_ring(elbow.lerp(hand, 0.99), 0.040, 0.042, lower, palm, 0.20),
+	], CLOTH_DARK, 16, 0.0, Finish.FABRIC, 0.95)
 	_glove(palm, hand, side == "L")
 
 
@@ -187,47 +232,97 @@ func _glove(bone: String, wrist: Vector3, support: bool) -> void:
 		_round(bone, grip + Vector3(0.014, 0.019, -0.017), Vector3(0.013, 0.011, 0.022), GLOVE)
 
 
-## Tailor both seams to the taper of the sleeve. The identification wraps
-## the existing fabric, so it reads in profile without an extra hard plate.
+## Both ends follow the taper of the sleeve. A small allowance keeps the
+## team textile on top even at the outer bend of the shoulder.
 func _armband(bone: String, shoulder: Vector3, elbow: Vector3) -> void:
-	var edges := PackedFloat32Array([0.13, 0.17, 0.66, 0.69])
-	var colors := [CLOTH_DARK, MARK, CLOTH_DARK]
-	for index in colors.size():
-		var from := edges[index]
-		var to := edges[index + 1]
-		_loft([
-			_ring(shoulder.lerp(elbow, from), lerpf(0.093, 0.075, from), lerpf(0.097, 0.069, from), bone),
-			_ring(shoulder.lerp(elbow, to), lerpf(0.093, 0.075, to), lerpf(0.097, 0.069, to), bone),
-		], colors[index], 14, 0.0, Finish.FABRIC, 0.88)
+	_loft([
+		_ring(shoulder.lerp(elbow, 0.16), 0.087, 0.085, bone, "Torso_2", 0.14),
+		_ring(shoulder.lerp(elbow, 0.32), 0.083, 0.080, bone, "Torso_2", 0.048),
+		_ring(shoulder.lerp(elbow, 0.66), 0.074, 0.071, bone),
+	], MARK, 16, 0.0, Finish.FABRIC, 0.95)
 
 
-func _trousers(side: String) -> void:
+func _trousers(side: String) -> int:
 	var upper := "UpperLeg." + side
 	var lower := "LowerLeg." + side
 	var foot := "Foot." + side
 	var hip := _joint(upper)
 	var knee := _joint(lower)
 	var ankle := _joint(foot)
-	var outer := Vector3.RIGHT if side == "L" else Vector3.LEFT
+	var base := _vertices.size()
 	_loft([
-		_ring(hip.lerp(knee, -0.09), 0.109, 0.112, upper, "Hips", 0.26),
-		_ring(hip.lerp(knee, 0.13), 0.115, 0.116, upper),
-		_ring(hip.lerp(knee, 0.37), 0.109, 0.107, upper),
-		_ring(hip.lerp(knee, 0.73), 0.093, 0.094, upper, lower, 0.13),
-		_ring(knee, 0.088, 0.082, lower, upper, 0.50),
-		_ring(knee.lerp(ankle, 0.24), 0.084, 0.082, lower, upper, 0.13),
-		_ring(knee.lerp(ankle, 0.52), 0.080, 0.077, lower),
-		_ring(knee.lerp(ankle, 0.78), 0.065, 0.072, lower),
-		_ring(ankle, 0.067, 0.068, lower, foot, 0.22),
-	], CLOTH_DARK, 16, 0.031, Finish.UNIFORM, 0.88)
-	_pouch(upper, hip.lerp(knee, 0.42) + outer * 0.078, Vector3(0.057, 0.131, 0.131), CLOTH)
-	_pouch(upper, hip.lerp(knee, 0.29) + outer * 0.088, Vector3(0.054, 0.037, 0.140), CLOTH_LIGHT)
-	_round(lower, knee + Vector3(0, -0.042, 0.066), Vector3(0.066, 0.084, 0.035), WEBBING)
-	_pouch(lower, knee + Vector3(0, -0.042, 0.085), Vector3(0.094, 0.113, 0.031), HARDWARE, Finish.POLYMER)
-	_round(lower, ankle + Vector3(0, 0.067, 0.002), Vector3(0.064, 0.097, 0.069), BOOT)
-	_pouch(foot, ankle + Vector3(0, -0.066, 0.050), Vector3(0.156, 0.087, 0.235), BOOT, Finish.POLYMER)
-	_round(foot, ankle + Vector3(0, -0.050, 0.080), Vector3(0.077, 0.060, 0.100), BOOT)
-	_round(foot, ankle + SOLE_CENTER, SOLE_RADII, SOLE, Finish.POLYMER)
+		_ring(hip.lerp(knee, 0.02), 0.107, 0.112, upper, "Hips", 0.47),
+		_ring(hip.lerp(knee, 0.16), 0.106, 0.111, upper, "Hips", 0.16),
+		_ring(hip.lerp(knee, 0.37), 0.098, 0.102, upper),
+		_ring(hip.lerp(knee, 0.65), 0.084, 0.089, upper, lower, 0.04),
+		_ring(hip.lerp(knee, 0.83), 0.080, 0.080, upper, lower, 0.23),
+		_ring(knee, 0.079, 0.077, lower, upper, 0.50),
+		_ring(knee.lerp(ankle, 0.20), 0.078, 0.078, lower, upper, 0.24),
+		_ring(knee.lerp(ankle, 0.39), 0.074, 0.080, lower),
+		_ring(knee.lerp(ankle, 0.62), 0.066, 0.071, lower),
+		_ring(knee.lerp(ankle, 0.79), 0.062, 0.067, lower),
+		_ring(knee.lerp(ankle, 0.91), 0.056, 0.060, lower, foot, 0.16),
+	], CLOTH_DARK, TROUSER_SIDES, 0.021, Finish.UNIFORM, 0.95)
+	var outer := 1.0 if side == "L" else -1.0
+	# The pocket is almost flat, with its flap following the outside of the thigh.
+	_pouch(upper, hip.lerp(knee, 0.40) + Vector3(outer * 0.083, 0.014, -0.026),
+		Vector3(0.029, 0.130, 0.110), CLOTH_DARK)
+	_pouch(upper, hip.lerp(knee, 0.27) + Vector3(outer * 0.092, 0.014, -0.028),
+		Vector3(0.021, 0.036, 0.112), CLOTH)
+	_boot(lower, foot, ankle)
+	return base
+
+
+## The outside halves of the thigh rings continue to a common waist. The
+## remaining inward halves meet through a crotch panel so neither leg ends
+## at a visible socket when the character runs or crouches.
+func _join_trousers(left: int, right: int) -> void:
+	var waist := _vertices.size()
+	var hips := _skeleton.find_bone("Hips")
+	var quarter := TROUSER_SIDES / 4
+	for column in TROUSER_SIDES + 1:
+		var fraction := float(column) / TROUSER_SIDES
+		var angle := TAU * fraction
+		var x := cos(angle)
+		var z := -sin(angle)
+		_vertex(Vector3(0.191 * x, 0.995, 0.130 * z), Vector3(x, 0.15, z).normalized(),
+			CLOTH_DARK, Vector2(fraction * 2.0, -0.39), Finish.UNIFORM, hips)
+	for column in TROUSER_SIDES:
+		var leg := left if column < quarter or column >= 3 * quarter else right
+		var a := waist + column
+		var b := leg + column
+		_indices.append_array([a, a + 1, b, a + 1, b + 1, b])
+	_indices.append_array([waist + quarter, right + quarter, left + quarter,
+		waist + 3 * quarter, left + 3 * quarter, right + 3 * quarter])
+	for column in TROUSER_SIDES / 2:
+		var a := left + quarter + column
+		var b := right + posmod(quarter - column, TROUSER_SIDES)
+		var next := right + posmod(quarter - column - 1, TROUSER_SIDES)
+		_indices.append_array([a, b, a + 1, a + 1, b, next])
+
+
+func _boot(lower: String, foot: String, ankle: Vector3) -> void:
+	# Horizontal profiles give the sole a flat tread and keep its underside
+	# on the existing grounded-feet envelope. The shaft tapers at the cuff.
+	_loft([
+		_ring(ankle + Vector3(0, -0.108, 0.047), 0.067, 0.107, foot),
+		_ring(ankle + Vector3(0, -0.085, 0.048), 0.069, 0.111, foot),
+		_ring(ankle + Vector3(0, -0.065, 0.043), 0.066, 0.101, foot),
+		_ring(ankle + Vector3(0, -0.048, 0.031), 0.061, 0.083, foot),
+		_ring(ankle + Vector3(0, -0.025, 0.010), 0.055, 0.069, foot),
+		_ring(ankle + Vector3(0, 0.001, 0.006), 0.053, 0.061, foot, lower, 0.24),
+		_ring(ankle + Vector3(0, 0.044, 0.002), 0.057, 0.061, lower, foot, 0.24),
+	], BOOT, 12, 0.0, Finish.FABRIC, 0.49, Vector3.UP)
+	_loft([
+		_ring(ankle + Vector3(0, -0.120, 0.043), 0.001, 0.001, foot),
+		_ring(ankle + Vector3(0, -0.120, 0.043), 0.065, 0.103, foot),
+		_ring(ankle + Vector3(0, -0.114, 0.045), 0.071, 0.111, foot),
+		_ring(ankle + Vector3(0, -0.100, 0.046), 0.072, 0.115, foot),
+		_ring(ankle + Vector3(0, -0.092, 0.048), 0.070, 0.112, foot),
+	], SOLE, 12, 0.0, Finish.POLYMER, 0.49, Vector3.UP)
+	for row in 3:
+		var lace := ankle + Vector3(0, -0.057 + row * 0.015, 0.117 - row * 0.014)
+		_pouch(foot, lace, Vector3(0.043, 0.006, 0.011), WEBBING)
 
 
 func _joint(name: String) -> Vector3:
@@ -248,7 +343,7 @@ func _ring(at: Vector3, width: float, depth: float, bone: String,
 ## Loft a garment along its posed axis. Rings are continuous at joints and
 ## store their weights individually; the seam duplicates only the UV edge.
 func _loft(rings: Array[Ring], color: Color, sides: int = 14, fold: float = 0.0,
-		material: int = Finish.FABRIC, exponent: float = 1.0) -> void:
+		material: int = Finish.FABRIC, exponent: float = 1.0, profile_axis: Vector3 = Vector3.ZERO) -> void:
 	var base := _vertices.size()
 	var length := 0.0
 	for row in rings.size():
@@ -257,7 +352,7 @@ func _loft(rings: Array[Ring], color: Color, sides: int = 14, fold: float = 0.0,
 			length += ring.at.distance_to(rings[row - 1].at)
 		var previous := rings[maxi(row - 1, 0)]
 		var next := rings[mini(row + 1, rings.size() - 1)]
-		var axis := (next.at - previous.at).normalized()
+		var axis := (next.at - previous.at).normalized() if profile_axis == Vector3.ZERO else profile_axis
 		var side := (Vector3.RIGHT - axis * axis.x).normalized()
 		var depth := side.cross(axis)
 		var radius_delta := (next.radii - previous.radii) / maxf(0.001, next.at.distance_to(previous.at))

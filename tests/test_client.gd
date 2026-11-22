@@ -105,6 +105,18 @@ func test_armed_pose_tracks_both_grips_and_keeps_the_stance_height() -> void:
 	check(recoil.origin.distance_to(steady.origin) > 0.035, "a shot moves the carried weapon")
 	check(recoil.basis.z.y < steady.basis.z.y, "a shot tips the barrel upward")
 
+	for crouched: bool in [false, true]:
+		view.animate(0.3, 0.0, crouched, true)
+		skeleton.reset_bone_poses()
+		view.player.seek(view.player.current_animation_length * 0.24, true)
+		var shouldered := view.carry(weapons, WeaponTuning.Kind.ASSAULT_RIFLE, 0.0)
+		view.armed_pose.apply_pose()
+		var eye := skeleton.global_transform * (skeleton.get_bone_global_pose(head) * Vector3(-0.032, 0.11, 0.105))
+		var rear_sight := shouldered * Vector3(0, -0.008, 0.05)
+		var bore := -shouldered.basis.z.normalized()
+		var eye_offset := eye - rear_sight
+		check((eye_offset - eye_offset.dot(bore) * bore).length() < 0.09, "aim brings the sight to the eyeline")
+
 	view.animate(0.3, 0.0)
 	view.player.seek(0, true)
 	var ready := view.carry(weapons, WeaponTuning.Kind.ASSAULT_RIFLE, 0.0)
