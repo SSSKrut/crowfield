@@ -18,9 +18,20 @@ func test_authored_infantry_follows_the_live_weapon_and_team() -> void:
 	var authored := view.authored
 	check(not view.body.visible, "the original skinned body is hidden on the live view")
 	var helmet := authored.find_child("Object_109", true, false) as MeshInstance3D
-	check_equal(helmet.get_instance_shader_parameter("team_color"), blue, "team before entering the tree")
+	var blue_helmet := helmet.material_override as ShaderMaterial
+	check_equal(blue_helmet.get_shader_parameter("team_color"), blue, "team before entering the tree")
 	view.set_tint(red)
-	check_equal(helmet.get_instance_shader_parameter("team_color"), red, "team changes reach the imported equipment")
+	var red_helmet := helmet.material_override as ShaderMaterial
+	check_equal(red_helmet.get_shader_parameter("team_color"), red, "team changes reach the imported equipment")
+	var teammate := view.asset.instantiate()
+	teammate.set_tint(blue)
+	tree.root.add_child(teammate)
+	cleanup(teammate.free)
+	var teammate_helmet := teammate.authored.find_child("Object_109", true, false) as MeshInstance3D
+	check_equal(teammate_helmet.material_override, blue_helmet, "the same layout and team share a material")
+	check_equal(blue_helmet.get_shader_parameter("team_color"), blue, "changing one soldier leaves its teammate blue")
+	teammate.set_tint(red)
+	check_equal(teammate_helmet.material_override, red_helmet, "switching teams uses the cached red material")
 
 	var stances := [
 		Vector3.ZERO, Vector3(4.25, 0, 0), Vector3(6.65, 0, 0), Vector3(0, 1, 0),
