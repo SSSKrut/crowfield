@@ -31,23 +31,14 @@ func place_boots() -> void:
 	var skeleton_to_world := skeleton.global_transform
 	var world_up := skeleton_to_world.basis.orthonormalized().inverse() * Vector3.UP
 	var hips := skeleton.get_bone_global_pose(_hips).basis
-	for leg in _legs:
+	for side in _legs.size():
+		var leg := _legs[side]
 		var foot := skeleton.get_bone_global_pose(leg[2])
-		var point := sole_contact(skeleton_to_world * foot, terrain)
+		var point := AuthoredSoldier.sole_contact(skeleton_to_world * foot, terrain, side == 0)
 		var lift := terrain.height_at(point.x, point.z) - point.y - CLEARANCE_TOLERANCE
 		if lift <= 0.0:
 			continue
 		_lift_leg(skeleton, leg, hips, foot, world_up * minf(lift, MAX_LIFT))
-
-
-## The lowest point of the oriented sole ellipsoid along the terrain normal.
-## Sampling at that point takes the heel and toe into account on a slope.
-static func sole_contact(foot: Transform3D, ground: Terrain) -> Vector3:
-	var center := foot * InfantryMesh.SOLE_CENTER
-	var normal := ground.normal_at(center.x, center.z)
-	var radii := InfantryMesh.SOLE_RADII
-	var scaled_normal := (foot.basis.transposed() * normal) * radii
-	return center - foot.basis * (radii * scaled_normal.normalized())
 
 
 func _lift_leg(skeleton: Skeleton3D, leg: PackedInt32Array, hips: Basis,
