@@ -24,3 +24,31 @@ func test_reload_anchors_the_support_elbow_and_reseats_the_magazine() -> void:
 		check_equal(view._magazines[kind].position, Vector3.ZERO, "the replacement reaches its final position")
 		view._reload_parts(kind, shape, 0.0)
 		check_equal(view._support_sleeves[kind].transform, Transform3D.IDENTITY, "return to the ready sleeve pose")
+
+
+
+func test_carbine_stock_connects_to_receiver_in_both_meshes() -> void:
+	var view := ViewModel.new()
+	cleanup(view.free)
+	var kind := WeaponTuning.Kind.ASSAULT_RIFLE
+	var shape := view._shape_of(kind)
+	var held := view.make_held(kind) as MeshInstance3D
+	cleanup(held.free)
+	for mesh: ArrayMesh in [held.mesh, view._mesh(shape.gun + shape.magazine)]:
+		var missing := 0
+		for index in 10:
+			var from := Vector3(0, 0.03, 0.110 + index * 0.006)
+			if not _has_surface_below(mesh, from):
+				missing += 1
+		check_equal(missing, 0, "stock collar and rail cover the space between the stock and receiver")
+
+
+func _has_surface_below(mesh: ArrayMesh, point: Vector3) -> bool:
+	for surface in mesh.get_surface_count():
+		var vertices: PackedVector3Array = mesh.surface_get_arrays(surface)[Mesh.ARRAY_VERTEX]
+		for corner in range(0, vertices.size(), 3):
+			var hit: Variant = Geometry3D.ray_intersects_triangle(point, Vector3.DOWN,
+				vertices[corner], vertices[corner + 1], vertices[corner + 2])
+			if hit != null:
+				return true
+	return false
