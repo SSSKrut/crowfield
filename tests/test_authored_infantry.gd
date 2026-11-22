@@ -106,6 +106,8 @@ func test_authored_infantry_contacts_the_slope_and_follows_a_frozen_body() -> vo
 
 
 ## Skin the imported sole vertices so this check uses the drawn mesh itself.
+## The joined suit also contains trousers and gloves. Sample only vertices
+## within 14 cm of the floor in the standing bind pose.
 func _lowest_vertices(mesh: MeshInstance3D, skeleton: Skeleton3D, slope: Terrain) -> PackedFloat32Array:
 	var surface := mesh.mesh.surface_get_arrays(0)
 	var points := surface[Mesh.ARRAY_VERTEX] as PackedVector3Array
@@ -114,6 +116,7 @@ func _lowest_vertices(mesh: MeshInstance3D, skeleton: Skeleton3D, slope: Terrain
 	var lowest := PackedFloat32Array([INF, INF])
 	var influences := bones.size() / points.size()
 	for i in points.size():
+		var bind_position := Vector3.ZERO
 		var point := Vector3.ZERO
 		for j in influences:
 			var influence := i * influences + j
@@ -121,7 +124,11 @@ func _lowest_vertices(mesh: MeshInstance3D, skeleton: Skeleton3D, slope: Terrain
 				continue
 			var bind := bones[influence]
 			var bone := skeleton.find_bone(mesh.skin.get_bind_name(bind))
-			point += (skeleton.get_bone_global_pose(bone) * mesh.skin.get_bind_pose(bind) * points[i]) * weights[influence]
+			var local_point := mesh.skin.get_bind_pose(bind) * points[i]
+			bind_position += (skeleton.get_bone_global_rest(bone) * local_point) * weights[influence]
+			point += (skeleton.get_bone_global_pose(bone) * local_point) * weights[influence]
+		if (mesh.global_transform * bind_position).y > 0.14:
+			continue
 		var side := int(point.x > 0.0)
 		var world := mesh.global_transform * point
 		lowest[side] = minf(lowest[side], world.y - slope.height_at(world.x, world.z))
