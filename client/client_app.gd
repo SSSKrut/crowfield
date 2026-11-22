@@ -1128,7 +1128,8 @@ func _update_self(delta: float, feet: Vector3, speed: float, server_own: Soldier
 	_self_view.visible = shown
 	if not _ragdoll:
 		_self_view.face(feet, _yaw)
-		_self_view.animate(delta, speed, crouched)
+		var aiming := shown and _buttons & InputCommand.AIM != 0 and server_own.arsenal.action == Arsenal.Action.READY
+		_self_view.animate(delta, speed, crouched, aiming)
 		_self_view.set_foot_terrain(scene.terrain if shown and server_own.grounded else null)
 	_self_view.update_fall(delta)
 	_self_view.set_tint(soldier_views.tint(_team()))
@@ -1143,8 +1144,11 @@ func _update_self(delta: float, feet: Vector3, speed: float, server_own: Soldier
 		_self_held_kind = kind
 		if _self_held != null:
 			add_child(_self_held)
+	if _self_held != null and not _shots.is_empty():
+		_self_view.fired()
+	var carried := _self_view.carry(view_model, kind, _pitch)
 	if _self_held != null:
-		_self_held.transform = ViewModel.held_transform(feet + _self_view.grip_shift(), _yaw, _pitch)
+		_self_held.transform = carried
 
 
 ## _update_camera looks where the player aims, turned by the kick of the
@@ -1217,7 +1221,8 @@ func _update_weapon(delta: float, own: Soldier, speed: float) -> void:
 		var query := PhysicsRayQueryParameters3D.create(shot.origin, shot.origin + shot.direction * reach, Game.LAYER_STATIC | Game.LAYER_VEHICLE)
 		var hit := state.intersect_ray(query)
 		var end: Vector3 = hit["position"] if not hit.is_empty() else shot.origin + shot.direction * reach
-		var muzzle := view_model.held_muzzle(shot.weapon, _feet + _self_view.grip_shift(), _yaw, _pitch)
+		var carried := _self_held.transform if _self_held != null else ViewModel.held_transform(_feet, _yaw, _pitch)
+		var muzzle := view_model.held_muzzle(shot.weapon, carried)
 		if muzzle == Vector3.INF:
 			muzzle = camera.global_position
 		if placed:

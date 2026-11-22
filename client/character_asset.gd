@@ -5,9 +5,9 @@ extends RefCounted
 
 const CLIPS := [&"Idle", &"Walking", &"Running", &"CrouchIdle", &"CrouchWalking"]
 enum Clip { IDLE, WALKING, RUNNING, CROUCH_IDLE, CROUCH_WALKING }
-const _PERIODS := [2.6, 0.56, 0.43, 2.0, 0.42]
-const _STEP_LENGTH := [0.0, 0.73, 0.91, 0.0, 0.42]
-const _STANCE_PORTION := [0.0, 0.61, 0.52, 0.0, 0.60]
+const _PERIODS := [2.6, 0.46, 0.43, 2.0, 0.42]
+const _STEP_LENGTH := [0.0, 0.98, 1.10, 0.0, 0.42]
+const _STANCE_PORTION := [0.0, 0.52, 0.40, 0.0, 0.60]
 const _CROUCH_HIP_SHIFT := 0.26
 const _CROUCH_ANKLE_DROP := 0.163
 
@@ -25,11 +25,11 @@ void fragment() {
 	float weave = 1.0 + thread.x * thread.y * 0.11 * fabric * grain_mask;
 	float panels = sin(UV.x * 13.0 + sin(UV.y * 12.0)) * sin(UV.y * 17.0);
 	float wear = 1.0 + panels * mix(0.045, 0.085, fabric);
-	float mottling = sin(UV.x * 17.0 + sin(UV.y * 11.7))
-		+ sin(UV.y * 21.4 - cos(UV.x * 13.0))
-		+ 0.5 * sin(UV.x * 28.0 + UV.y * 30.0);
+	float mottling = sin(UV.x * 12.0 + sin(UV.y * 8.7))
+		+ sin(UV.y * 14.2 - cos(UV.x * 9.0))
+		+ 0.5 * sin(UV.x * 19.0 + UV.y * 19.0);
 	float uniform_area = 1.0 - step(0.16, UV2.x);
-	float pattern = 1.0 - 0.145 * smoothstep(0.35, 1.05, mottling) * uniform_area;
+	float pattern = 1.0 - 0.11 * smoothstep(0.35, 1.05, mottling) * uniform_area;
 	ALBEDO = mix(team_color.rgb * 0.9, COLOR.rgb * pattern, COLOR.a) * weave * wear;
 	ROUGHNESS = mix(0.92, 0.58, UV2.x);
 	METALLIC = smoothstep(0.52, 1.0, UV2.x) * 0.42;
@@ -119,7 +119,8 @@ func _clip(skeleton: Skeleton3D, clip: int) -> Animation:
 	animation.track_set_path(position, NodePath("Skeleton3D:Hips"))
 	var hips := skeleton.get_bone_rest(bones["Hips"]).origin
 	var tracked := ["Hips", "Abdomen", "Torso_2", "Head_2", "UpperLeg.L", "UpperLeg.R",
-		"LowerLeg.L", "LowerLeg.R", "Foot.L", "Foot.R", "UpperArm.L", "UpperArm.R"]
+		"LowerLeg.L", "LowerLeg.R", "Foot.L", "Foot.R", "UpperArm.L", "UpperArm.R",
+		"LowerArm.L", "LowerArm.R", "Palm1.L", "Palm1.R"]
 	for name in tracked:
 		var track := animation.add_track(Animation.TYPE_ROTATION_3D)
 		animation.track_set_path(track, NodePath("Skeleton3D:" + name))
@@ -131,8 +132,8 @@ func _clip(skeleton: Skeleton3D, clip: int) -> Animation:
 		var pelvis := hips
 		var poses := {}
 		if clip == Clip.IDLE:
-			poses["Torso_2"] = Vector3(0.013 * sin(phase), 0.012 * sin(phase), 0)
-			poses["Head_2"] = Vector3(-0.008 * sin(phase), 0, 0)
+			_ready_pose(poses, phase)
+			bounce = -_sole_height(skeleton, poses)
 		elif clip == Clip.CROUCH_IDLE or clip == Clip.CROUCH_WALKING:
 			_crouch_pose(poses, clip, float(sample) / STEPS)
 			pelvis.z -= _CROUCH_HIP_SHIFT
@@ -140,9 +141,9 @@ func _clip(skeleton: Skeleton3D, clip: int) -> Animation:
 		else:
 			var running := clip == Clip.RUNNING
 			var strength := 1.0 if running else 0.7
-			poses["Hips"] = Vector3(0, -0.08 * strength * sin(phase), 0.038 * strength * cos(phase))
-			poses["Torso_2"] = Vector3(0.12 * strength, 0.14 * strength * sin(phase), 0)
-			poses["Head_2"] = Vector3(-0.07 * strength, -0.05 * strength * sin(phase), 0)
+			poses["Hips"] = Vector3(0.035, -0.08 * strength * sin(phase), 0.04 * strength * cos(phase))
+			poses["Torso_2"] = Vector3(0.24 * strength, -0.05 + 0.13 * strength * sin(phase), -0.035)
+			poses["Head_2"] = Vector3(-0.24 * strength, 0.05 - 0.05 * strength * sin(phase), 0.025)
 			for side in ["L", "R"]:
 				var foot_phase := fposmod(float(sample) / STEPS + (0.0 if side == "L" else 0.5), 1.0)
 				var leg := _stride(foot_phase, clip)
@@ -151,11 +152,30 @@ func _clip(skeleton: Skeleton3D, clip: int) -> Animation:
 				poses["Foot." + side] = Vector3(leg.z, 0, 0)
 				poses["UpperArm." + side] = Vector3(0.028 * sin(TAU * foot_phase), 0, 0)
 			bounce = -_sole_height(skeleton, poses)
+			if running:
+				var half_step := fposmod(float(sample) / STEPS, 0.5)
+				var flight := smoothstep(_STANCE_PORTION[clip], 0.45, half_step) * (1.0 - smoothstep(0.45, 0.5, half_step))
+				bounce += 0.06 * flight
 		animation.position_track_insert_key(position, time, pelvis + Vector3.UP * bounce)
 		for i in tracked.size():
 			var angles: Vector3 = poses.get(tracked[i], Vector3.ZERO)
 			animation.rotation_track_insert_key(i + 1, time, Quaternion.from_euler(angles))
 	return animation
+
+
+## The leading boot takes weight under the rifle, with the rear boot
+## staggered and both knees unlocked.
+func _ready_pose(poses: Dictionary, phase: float) -> void:
+	var breath := sin(phase)
+	poses["Hips"] = Vector3(0, 0, 0)
+	poses["Torso_2"] = Vector3(0.095 + 0.017 * breath, -0.14 + 0.014 * breath, -0.035)
+	poses["Head_2"] = Vector3(-0.075 - 0.011 * breath, 0.13, 0.025)
+	for side in ["L", "R"]:
+		var forward := 0.115 if side == "L" else -0.14
+		var leg := _leg_angles(0.769, forward, 0.0)
+		poses["UpperLeg." + side] = Vector3(leg.x, 0, 0)
+		poses["LowerLeg." + side] = Vector3(leg.y, 0, 0)
+		poses["Foot." + side] = Vector3(leg.z, 0, 0)
 
 
 ## Fold the knees beneath a lowered pelvis and lean the upper body forward.
@@ -229,6 +249,11 @@ func _sole_height(skeleton: Skeleton3D, poses: Dictionary) -> float:
 		var y_axis := Vector3(pose.basis.x.y, pose.basis.y.y, pose.basis.z.y) * InfantryMesh.SOLE_RADII
 		lowest = minf(lowest, (pose * InfantryMesh.SOLE_CENTER).y - y_axis.length())
 	return lowest
+
+
+## Ground speed of the clip's stance foot at its authored playback rate.
+func stride_speed(clip: int) -> float:
+	return _STEP_LENGTH[clip] / (periods[clip] * _STANCE_PORTION[clip])
 
 
 func instantiate() -> CharacterView:
