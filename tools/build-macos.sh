@@ -62,6 +62,18 @@ fi
 godot="$cache/$editor"
 "$godot" --headless --path "$PWD" --import
 "$godot" --headless --path "$PWD" --export-release macOS "$stage/Crowfield.zip"
+# Add the checked-in credits alongside the already signed app.
+mkdir -p "$stage/Credits/Barlow"
+cp -- assets/audio/LICENSE.md "$stage/Credits/Audio.md"
+cp -- assets/valley/LICENSE.md "$stage/Credits/Valley Textures.md"
+cp -- assets/sky/LICENSE.md "$stage/Credits/Valley Sky.md"
+cp -- assets/type/SOURCE.md "$stage/Credits/Barlow/Source.md"
+cp -- assets/type/OFL.txt "$stage/Credits/Barlow/OFL.txt"
+(
+    cd "$stage"
+    zip -qr Crowfield.zip Credits
+)
+
 unzip -tq "$stage/Crowfield.zip"
 mv -- "$stage/Crowfield.zip" "$output/Crowfield.zip"
 printf 'Built %s\n' "$output/Crowfield.zip"
