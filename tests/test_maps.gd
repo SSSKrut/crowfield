@@ -124,3 +124,52 @@ func test_soldiers_appear_on_the_ground_of_their_base() -> void:
 				"%s deploys directly behind the gate" % Game.team_name(team))
 			var down := server.cast_ray(at + Vector3(0, 0.3, 0), Vector3.DOWN, 1.0, Game.LAYER_STATIC)
 			check(down >= 0.25 and down <= 0.35, "a %s soldier appears %.2f m above the ground at %s" % [Game.team_name(team), 0.3 - down, at])
+
+
+## Both entries carry a walking player into the court from protected staging.
+func test_valley_ford_has_two_walkable_covered_entries_per_team() -> void:
+	var scene := _valley()
+	var flag := scene.flags[1]
+	var navigation := Navigation.create(scene)
+	var space := PhysicsServer3D.space_create()
+	var collision := scene.build_collision(space)
+	var controller := CharacterController.new(space, MovementTuning.new())
+	cleanup(func() -> void:
+		controller.close()
+		navigation.close()
+		MapScene.free_collision(collision)
+		PhysicsServer3D.free_rid(space))
+	var state := PhysicsServer3D.space_get_direct_state(space)
+	for side: float in [-1.0, 1.0]:
+		for lane: float in [-1.0, 1.0]:
+			var passage := lane * ValleyMap.FORD_PASSAGE_X
+			var staging := Vector3(passage * side, ValleyMap.BANK_LEVEL, 18.0 * side)
+			var soldier := Soldier.new()
+			controller.teleport(soldier, staging)
+			var eye := staging + Vector3.UP * 1.5
+			var flag_eye := flag.center + Vector3.UP * 1.5
+			check(not state.intersect_ray(PhysicsRayQueryParameters3D.create(eye, flag_eye, Game.LAYER_STATIC)).is_empty(),
+				"staging at %s is exposed to the flag" % staging)
+			check(not flag.contains_flag_position(staging), "staging at %s can capture the flag" % staging)
+			var tick := 0
+			for mark: Vector2 in [Vector2(passage, ValleyMap.FORD_GATE_Z), Vector2(passage, 7.25),
+					Vector2(lane * 2.1, 7.0), Vector2(lane * 2.1, 1.0)]:
+				var target := Vector3(mark.x * side, ValleyMap.FORD_DECK, mark.y * side)
+				var path := navigation.path(soldier.position, target)
+				var distance := 0.0
+				for index in range(1, path.size()):
+					distance += path[index - 1].distance_to(path[index])
+				check(path.size() >= 2 and path[-1].distance_to(target) < 0.5
+					and distance <= soldier.position.distance_to(target) + 1.0,
+					"entry from %s to %s makes an unexpected navigation detour: %s" % [staging, target, path])
+				for step in 2 * Game.TICK_RATE:
+					var offset := target - soldier.position
+					if Game.horizontal_length(offset) < 0.18:
+						break
+					controller.step(soldier, InputCommand.create(tick, 1.0, 0.0, Game.yaw_of(offset), 0.0, 0))
+					tick += 1
+				check(Game.horizontal_length(soldier.position - target) < 0.25,
+					"entry from %s stuck at %s before %s" % [staging, soldier.position, target])
+			check(flag.contains_flag_position(soldier.position), "entry from %s ended outside capture" % staging)
+	check(not flag.contains_flag_position(Vector3(0, scene.ground_at(0, 0), 0)),
+		"the channel below the court can capture the Ford")
