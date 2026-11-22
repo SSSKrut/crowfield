@@ -270,3 +270,32 @@ func test_crouch_key_lowers_the_live_camera_and_releases() -> void:
 		and not commands[1].has(InputCommand.CROUCH), "released C clears the input")
 	check(not _client.predictor.soldier.crouched, "camera rises where the standing capsule fits")
 	check_near(_client.camera.global_position.y - _client._feet.y, tuning.view_height(), 0.005, "camera returns to its standing eye")
+
+
+func test_solo_release_and_fresh_press_reach_server_after_a_stall() -> void:
+	if not await _start_client(60):
+		return
+	var server := _client._local.server
+	var player := server.players[_client.session.welcome.player]
+	_key(KEY_W, true)
+	cleanup(func() -> void: _key(KEY_W, false))
+	for _frame in FRAME_LIMIT:
+		if player.last.forward_axis() > 0:
+			break
+		await _tree.process_frame
+	if not check(player.last.forward_axis() > 0, "fixture must move on the server before the stall"):
+		return
+	OS.delay_msec(420)
+	_key(KEY_W, false)
+	_tap(KEY_ESCAPE)
+	check(_client.menu.visible, "Escape in the recovered input batch must open the menu")
+	await _tree.process_frame
+	check_equal(player.last.forward_axis(), 0.0, "server repeated held W after release and opening the menu")
+	_tap(KEY_ESCAPE)
+	_key(KEY_W, true)
+	await _tree.process_frame
+	check_equal(player.last.forward_axis(), 1.0, "fresh W did not reach the server on the next frame")
+	_key(KEY_W, false)
+	for _frame in 24:
+		await _tree.process_frame
+	check_equal(_client.session.resyncs, 0, "ordinary solo stall took the command clock out of sync")
