@@ -8,7 +8,7 @@ uniform float normal_scale = 1.0;
 uniform float roughness_scale = 1.0;
 uniform float specular_scale = 0.5;
 uniform int layout_kind;
-instance uniform vec4 team_color : source_color = vec4(0.26, 0.52, 0.83, 0.0);
+uniform vec4 team_color : source_color = vec4(0.26, 0.52, 0.83, 0.0);
 
 float panel(vec2 coordinate, vec2 center, vec2 half_size, float angle) {
 	vec2 rotation = vec2(cos(angle), sin(angle));

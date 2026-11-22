@@ -13,7 +13,7 @@ const _CROUCH_ANKLE_DROP := 0.32
 
 const _SHADER := """
 shader_type spatial;
-instance uniform vec4 team_color : source_color = vec4(0.79, 0.58, 0.22, 1.0);
+uniform vec4 team_color : source_color = vec4(0.79, 0.58, 0.22, 1.0);
 
 // The garment's UVs are skinned with the mesh. Grain stays on the fabric
 // as the limbs bend, and fades away before it aliases at a distance.
