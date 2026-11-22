@@ -39,7 +39,7 @@ const HELD_OFFSET := Vector3(0.085, 1.29, 0.30)
 ## direction the box models of the prototype were lit from.
 const LIGHT := Vector3(0.4, 1.0, 0.3)
 
-enum Finish { STEEL, POLYMER, CANVAS, WOOD, TEAM }
+enum Finish { STEEL, POLYMER, CANVAS, WOOD, TEAM, OPTIC }
 const GUN_METAL := Color8(72, 80, 82)
 const GUN_DARK := Color8(42, 50, 52)
 const GUN_EDGE := Color8(108, 119, 116)
@@ -110,6 +110,7 @@ func _init() -> void:
 		_finish(0.95, 0.0, 50, 0.14),
 		_finish(0.76, 0.0, 23, 0.20),
 		_finish(0.87, 0.0, 40, 0.10, false),
+		_finish(0.38, 0.08),
 	]
 	_held_material = _finish(0.83, 0.0)
 	_shapes = _weapon_shapes()
@@ -714,7 +715,8 @@ static func _carbine() -> Shape:
 		Piece.new(Vector3(0, -0.017, -0.050), Vector3(0.019, 0.005, 0.014), GUN_DARK),
 		Piece.new(Vector3(0, -0.123, -0.076), Vector3(0.017, 0.045, 0.021), GUN_POLYMER, Finish.POLYMER, false, -0.35),
 		Piece.new(Vector3(0, -0.100, 0.125), Vector3(0.020, 0.023, 0.044), GUN_DARK),
-		Piece.new(Vector3(0, -0.055, -0.247), Vector3(0.014, 0.015, 0.100), GUN_DARK, Finish.STEEL, true),
+		Piece.new(Vector3(0, -0.048, -0.110), Vector3(0.020, 0.025, 0.026), GUN_METAL),
+		Piece.new(Vector3(0, -0.052, -0.202), Vector3(0.014, 0.015, 0.087), GUN_DARK, Finish.STEEL, true),
 		Piece.new(Vector3(0, -0.083, -0.268), Vector3(0.026, 0.038, 0.075), GUN_POLYMER, Finish.POLYMER),
 		Piece.new(Vector3(0, -0.087, -0.342), Vector3(0.028, 0.042, 0.007), GUN_DARK, Finish.POLYMER),
 		Piece.new(Vector3(0.025, -0.045, 0.103), Vector3(0.003, 0.009, 0.041), GUN_DARK),
@@ -733,14 +735,19 @@ static func _carbine() -> Shape:
 	for i in 12:
 		shape.gun.append(Piece.new(Vector3(0, -0.012, -0.052 + i * 0.021),
 			Vector3(0.017, 0.0028, 0.0054), GUN_EDGE.darkened(0.31)))
+	# Extrude the magazine along one tilted axis so its shell, floorplate
+	# and ribs follow the same continuous profile through ejection.
+	const MAGAZINE_PITCH := 1.36
 	shape.magazine = [
-		Piece.new(Vector3(0, -0.152, 0.111), Vector3(0.017, 0.046, 0.033), GUN_DARK, Finish.POLYMER, false, 0.20),
-		Piece.new(Vector3(0, -0.197, 0.096), Vector3(0.0175, 0.021, 0.033), GUN_DARK, Finish.POLYMER, false, 0.34),
-		Piece.new(Vector3(0, -0.222, 0.085), Vector3(0.020, 0.006, 0.035), GUN_EDGE.darkened(0.28), Finish.POLYMER, false, 0.34),
+		Piece.new(Vector3(0, -0.169, 0.111), Vector3(0.018, 0.031, 0.057),
+			GUN_DARK, Finish.POLYMER, false, MAGAZINE_PITCH),
+		Piece.new(Vector3(0, -0.224, 0.099), Vector3(0.020, 0.032, 0.006),
+			GUN_EDGE.darkened(0.28), Finish.POLYMER, false, MAGAZINE_PITCH),
 	]
-	for i in 3:
-		shape.magazine.append(Piece.new(Vector3(0.017, -0.175 + i * 0.017, 0.106 + i * 0.005),
-			Vector3(0.002, 0.004, 0.025), GUN_EDGE.darkened(0.34), Finish.POLYMER, false, 0.20))
+	for side: int in [-1, 1]:
+		for rib in 3:
+			shape.magazine.append(Piece.new(Vector3(0.018 * side, -0.151 - 0.015 * rib, 0.115 - 0.0032 * rib),
+				Vector3(0.002, 0.025, 0.003), GUN_EDGE.darkened(0.34), Finish.POLYMER, false, MAGAZINE_PITCH))
 	shape.support_grip = Vector3(-0.014, -0.085, 0.307)
 	shape.magazine_grip = Vector3(-0.019, -0.178, 0.107)
 	shape.right_arm = _arm(Vector3(0.004, -0.119, -0.073), Vector3(0.115, -0.28, -0.42), 1.0)
@@ -754,41 +761,48 @@ static func _carbine() -> Shape:
 
 
 static func _marksman() -> Shape:
+	const RECEIVER := Color8(104, 113, 110)
+	const SCOPE_BODY := Color8(62, 72, 72)
+	const SCOPE_RING := Color8(120, 130, 122)
+	const LENS := Color8(52, 85, 89)
 	var shape := Shape.new()
 	shape.gun = [
 		Piece.new(Vector3(0, -0.069, 0.025), Vector3(0.027, 0.028, 0.258), GUN_WOOD, Finish.WOOD),
 		Piece.new(Vector3(0, -0.088, -0.237), Vector3(0.022, 0.039, 0.140), GUN_WOOD, Finish.WOOD),
 		Piece.new(Vector3(0, -0.089, -0.378), Vector3(0.025, 0.043, 0.007), GUN_DARK, Finish.POLYMER),
-		Piece.new(Vector3(0, -0.044, 0.059), Vector3(0.023, 0.020, 0.145), GUN_METAL),
+		Piece.new(Vector3(0, -0.044, 0.059), Vector3(0.023, 0.020, 0.145), RECEIVER),
 		Piece.new(Vector3(0, -0.042, 0.389), Vector3(0.010, 0.010, 0.279), GUN_DARK, Finish.STEEL, true),
 		Piece.new(Vector3(0, -0.042, 0.653), Vector3(0.014, 0.014, 0.019), GUN_METAL, Finish.STEEL, true),
 		Piece.new(Vector3(0, -0.042, 0.672), Vector3(0.009, 0.009, 0.001), GUN_DARK.darkened(0.65),
 			Finish.STEEL, true),
-		Piece.new(Vector3(0, 0.002, 0.054), Vector3(0.018, 0.018, 0.140), GUN_DARK, Finish.STEEL, true),
-		Piece.new(Vector3(0, 0.002, 0.179), Vector3(0.030, 0.030, 0.054), GUN_DARK, Finish.STEEL, true),
-		Piece.new(Vector3(0, 0.002, 0.235), Vector3(0.023, 0.023, 0.002), Color8(43, 86, 93), Finish.STEEL, true),
+		Piece.new(Vector3(0, -0.024, 0.054), Vector3(0.018, 0.007, 0.131), GUN_DARK),
+		Piece.new(Vector3(0, 0.002, 0.054), Vector3(0.018, 0.018, 0.140), SCOPE_BODY, Finish.STEEL, true),
+		Piece.new(Vector3(0, 0.002, 0.179), Vector3(0.030, 0.030, 0.054), SCOPE_BODY, Finish.STEEL, true),
+		Piece.new(Vector3(0, 0.002, 0.223), Vector3(0.031, 0.031, 0.009), SCOPE_RING, Finish.STEEL, true),
+		Piece.new(Vector3(0, 0.002, 0.233), Vector3(0.024, 0.024, 0.003), LENS, Finish.OPTIC, true),
 		Piece.new(Vector3(0, 0.002, -0.088), Vector3(0.024, 0.024, 0.033), GUN_DARK, Finish.POLYMER, true),
-		Piece.new(Vector3(0, 0.002, -0.121), Vector3(0.017, 0.017, 0.002), Color8(38, 74, 73), Finish.STEEL, true),
+		Piece.new(Vector3(0, 0.002, -0.117), Vector3(0.025, 0.025, 0.006), SCOPE_RING, Finish.STEEL, true),
+		Piece.new(Vector3(0, 0.002, -0.124), Vector3(0.018, 0.018, 0.003), LENS, Finish.OPTIC, true),
 		Piece.new(Vector3(0, 0.023, 0.029), Vector3(0.012, 0.011, 0.012), GUN_EDGE.darkened(0.3), Finish.STEEL, true),
 		Piece.new(Vector3(0.027, -0.047, -0.016), Vector3(0.008, 0.006, 0.032), GUN_EDGE),
 		Piece.new(Vector3(0.043, -0.066, -0.038), Vector3(0.009, 0.010, 0.013), GUN_DARK, Finish.STEEL, true),
 		Piece.new(Vector3(0, -0.108, -0.124), Vector3(0.019, 0.036, 0.060), GUN_WOOD, Finish.WOOD, false, -0.30),
 	]
 	for position: float in [-0.019, 0.103]:
-		shape.gun.append(Piece.new(Vector3(0, -0.023, position), Vector3(0.013, 0.013, 0.009), GUN_METAL))
-		shape.gun.append(Piece.new(Vector3(0, 0.002, position), Vector3(0.020, 0.020, 0.006), GUN_EDGE.darkened(0.2),
+		shape.gun.append(Piece.new(Vector3(0, -0.023, position), Vector3(0.013, 0.013, 0.013), RECEIVER))
+		shape.gun.append(Piece.new(Vector3(0, 0.002, position), Vector3(0.020, 0.020, 0.006), SCOPE_RING,
 			Finish.STEEL, true))
 	shape.magazine = [
 		Piece.new(Vector3(0, -0.111, 0.089), Vector3(0.020, 0.028, 0.039), GUN_DARK),
 		Piece.new(Vector3(0, -0.136, 0.089), Vector3(0.022, 0.005, 0.039), GUN_EDGE.darkened(0.3)),
 	]
-	shape.support_grip = Vector3(-0.013, -0.100, 0.228)
+	shape.support_grip = Vector3(-0.025, -0.096, 0.244)
 	shape.magazine_grip = Vector3(-0.024, -0.130, 0.089)
 	shape.magazine_throw = 0.15
 	shape.right_arm = _arm(Vector3(0.006, -0.120, -0.123), Vector3(0.124, -0.28, -0.47), 1.0)
-	shape.support_elbow = Vector3(-0.16, -0.28, -0.03)
+	shape.support_elbow = Vector3(-0.168, -0.26, -0.02)
 	shape.muzzle = Vector3(0, -0.042, 0.674)
-	shape.hip = Vector3(0.159, -0.164, 0.235)
+	shape.hip = Vector3(0.143, -0.127, 0.285)
 	shape.aim = Vector3(0, 0, 0.17)
 	shape.kick_back = 0.07
 	shape.kick_pitch = 0.12
