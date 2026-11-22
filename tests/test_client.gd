@@ -180,6 +180,35 @@ func test_remote_shots_behind_cover_filter_and_reuse_voices() -> void:
 	check_equal(sounds._shot_cover_rays, 1, "the next frame restores its ray budget")
 
 
+func test_remote_spatial_reports_use_distinct_distance_edits() -> void:
+	var tree := Engine.get_main_loop() as SceneTree
+	await tree.process_frame
+	var scene := Node3D.new()
+	tree.root.add_child(scene)
+	cleanup(scene.free)
+	var camera := Camera3D.new()
+	scene.add_child(camera)
+	camera.make_current()
+	var sounds := Sounds.new(1.0)
+	scene.add_child(sounds)
+	var kind := WeaponTuning.Kind.RIFLE
+	for distance: float in [8.0, 32.0, 72.0]:
+		sounds.shot_at(kind, Vector3(0, 0, -distance))
+	var near := sounds._positional[0]
+	var middle := sounds._positional[1]
+	var far := sounds._positional[2]
+	check_equal(near.stream, Sounds.GUNSHOTS[kind], "the close cue has the original attack")
+	check_equal(middle.stream, Sounds.MID_REPORTS[kind], "middle range has a separate report")
+	check_equal(far.stream, Sounds.FAR_REPORTS[kind], "distant cue has a separate report")
+	check(far.stream.get_length() > middle.stream.get_length() and middle.stream.get_length() > near.stream.get_length(),
+		"the outdoor reflections add natural decay time with distance")
+	check(far.volume_db < middle.volume_db and middle.volume_db < near.volume_db,
+		"each report still falls off with distance")
+	check_equal(sounds._next_positional, 3, "each shot uses only one spatial voice")
+	sounds.weapon(kind, Arsenal.EVENT_FIRED)
+	check_equal(sounds._shots[kind][0].stream, near.stream, "the local trigger retains its immediate cue")
+
+
 func test_embedded_clock_ignores_time_spent_loading_the_map() -> void:
 	var tree := Engine.get_main_loop() as SceneTree
 	await tree.process_frame

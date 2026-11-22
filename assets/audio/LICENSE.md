@@ -1,6 +1,7 @@
 # Audio credits
 
 - `assault-shot.wav`, `rifle-shot.wav` and `pistol-shot.wav` are edited excerpts of `sks.wav`, `mosin.wav` and `cz.wav`, respectively, from [Gunshot Sounds](https://opengameart.org/content/gunshot-sounds) by Tabasco (Vincent Sevedge, © 2009). The source archive includes a [CC BY 3.0 Unported](https://creativecommons.org/licenses/by/3.0/) notice. The excerpts were trimmed, filtered, faded and mixed to mono for Crowfield.
+- `*-shot-mid.wav` and `*-shot-far.wav` are additional edits of the three Tabasco excerpts under the same CC BY 3.0 license. Crowfield adds distance-dependent filtering, delayed reflections and level matching. Regenerate these WAVs with `python3 tools/build-outdoor-reports.py`.
 - `magazine-out.wav` and `magazine-in.wav` are edited excerpts of `clipload1.wav` and `clipload2.wav` from [Gun Reload Sound Effects](https://opengameart.org/content/gun-reload-sound-effects) by Brian MacIntosh (BMacZero), released under [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/). They were trimmed, filtered, faded and mixed to mono.
 
 - `footing/grass-{1,2,3}.wav`, `footing/concrete-{1,2,3}.wav`, and `footing/wood-{1,2,3}.wav` are edited from variants 000–002 of Kenney's [Impact Sounds](https://kenney.nl/assets/impact-sounds). `footing/land.wav`, `footing/strike.wav`, and `footing/damage.wav` are edits of `impactSoft_medium_003.ogg`, `impactGeneric_light_003.ogg`, and `impactSoft_heavy_001.ogg` from the same pack. All are [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/).

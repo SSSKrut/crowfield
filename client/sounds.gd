@@ -16,6 +16,8 @@ const FALLOFF_DISTANCE := 20.0
 const QUIETEST := 0.03
 const SHOT_COVER_RAYS_PER_FRAME := 8
 const SHOT_COVER_GAIN := 0.60
+const NEAR_REPORT_RANGE := 18.0
+const MID_REPORT_RANGE := 48.0
 const COVER_FILTER_HZ := 1500.0
 const DIRECT_FILTER_HZ := 5000.0
 
@@ -29,6 +31,19 @@ const GUNSHOTS := {
 	WeaponTuning.Kind.ASSAULT_RIFLE: preload("res://assets/audio/assault-shot.wav"),
 	WeaponTuning.Kind.RIFLE: preload("res://assets/audio/rifle-shot.wav"),
 	WeaponTuning.Kind.PISTOL: preload("res://assets/audio/pistol-shot.wav"),
+}
+
+# Weapon-specific edits keep the initial report sharp nearby and give distant
+# shots a darker impulse followed by soft outdoor reflections.
+const MID_REPORTS := {
+	WeaponTuning.Kind.ASSAULT_RIFLE: preload("res://assets/audio/assault-shot-mid.wav"),
+	WeaponTuning.Kind.RIFLE: preload("res://assets/audio/rifle-shot-mid.wav"),
+	WeaponTuning.Kind.PISTOL: preload("res://assets/audio/pistol-shot-mid.wav"),
+}
+const FAR_REPORTS := {
+	WeaponTuning.Kind.ASSAULT_RIFLE: preload("res://assets/audio/assault-shot-far.wav"),
+	WeaponTuning.Kind.RIFLE: preload("res://assets/audio/rifle-shot-far.wav"),
+	WeaponTuning.Kind.PISTOL: preload("res://assets/audio/pistol-shot-far.wav"),
 }
 
 enum Surface { FIELD, HARD, WOOD, MUD }
@@ -195,7 +210,10 @@ func shot_at(kind: int, position: Vector3) -> void:
 	var covered := camera != null and distance > 0.1 and _shot_is_covered(camera, position)
 	if covered:
 		gain *= SHOT_COVER_GAIN
-	_play_at(GUNSHOTS[kind], position, gain * SHOT_VOLUMES[kind], covered)
+	var reports := GUNSHOTS if distance <= NEAR_REPORT_RANGE else MID_REPORTS
+	if distance > MID_REPORT_RANGE:
+		reports = FAR_REPORTS
+	_play_at(reports[kind], position, gain * SHOT_VOLUMES[kind], covered)
 
 
 ## Only spend ray queries on audible shots, with a per-frame budget for big
