@@ -74,6 +74,9 @@ const PUSH_TICKS := 3
 ## Give the first advance a job before bots settle into opportunistic fights.
 const OPENING_TICKS := 20 * Game.TICK_RATE
 const OPENING_CONTACT_RANGE := 11.0
+## The lead soldier closes on a hostile or unclaimed crossing while the rest
+## of the squad can take longer shots from the approach.
+const POINT_CONTACT_RANGE := 16.0
 ## Casualties can reinforce their own crossing, but cannot jump from a
 ## distant fight into a held lane.
 const REINFORCEMENT_RANGE := 30.0
@@ -376,11 +379,7 @@ func _look(bot: Bot, soldier: Soldier) -> int:
 	var forward := Vector2(sin(soldier.yaw), -cos(soldier.yaw))
 	var alert := _server.tick - bot.hurt_at < ALERT_TICKS
 	var cos_view := cos(VIEW_ANGLE)
-	var view_range := VIEW_RANGE
-	if bot.state == State.ADVANCE and not alert and _opening_until > _server.tick:
-		var assigned := _opening_flag(bot, soldier.team)
-		if not assigned.contains_flag_position(soldier.position):
-			view_range = OPENING_CONTACT_RANGE
+	var view_range := _contact_range(bot, soldier, alert)
 	var near_ids: Array[int] = []
 	var near_distances: Array[float] = []
 	var from := soldier.position
@@ -412,6 +411,20 @@ func _look(bot: Bot, soldier: Soldier) -> int:
 		if _sees(soldier, enemy):
 			return id
 	return 0
+
+
+func _contact_range(bot: Bot, soldier: Soldier, alert: bool) -> float:
+	if bot.state != State.ADVANCE or alert:
+		return VIEW_RANGE
+	if _opening_until > _server.tick:
+		var assigned := _opening_flag(bot, soldier.team)
+		return VIEW_RANGE if assigned.contains_flag_position(soldier.position) else OPENING_CONTACT_RANGE
+	if _front_active() and bot.index / 2 < _scene.flags.size():
+		var flag := _server.flag_match.state.flags[bot.lane]
+		var assigned := _scene.flags[bot.lane]
+		if _lane_pressure(flag, soldier.team) > 0 and not assigned.contains_flag_position(soldier.position):
+			return POINT_CONTACT_RANGE
+	return VIEW_RANGE
 
 
 ## _sees tells whether a soldier's eye sees the body or the head of a soldier

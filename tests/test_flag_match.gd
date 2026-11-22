@@ -345,3 +345,25 @@ func test_valley_front_limits_forward_reinforcement_per_team_and_lane() -> void:
 	check(not server.bots._bot_reinforcement(bot, soldier).is_finite(), "a second casualty returns home between deployments")
 	server.tick += Bots.REINFORCEMENT_INTERVAL
 	check(server.bots._bot_reinforcement(bot, soldier).is_finite(), "the forward lane becomes available again")
+
+
+func test_valley_front_point_soldier_keeps_advancing_until_close_contact() -> void:
+	var settings := ServerSettings.new()
+	settings.map = "valley"
+	settings.bots = 24
+	settings.seed = 9
+	var server: Server = Server.create(settings, Rules.new())
+	cleanup(func() -> void: server.close())
+	server.flag_match.started = true
+	server.bots._opening_until = 0
+	var lead := server.bots.bots[0]
+	var flank := server.bots.bots[6]
+	var point := server.soldiers.get_soldier(lead.soldier)
+	var cover := server.soldiers.get_soldier(flank.soldier)
+	check_equal(lead.lane, flank.lane, "the two jobs belong to one squad")
+	check_equal(server.bots._contact_range(lead, point, false), Bots.POINT_CONTACT_RANGE,
+		"the lead walks past long-range contact until they reach the objective")
+	check_equal(server.bots._contact_range(flank, cover, false), Bots.VIEW_RANGE, "the squad covers the approach")
+	check_equal(server.bots._contact_range(lead, point, true), Bots.VIEW_RANGE, "incoming fire interrupts the approach")
+	point.position = server.scene.flags[lead.lane].center
+	check_equal(server.bots._contact_range(lead, point, false), Bots.VIEW_RANGE, "reaching the objective restores full sight")
