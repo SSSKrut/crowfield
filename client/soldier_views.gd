@@ -73,7 +73,7 @@ func tint(team: int) -> Color:
 
 ## update places every other soldier at the interpolation time, advances its
 ## animation and shows its combat. A soldier that is dead at that time falls.
-func update(session: ClientSession, delta: float, camera: Camera3D) -> void:
+func update(session: ClientSession, delta: float, camera: Camera3D, scene: MapScene) -> void:
 	_frame += 1
 	_render_tick = session.clock.render_tick
 	var eye := camera.global_position
@@ -90,10 +90,8 @@ func update(session: ClientSession, delta: float, camera: Camera3D) -> void:
 		remote.smooth(delta)
 		remote.evaluate(session.clock.render_tick)
 		var entry: Entry = _entries.get(id)
-		var hit := _show_combat(known, session.clock.render_tick)
-		if hit and entry != null and remote.alive and remote.position.distance_to(eye) < FLINCH_DISTANCE:
-			entry.view.hit(HITBOX_PARTS[mini(known.soldier.hit_box, Hitboxes.COUNT - 1)], Game.view_direction(known.soldier.hit_yaw, 0))
 		if not remote.alive:
+			_show_combat(known, entry, session.clock.render_tick)
 			if entry != null:
 				_entries.erase(id)
 				_fall(entry, known, eye)
@@ -107,8 +105,12 @@ func update(session: ClientSession, delta: float, camera: Camera3D) -> void:
 		entry.known = known
 		entry.distance = remote.position.distance_to(eye)
 		entry.view.face(remote.position, remote.yaw)
-		entry.view.animate(delta, Game.horizontal_length(remote.velocity))
-		_hold(entry, known.soldier.arsenal.weapon(), remote, known.soldier.team)
+		var speed := Game.horizontal_length(remote.velocity)
+		entry.view.animate(delta, speed, remote.crouched)
+		if sounds != null:
+			var near_enough := entry.distance < Sounds.REMOTE_FOOTSTEP_RANGE
+			if entry.footstep_due(remote, speed / rules.movement.sprint_speed, delta, near_enough):
+				sounds.footstep_at(remote.position, scene, entry.distance)
 		shown.append(entry)
 	drawn = shown.size()
 	full = 0
@@ -125,6 +127,7 @@ func update(session: ClientSession, delta: float, camera: Camera3D) -> void:
 	for entry in shown:
 		var detailed := entry.distance <= threshold and full < FULL_DETAIL
 		entry.view.set_detail(detailed)
+		entry.view.set_foot_terrain(scene.terrain if detailed and entry.known.remote.grounded else null)
 		if detailed:
 			full += 1
 		else:
@@ -132,6 +135,12 @@ func update(session: ClientSession, delta: float, camera: Camera3D) -> void:
 			if (_frame + entry.known.soldier.id) % COARSE_FRAMES == 0:
 				entry.view.player.advance(entry.coarse)
 				entry.coarse = 0.0
+		var known := entry.known
+		var remote := known.remote
+		_hold(entry, known.soldier.arsenal.weapon(), remote, known.soldier.team)
+		var hit := _show_combat(known, entry, session.clock.render_tick)
+		if hit and entry.distance < FLINCH_DISTANCE:
+			entry.view.hit(HITBOX_PARTS[mini(known.soldier.hit_box, Hitboxes.COUNT - 1)], Game.view_direction(known.soldier.hit_yaw, 0))
 
 
 ## _hold puts the weapon the soldier carries in its hands.
@@ -145,8 +154,9 @@ func _hold(entry: Entry, kind: int, remote: RemoteSoldier, team: int) -> void:
 		entry.held_kind = kind
 		if entry.held != null:
 			add_child(entry.held)
+	var carried := entry.view.carry(view_model, kind, remote.pitch)
 	if entry.held != null:
-		entry.held.transform = ViewModel.held_transform(remote.position, remote.yaw, remote.pitch)
+		entry.held.transform = carried
 
 
 func _drop(id: int) -> void:
@@ -161,16 +171,25 @@ func _drop(id: int) -> void:
 ## interpolation reaches them: a flash at the muzzle of its weapon, a tracer to
 ## where its aim meets the world, the sound, and sparks off the hitbox that was
 ## struck. It reports a hit shown.
-func _show_combat(known: KnownSoldier, render_tick: float) -> bool:
+func _show_combat(known: KnownSoldier, entry: Entry, render_tick: float) -> bool:
 	if effects == null:
 		known.shots.clear()
 		known.hurt = false
 		return false
 	var remote := known.remote
 	var shown_shots := 0
+	var kind := known.soldier.arsenal.weapon()
+	var fired := false
 	while shown_shots < known.shots.size() and known.shots[shown_shots] <= render_tick:
 		if known.shots[shown_shots] >= render_tick - STALE_SHOTS:
-			_show_shot(known.soldier.arsenal.weapon(), remote)
+			var carried := ViewModel.held_transform(remote.position, remote.yaw, remote.pitch)
+			if entry != null and entry.held != null:
+				if remote.alive and not fired:
+					entry.view.fired()
+					entry.held.transform = entry.view.carry(view_model, kind, remote.pitch)
+					fired = true
+				carried = entry.held.transform
+			_show_shot(kind, remote, carried)
 		shown_shots += 1
 	if shown_shots > 0:
 		known.shots = known.shots.slice(shown_shots)
@@ -178,23 +197,24 @@ func _show_combat(known: KnownSoldier, render_tick: float) -> bool:
 		return false
 	known.hurt = false
 	var box := mini(known.soldier.hit_box, Hitboxes.COUNT - 1)
-	effects.hit(Hitboxes.center(box, remote.position, remote.yaw), Game.view_direction(known.soldier.hit_yaw, 0))
+	effects.hit(Hitboxes.center(box, remote.position, remote.yaw, remote.crouched), Game.view_direction(known.soldier.hit_yaw, 0))
 	return true
 
 
 ## _show_shot shows one shot of another soldier. Its spread is the server's
 ## secret; a little scatter keeps a burst from drawing one line, and the
 ## pellets of a shotgun fly within their cone.
-func _show_shot(kind: int, remote: RemoteSoldier) -> void:
+func _show_shot(kind: int, remote: RemoteSoldier, carried: Transform3D) -> void:
 	var tuning := rules.weapons.get_tuning(kind)
 	if tuning == null or view_model == null:
 		return
-	var muzzle := view_model.held_muzzle(kind, remote.position, remote.yaw, remote.pitch)
+	var muzzle := view_model.held_muzzle(kind, carried)
 	if muzzle == Vector3.INF:
 		return
 	const SCATTER := 0.012
-	var eye := remote.position + Vector3(0, rules.movement.eye_height, 0)
+	var eye := remote.position + Vector3.UP * rules.movement.view_height(remote.crouched)
 	var spread := SCATTER + deg_to_rad(tuning.pellet_spread)
+	var struck := Vector3.INF
 	for pellet in tuning.pellets:
 		var direction := Game.view_direction(remote.yaw + spread * (effects.random.randf() * 2 - 1),
 			remote.pitch + spread * (effects.random.randf() * 2 - 1))
@@ -205,10 +225,14 @@ func _show_shot(kind: int, remote: RemoteSoldier) -> void:
 		var hit := get_world_3d().direct_space_state.intersect_ray(_ray)
 		if not hit.is_empty():
 			end = hit["position"]
-		effects.shot(muzzle, end, not hit.is_empty())
+			struck = end
+		effects.shot(muzzle, end, not hit.is_empty(), hit.get("normal", Vector3.ZERO))
 	effects.flash(muzzle)
 	if sounds != null:
 		sounds.shot_at(kind, muzzle)
+		# One sound for the pellets of a shotgun that struck.
+		if struck != Vector3.INF:
+			sounds.impact_at(struck)
 
 
 ## momentum is the velocity a soldier that dies at velocity falls with.
@@ -224,8 +248,9 @@ func remember_blast(at: Vector3, radius: float, tick: float) -> void:
 
 ## blow is the blow that fells a soldier at its death at a tick: the throw
 ## of a blast that burst by it just then, or the strike of the last hit.
-func blow(soldier_position: Vector3, yaw: float, hit_box: int, hit_yaw: float, tick: float) -> CharacterView.Strike:
-	var center := soldier_position + Vector3(0, 0.85, 0)
+func blow(soldier_position: Vector3, yaw: float, hit_box: int, hit_yaw: float, tick: float, crouched := false) -> CharacterView.Strike:
+	# The middle of the body, where the server measures a blast to.
+	var center := soldier_position + Vector3(0, 0.45 if crouched else 0.85, 0)
 	for blast: Array in _blasts:
 		var away: Vector3 = center - blast[0]
 		var distance := away.length()
@@ -236,14 +261,14 @@ func blow(soldier_position: Vector3, yaw: float, hit_box: int, hit_yaw: float, t
 		var outward := away / distance if distance > 0.01 else Vector3.UP
 		var impulse := outward * BLAST_IMPULSE * share + Vector3.UP * BLAST_LIFT * share
 		return CharacterView.Strike.new(RagdollRig.Part.HIPS, center, impulse)
-	return strike(soldier_position, yaw, hit_box, hit_yaw)
+	return strike(soldier_position, yaw, hit_box, hit_yaw, crouched)
 
 
 ## strike is the blow of the last hit on a soldier, for its fall.
-static func strike(soldier_position: Vector3, yaw: float, hit_box: int, hit_yaw: float) -> CharacterView.Strike:
+static func strike(soldier_position: Vector3, yaw: float, hit_box: int, hit_yaw: float, crouched := false) -> CharacterView.Strike:
 	var box := mini(hit_box, Hitboxes.COUNT - 1)
 	var impulse := Game.view_direction(hit_yaw, 0) * STRIKE_IMPULSE + Vector3(0, STRIKE_LIFT, 0)
-	return CharacterView.Strike.new(HITBOX_PARTS[box], Hitboxes.center(box, soldier_position, yaw), impulse)
+	return CharacterView.Strike.new(HITBOX_PARTS[box], Hitboxes.center(box, soldier_position, yaw, crouched), impulse)
 
 
 ## _fall turns a soldier that died into a ragdoll from its pose, struck where
@@ -256,7 +281,7 @@ func _fall(entry: Entry, known: KnownSoldier, eye: Vector3) -> void:
 		entry.view.queue_free()
 		return
 	bodies.make_room(pool, eye)
-	var fell := blow(remote.position, remote.yaw, known.soldier.hit_box, known.soldier.hit_yaw, _render_tick)
+	var fell := blow(remote.position, remote.yaw, known.soldier.hit_box, known.soldier.hit_yaw, _render_tick, remote.crouched)
 	if not entry.view.fall(pool, momentum(remote.last_alive_velocity()), fell):
 		entry.view.queue_free()
 		return
@@ -273,12 +298,13 @@ var bodies_parent: Node3D
 ## aim finds the soldier nearest to the line of sight, within a few degrees,
 ## as the server does for its priorities: from the soldier's eye along the
 ## command's direction, whatever the camera, to the middle of the body.
-func aim(eye: Vector3, forward: Vector3, center: float) -> void:
+func aim(eye: Vector3, forward: Vector3) -> void:
 	const LIMIT := 3.0 * PI / 180.0
 	aimed = null
 	var best := LIMIT
 	for entry in shown:
-		var to := entry.known.remote.position + Vector3(0, center, 0) - eye
+		var remote := entry.known.remote
+		var to := remote.position + Vector3.UP * rules.movement.center_height(remote.crouched) - eye
 		var length := to.length()
 		if length < 1e-3:
 			continue
@@ -323,3 +349,28 @@ class Entry:
 	var distance := 0.0
 	## coarse is the animation time owed to a soldier animated every few frames.
 	var coarse := 0.0
+	var foot_position := Vector3.INF
+	var foot_travel := 0.0
+
+
+	## Advance the gait from drawn motion. A new, airborne, or corrected
+	## soldier needs a clean sample before it can make another step.
+	func footstep_due(remote: RemoteSoldier, speed_ratio: float, delta: float, nearby: bool) -> bool:
+		if not nearby or not remote.grounded:
+			foot_position = Vector3.INF
+			foot_travel = 0.0
+			return false
+		var offset := remote.position - foot_position
+		foot_position = remote.position
+		var max_travel := maxf(0.9, delta * 12.0)
+		if not offset.is_finite() or offset.length_squared() > max_travel * max_travel:
+			foot_travel = 0.0
+			return false
+		if speed_ratio < 0.04:
+			return false
+		var stride_length := lerpf(0.80, 2.0, clampf(speed_ratio, 0.0, 1.0))
+		foot_travel += Vector2(offset.x, offset.z).length()
+		if foot_travel < stride_length:
+			return false
+		foot_travel = fposmod(foot_travel, stride_length)
+		return true

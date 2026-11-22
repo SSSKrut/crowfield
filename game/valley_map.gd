@@ -4,7 +4,8 @@ extends RefCounted
 ## in two by a shallow river. The blue base lies in the south, the red one in
 ## the north. Between them three ways cross the river: a bridge in the west,
 ## a ford in the middle and a bridge in the east. Each side has a village by
-## one bridge and a hill with a bunker by the other, and ruins by the ford.
+## one bridge and a timber lookout above the woods by the other. A masonry
+## spillway at the ford gives teams cover on both banks and a shared court.
 ## The map is the same for both teams turned half a turn around its centre,
 ## so neither has the better side.
 ##
@@ -14,19 +15,43 @@ extends RefCounted
 const SIZE := 256
 const AREA := 100.0
 const RIVER_BED := -2.2
-const FORD_BED := -1.75
 const WATER_LEVEL := -1.55
 const RIVER_HALF_WIDTH := 10.0
 const BASE := Vector3(0, 0, 76)
+## Deploy just behind the gate and within its straight approach.
+const MUSTER := Vector3(0, 0, 67)
+const MUSTER_RADIUS := 3.2
+const GATE_HALF_WIDTH := 4.0
+const ROUTE_POST_X := 5.1
+const ROUTE_POST_Z := -19.4
+const ROUTE_BOARD_Y := 2.30
 const VILLAGE := Vector3(-40, 0, 30)
 const HILL := Vector3(58, 0, 44)
 const KNOLL := Vector3(-66, 0, 54)
-const RUINS := Vector3(13, 0, 16)
 const BRIDGE_X := 45.0
 const BASE_LEVEL := 1.2
 const VILLAGE_LEVEL := 0.9
 const HILL_LEVEL := 6.2
 const BANK_LEVEL := 0.6
+const BRIDGE_HALF := 12.5
+const BRIDGE_DECK := 0.7
+const FORD_BANK := Vector3(0, 0, 20)
+const FORD_DECK := 0.73
+const FORD_RADIUS := 12.0
+const FORD_PASSAGE_X := 7.0
+const FORD_GATE_Z := 13.1
+const CUSTOMS_TOWER := Vector2(-13.15, -10.25)
+const CUSTOMS_WELL := Vector2(0.0, 0.15)
+const CUSTOMS_HOUSES := [
+	{ "center": Vector2(-9.8, -7.8), "footprint": Vector2(9.0, 7.5), "door": 1,
+		"height": 3.2, "pitch": 32.0, "wall": MapScene.Kind.MASONRY },
+	{ "center": Vector2(9.2, -9.0), "footprint": Vector2(6.0, 8.0), "door": 3,
+		"height": 3.0, "pitch": 24.0, "wall": MapScene.Kind.PLASTER },
+	{ "center": Vector2(-9.0, 8.0), "footprint": Vector2(5.8, 6.8), "door": 1,
+		"height": 2.65, "pitch": 29.0, "wall": MapScene.Kind.PLANKS },
+	{ "center": Vector2(10.0, 8.0), "footprint": Vector2(8.0, 6.0), "door": 3,
+		"height": 3.0, "pitch": 19.0, "wall": MapScene.Kind.PLASTER },
+]
 
 ## Flat is ground levelled for building: fully within inner, blending into the
 ## land up to outer.
@@ -67,20 +92,22 @@ func _build() -> MapScene:
 		_flats.append(Flat.new(_flat(BASE, sign), 18, 28, BASE_LEVEL))
 		_flats.append(Flat.new(_flat(VILLAGE, sign), 18, 28, VILLAGE_LEVEL))
 		_flats.append(Flat.new(_flat(HILL, sign), 7, 12, HILL_LEVEL))
+		_flats.append(Flat.new(_flat(FORD_BANK, sign), 14, 20, BANK_LEVEL))
 		var bridge := Vector2(BRIDGE_X * sign, river_z(BRIDGE_X * sign))
 		_flats.append(Flat.new(bridge + Vector2(0, 14), 4, 9, BANK_LEVEL))
 		_flats.append(Flat.new(bridge - Vector2(0, 14), 4, 9, BANK_LEVEL))
 	_scene.terrain = Terrain.create(SIZE, _height)
-	_scene.set_zone(Game.Team.BLUE, _on_ground(BASE), 8)
-	_scene.set_zone(Game.Team.RED, _on_ground(-BASE), 8)
+	_scene.set_zone(Game.Team.BLUE, _on_ground(MUSTER), MUSTER_RADIUS)
+	_scene.set_zone(Game.Team.RED, _on_ground(-MUSTER), MUSTER_RADIUS)
 	_roads()
 	for sign: float in [1.0, -1.0]:
 		var turn := 0.0 if sign > 0 else PI
 		_base(BASE * sign, turn)
 		_village(VILLAGE * sign, turn)
 		_hill_post(HILL * sign, turn)
+		_wooded_approach(sign)
 		_bridge(BRIDGE_X * sign)
-		_ruins(RUINS * sign, turn)
+		_ford_bank(turn)
 	_ford()
 	_boundary()
 	_nature()
@@ -116,8 +143,7 @@ func _height(x: float, z: float) -> float:
 		h = lerpf(h, levels / weights, strongest)
 	var across := absf(z - river_z(x))
 	if across < RIVER_HALF_WIDTH:
-		var bed := lerpf(FORD_BED, RIVER_BED, smoothstep(5, 18, absf(x)))
-		h = lerpf(h, bed, smoothstep(RIVER_HALF_WIDTH, RIVER_HALF_WIDTH * 0.35, across))
+		h = lerpf(h, RIVER_BED, smoothstep(RIVER_HALF_WIDTH, RIVER_HALF_WIDTH * 0.35, across))
 	var rim := maxf(absf(x), absf(z)) - 90
 	if rim > 0:
 		h += pow(rim / 38, 2) * 24
@@ -191,7 +217,6 @@ func _wall(origin: Vector3, turn: float, a: Vector2, b: Vector2, level: float, h
 ## _base is a camp behind sandbags, facing north: huts, crates, a flag and a
 ## watch platform with a ramp.
 func _base(origin: Vector3, turn: float) -> void:
-	const GATE_HALF_WIDTH := 4.0
 	const FLANK_COVER_WIDTH := 2.4
 	var level := BASE_LEVEL
 	for side: float in [-1.0, 1.0]:
@@ -227,17 +252,23 @@ func _base(origin: Vector3, turn: float) -> void:
 	var ramp := _local(origin, turn, deck.x + 2.1 + run / 2.0, deck.y)
 	ramp.y = level + RISE / 2.0 - 0.1 / cos(SLOPE)
 	_scene.add_box(Vector3(RISE / sin(SLOPE) / 2.0, 0.1, 0.75), ramp, Basis(Vector3.UP, turn) * Basis(Vector3.BACK, -SLOPE), MapScene.Kind.PLANKS)
+	# The lane boards frame the gate, outside the clear line of advance.
+	for side: float in [-1.0, 1.0]:
+		_put(origin, turn, side * ROUTE_POST_X, ROUTE_POST_Z, level,
+			Vector3(0.13, ROUTE_BOARD_Y + 0.38, 0.13), MapScene.Kind.METAL)
+		_put(origin, turn, side * ROUTE_POST_X, ROUTE_POST_Z + 0.08, level,
+			Vector3(2.2, 0.47, 0.09), MapScene.Kind.METAL, 0.0, ROUTE_BOARD_Y - 0.235)
 	# The flag.
 	_put(origin, turn, -4, -4, level, Vector3(0.15, 7.0, 0.15), MapScene.Kind.METAL)
 	var cloth := MapScene.Kind.BLUE_CLOTH if turn == 0.0 else MapScene.Kind.RED_CLOTH
 	_put(origin, turn, -4 + 0.85, -4, level, Vector3(1.6, 1.0, 0.04), cloth, 0.0, 5.8)
 
 
-## _house is a plastered house of width by depth with a flat roof, a door in
-## the wall the given way (0 south, 1 east, 2 north, 3 west of the house) and
-## windows in the other walls.
-func _house(origin: Vector3, turn: float, center: Vector2, width: float, depth: float, door: int, level: float) -> void:
-	const HEIGHT := 3.0
+## The village buildings have traversable interiors and sloped collision
+## that follows the visible roof. A door faces south, east, north or west.
+func _house(origin: Vector3, turn: float, center: Vector2, width: float, depth: float,
+		door: int, height: float, pitch: float, wall: int) -> void:
+	var level := VILLAGE_LEVEL
 	const THICK := 0.3
 	# A door lets a bot through: wider than its body and the margin of the mesh.
 	const DOOR := 1.8
@@ -262,36 +293,103 @@ func _house(origin: Vector3, turn: float, center: Vector2, width: float, depth: 
 				openings.append([length / 2.0, 1.1, 1.0, 2.0])
 		# Walls run along the side; the thickness lies inside the corners.
 		var inward := (center - (a + b) / 2.0).normalized() * THICK / 2.0
-		_wall(origin, turn, a + inward, b + inward, level - 0.3, HEIGHT + 0.3, THICK, MapScene.Kind.PLASTER,
+		_wall(origin, turn, a + inward, b + inward, level - 0.3, height + 0.3, THICK, wall,
 			openings.map(func(o: Array) -> Array: return [o[0], o[1], o[2] + 0.3 if o[2] > 0 else 0.0, o[3] + 0.3]))
-	_put(origin, turn, center.x, center.y, level, Vector3(width + 0.6, 0.3, depth + 0.6), MapScene.Kind.ROOF, 0.0, HEIGHT)
+	_pitched_roof(origin, turn, center, width, depth, level + height, pitch)
 
 
-## _village is four houses around a square with a well, garden fences, stone
-## walls and a cart.
+## Put a roof on the collision map, including its overhang and ridge beam.
+func _pitched_roof(origin: Vector3, turn: float, center: Vector2, width: float, depth: float,
+		eave: float, degrees: float) -> void:
+	var pitch := deg_to_rad(degrees)
+	var half_run := (depth + 0.65) * 0.25
+	var ridge := eave + 2.0 * half_run * tan(pitch)
+	const THICKNESS := 0.13
+	for side: float in [-1.0, 1.0]:
+		var at := _local(origin, turn, center.x, center.y + side * half_run)
+		at.y = (eave + ridge) * 0.5
+		var basis := Basis(Vector3.UP, turn) * Basis(Vector3.RIGHT, side * pitch)
+		_scene.add_box(Vector3((width + 0.74) * 0.5, THICKNESS, half_run / cos(pitch)),
+			at, basis, MapScene.Kind.SLATE)
+	_put(origin, turn, center.x, center.y, ridge - 0.16, Vector3(width + 0.85, 0.24, 0.22), MapScene.Kind.SLATE)
+	for end: float in [-1.0, 1.0]:
+		# Short boards under each gable. Narrow them toward the ridge.
+		var rise := ridge - eave
+		for band in 4:
+			var opening := depth * (1.0 - float(band + 1) / 5.0)
+			_put(origin, turn, center.x + end * (width * 0.5 - 0.10), center.y,
+				eave - 0.06, Vector3(0.15, rise / 4.0 + 0.05, opening),
+				MapScene.Kind.PLANKS, 0.0, rise * band / 4.0)
+
+
+## The customs house and courtyards form a covered route to the bridge.
 func _village(origin: Vector3, turn: float) -> void:
 	var level := VILLAGE_LEVEL
-	_house(origin, turn, Vector2(-9, -8), 7, 6, 1, level)
-	_house(origin, turn, Vector2(9, -9), 6, 8, 3, level)
-	_house(origin, turn, Vector2(-9, 8), 6, 7, 1, level)
-	_house(origin, turn, Vector2(10, 8), 8, 6, 3, level)
-	# The well in the square.
-	for side: float in [-1.0, 1.0]:
-		_put(origin, turn, side * 0.7, 0, level, Vector3(0.3, 0.8, 1.7), MapScene.Kind.CONCRETE)
-		_put(origin, turn, 0, side * 0.7, level, Vector3(1.1, 0.8, 0.3), MapScene.Kind.CONCRETE)
+	for house in CUSTOMS_HOUSES:
+		var footprint: Vector2 = house.footprint
+		_house(origin, turn, house.center, footprint.x, footprint.y, house.door, house.height, house.pitch, house.wall)
+	_customs_tower(origin, turn)
+	_put(origin, turn, 0, 1, level - 0.16, Vector3(7.3, 0.19, 8.0), MapScene.Kind.COBBLES)
+	_wall(origin, turn, Vector2(-11, -1), Vector2(-4.2, -1), level - 0.12,
+		1.18, 0.48, MapScene.Kind.MASONRY, [[2.7, 2.2, 0.0, 1.18]])
+	_wall(origin, turn, Vector2(4.3, -2), Vector2(12.5, -2), level - 0.12,
+		1.18, 0.48, MapScene.Kind.MASONRY, [[4.4, 2.2, 0.0, 1.18]])
+	_village_well(origin, turn, level)
 	# Stone walls round the village, with gaps for the ways in.
-	_wall(origin, turn, Vector2(-16, -15), Vector2(-4, -15), level, 1.0, 0.5, MapScene.Kind.CONCRETE)
-	_wall(origin, turn, Vector2(4, -15), Vector2(16, -15), level, 1.0, 0.5, MapScene.Kind.CONCRETE)
-	_wall(origin, turn, Vector2(-16, 15), Vector2(-5, 15), level, 1.0, 0.5, MapScene.Kind.CONCRETE)
-	_wall(origin, turn, Vector2(5, 15), Vector2(16, 15), level, 1.0, 0.5, MapScene.Kind.CONCRETE)
+	_wall(origin, turn, Vector2(-16, -15), Vector2(-4, -15), level, 1.0, 0.5, MapScene.Kind.MASONRY)
+	_wall(origin, turn, Vector2(4, -15), Vector2(16, -15), level, 1.0, 0.5, MapScene.Kind.MASONRY)
+	_wall(origin, turn, Vector2(-16, 15), Vector2(-5, 15), level, 1.0, 0.5, MapScene.Kind.MASONRY)
+	_wall(origin, turn, Vector2(5, 15), Vector2(16, 15), level, 1.0, 0.5, MapScene.Kind.MASONRY)
 	# Garden fences.
 	_wall(origin, turn, Vector2(-15, -3), Vector2(-15, 3), level, 1.1, 0.1, MapScene.Kind.PLANKS)
 	_wall(origin, turn, Vector2(15, -2), Vector2(15, 3), level, 1.1, 0.1, MapScene.Kind.PLANKS)
-	# A cart and hay.
-	_put(origin, turn, 3, 3.5, level, Vector3(1.6, 0.9, 2.8), MapScene.Kind.WOOD, 0.4)
-	_put(origin, turn, -4, 2.5, level, Vector3(1.4, 1.2, 1.4), MapScene.Kind.HAY, 0.2)
-	_put(origin, turn, -4.2, 4.2, level, Vector3(1.4, 1.2, 1.4), MapScene.Kind.HAY, -0.3)
-	_put(origin, turn, 4.5, -3.5, level, Vector3(1.0, 1.0, 1.0), MapScene.Kind.WOOD, 0.6)
+	# Stored cargo along the lane. Leave a straight line through the square.
+	_put(origin, turn, 3.0, 3.5, level, Vector3(1.20, 0.75, 1.34), MapScene.Kind.WOOD, 0.40)
+	_put(origin, turn, -4.0, 2.5, level, Vector3(1.34, 0.93, 1.25), MapScene.Kind.WOOD, 0.20)
+	_put(origin, turn, -4.2, 4.2, level, Vector3(1.44, 1.11, 1.36), MapScene.Kind.WOOD, -0.30)
+	_put(origin, turn, -4.1, 4.2, level, Vector3(0.82, 0.62, 0.94), MapScene.Kind.METAL, -0.16, 1.11)
+	_put(origin, turn, 4.5, -3.5, level, Vector3(1.0, 1.0, 1.0), MapScene.Kind.WOOD, 0.60)
+
+
+## A roofed stone well marks the courtyard and gives low cover.
+func _village_well(origin: Vector3, turn: float, level: float) -> void:
+	var center := CUSTOMS_WELL
+	for side in 8:
+		var angle := side * TAU / 8.0
+		var normal := Vector2(cos(angle), sin(angle))
+		var wall := center + normal * 0.79
+		_put(origin, turn, wall.x, wall.y, level - 0.05, Vector3(0.72, 0.80, 0.29),
+			MapScene.Kind.MASONRY, -angle + PI / 2.0)
+		_put(origin, turn, wall.x, wall.y, level + 0.75, Vector3(0.76, 0.12, 0.35),
+			MapScene.Kind.SLATE, -angle + PI / 2.0)
+	for side: float in [-1.0, 1.0]:
+		_put(origin, turn, center.x + side * 0.69, center.y, level + 0.78,
+			Vector3(0.16, 1.46, 0.19), MapScene.Kind.PLANKS)
+	_put(origin, turn, center.x, center.y, level + 1.54,
+		Vector3(1.39, 0.11, 0.14), MapScene.Kind.PLANKS)
+	_pitched_roof(origin, turn, center, 1.45, 1.36, level + 2.24, 32.0)
+
+
+## The attached observation tower gives the village a recognizable
+## silhouette from the camp gate and either riverbank.
+func _customs_tower(origin: Vector3, turn: float) -> void:
+	var center := CUSTOMS_TOWER
+	const WIDTH := 3.0
+	const HEIGHT := 6.15
+	var level := VILLAGE_LEVEL
+	_put(origin, turn, center.x, center.y, level - 0.25,
+		Vector3(WIDTH + 0.4, 0.55, WIDTH + 0.4), MapScene.Kind.MASONRY)
+	_put(origin, turn, center.x, center.y, level, Vector3(WIDTH, HEIGHT - 1.1, WIDTH), MapScene.Kind.MASONRY)
+	var half := WIDTH * 0.5
+	# Narrow openings under the roof read as a timber lookout around a small deck.
+	for side: float in [-1.0, 1.0]:
+		_wall(origin, turn, center + Vector2(-half, side * half), center + Vector2(half, side * half),
+			level + HEIGHT - 1.14, 1.14, 0.18, MapScene.Kind.PLANKS, [[half, 1.25, 0.33, 0.88]])
+		_wall(origin, turn, center + Vector2(side * half, -half), center + Vector2(side * half, half),
+			level + HEIGHT - 1.14, 1.14, 0.18, MapScene.Kind.PLANKS, [[half, 1.25, 0.33, 0.88]])
+	_put(origin, turn, center.x, center.y, level + HEIGHT - 1.18,
+		Vector3(WIDTH + 0.24, 0.16, WIDTH + 0.24), MapScene.Kind.PLANKS)
+	_pitched_roof(origin, turn, center, WIDTH, WIDTH, level + HEIGHT, 39.0)
 
 
 ## _hill_post is a concrete bunker on top of a hill, looking at the enemy
@@ -304,41 +402,84 @@ func _hill_post(origin: Vector3, turn: float) -> void:
 	_wall(origin, turn, Vector2(-3, -2.5), Vector2(-3, 2.5), level - 0.3, 2.8, 0.5, MapScene.Kind.CONCRETE, [[2.5, 1.2, 1.5, 1.9]])
 	_wall(origin, turn, Vector2(3, -2.5), Vector2(3, 2.5), level - 0.3, 2.8, 0.5, MapScene.Kind.CONCRETE, [[2.5, 1.2, 1.5, 1.9]])
 	_wall(origin, turn, Vector2(-3, 2.5), Vector2(3, 2.5), level - 0.3, 2.8, 0.5, MapScene.Kind.CONCRETE, [[3.0, 1.8, 0.0, 2.5]])
-	_put(origin, turn, 0, 0, level, Vector3(6.8, 0.4, 5.8), MapScene.Kind.CONCRETE, 0.0, 2.5)
+	_put(origin, turn, 0, 0, level, Vector3(6.4, 0.22, 5.4), MapScene.Kind.CONCRETE, 0.0, 2.5)
+	# Timber cap catches the eye above the trees, while the concrete hide
+	# keeps its slit and southern door usable.
+	_pitched_roof(origin, turn, Vector2.ZERO, 7.0, 5.8, level + 2.74, 25.0)
+	for side: float in [-1.0, 1.0]:
+		_put(origin, turn, side * 3.28, -2.62, level, Vector3(0.30, 2.75, 0.31), MapScene.Kind.PLANKS)
+		_put(origin, turn, side * 3.28, 2.62, level, Vector3(0.30, 2.75, 0.31), MapScene.Kind.PLANKS)
 	for side: float in [-1.0, 1.0]:
 		_wall(origin, turn, Vector2(side * 5, -5), Vector2(side * 8, -1), level, 1.0, 0.7, MapScene.Kind.SANDBAG)
 		_wall(origin, turn, Vector2(side * 1.5, -6.5), Vector2(side * 4.5, -6), level, 1.0, 0.7, MapScene.Kind.SANDBAG)
 		_put(origin, turn, side * 6, 3, level, Vector3(1.2, 1.2, 1.2), MapScene.Kind.WOOD, 0.3)
 
 
+## Leave the road clear, while the uphill side gives an infantry route under
+## cover of trunks and a short breastwork into the hill post.
+func _wooded_approach(sign: float) -> void:
+	var trees: Array[Vector2] = [
+		Vector2(53, 19), Vector2(58, 23), Vector2(67, 25), Vector2(60, 29),
+		Vector2(64, 34), Vector2(72, 36), Vector2(70, 43), Vector2(72, 49),
+		Vector2(64, 55), Vector2(58, 58), Vector2(52, 55), Vector2(50, 46),
+		Vector2(45, 44), Vector2(46, 37), Vector2(36, 38), Vector2(39, 33),
+		Vector2(33, 29), Vector2(39, 23),
+	]
+	for index in trees.size():
+		_tree(trees[index] * sign, 0.94 + (index % 4) * 0.09, true)
+	var turn := 0.0 if sign > 0 else PI
+	for offset: Vector2 in [Vector2(56, 25), Vector2(51, 34), Vector2(45, 41)]:
+		var at := _on_ground(Vector3(offset.x, 0, offset.y) * sign)
+		_put(at, turn, 0, 0, at.y - 0.18, Vector3(3.0, 1.28, 0.55),
+			MapScene.Kind.MASONRY, deg_to_rad(-23.0))
+
+
 ## _bridge is a stone bridge with parapets over the river at x.
 func _bridge(x: float) -> void:
 	var middle := river_z(x)
-	const HALF := 12.5
-	const DECK := 0.7
-	_scene.add_box(Vector3(2.2, 0.25, HALF), Vector3(x, DECK - 0.25, middle), Basis(), MapScene.Kind.CONCRETE)
+	_scene.add_box(Vector3(2.2, 0.25, BRIDGE_HALF), Vector3(x, BRIDGE_DECK - 0.25, middle), Basis(), MapScene.Kind.CONCRETE)
 	for side: float in [-1.0, 1.0]:
-		_scene.add_box(Vector3(0.2, 0.45, HALF - 1.5), Vector3(x + side * 2.0, DECK + 0.45, middle), Basis(), MapScene.Kind.CONCRETE)
-		_scene.add_box(Vector3(1.2, 1.4, 0.9), Vector3(x, DECK - 1.6, middle + side * 4), Basis(), MapScene.Kind.CONCRETE)
+		_scene.add_box(Vector3(0.2, 0.45, BRIDGE_HALF - 1.5), Vector3(x + side * 2.0, BRIDGE_DECK + 0.45, middle), Basis(), MapScene.Kind.MASONRY)
+		_scene.add_box(Vector3(1.2, 1.4, 0.9), Vector3(x, BRIDGE_DECK - 1.6, middle + side * 4), Basis(), MapScene.Kind.MASONRY)
+		for bank: float in [-1.0, 1.0]:
+			var head := Vector3(x + side * 2.02, BRIDGE_DECK + 0.53, middle + bank * (BRIDGE_HALF - 1.82))
+			_scene.add_box(Vector3(0.28, 0.53, 0.37), head, Basis(), MapScene.Kind.MASONRY)
+			_scene.add_box(Vector3(0.34, 0.095, 0.43), head + Vector3(0, 0.53, 0), Basis(), MapScene.Kind.SLATE)
 
 
-## _ruins are the broken walls of a mill by the ford.
-func _ruins(origin: Vector3, turn: float) -> void:
-	var level := _scene.terrain.height_at(origin.x, origin.z)
-	_wall(origin, turn, Vector2(-5, -4), Vector2(3, -4), level - 0.4, 2.6, 0.6, MapScene.Kind.CONCRETE, [[2.0, 1.2, 0.0, 2.6], [6.0, 1.0, 1.1, 2.6]])
-	_wall(origin, turn, Vector2(-5, -4), Vector2(-5, 3), level - 0.4, 1.8, 0.6, MapScene.Kind.CONCRETE, [[4.5, 1.6, 0.0, 1.8]])
-	_wall(origin, turn, Vector2(5, 0), Vector2(5, 4), level - 0.4, 1.3, 0.6, MapScene.Kind.CONCRETE)
-	_put(origin, turn, 1, 1.5, level - 0.2, Vector3(1.6, 0.8, 1.2), MapScene.Kind.ROCK, 0.5)
-	_put(origin, turn, -2, 2, level - 0.2, Vector3(1.0, 0.6, 1.4), MapScene.Kind.ROCK, -0.4)
+## The bank wall covers both staging bays. The inner walls turn the two
+## approaches so neither gate looks straight through the objective.
+func _ford_bank(turn: float) -> void:
+	var origin := Vector3.ZERO
+	var masonry := MapScene.Kind.MASONRY
+	var gate := FORD_GATE_Z
+	var lane := FORD_PASSAGE_X
+	_wall(origin, turn, Vector2(-12.8, gate), Vector2(12.8, gate), FORD_DECK, 2.55, 0.65,
+		masonry, [[12.8 - lane, 4.3, 0.0, 2.55], [12.8 + lane, 4.3, 0.0, 2.55]])
+	_wall(origin, turn, Vector2(-12.4, gate), Vector2(-12.4, 21.5), BANK_LEVEL - 0.1, 2.0, 0.55, masonry)
+	_wall(origin, turn, Vector2(12.4, gate), Vector2(12.4, 21.5), BANK_LEVEL - 0.1, 2.0, 0.55, masonry)
+	_wall(origin, turn, Vector2(-3.6, 20.6), Vector2(3.6, 20.6), BANK_LEVEL - 0.1, 2.0, 0.65, masonry)
+	_wall(origin, turn, Vector2(-10.9, gate), Vector2(-10.9, 6.4), FORD_DECK, 1.25, 0.56, masonry)
+	_wall(origin, turn, Vector2(10.9, gate), Vector2(10.9, 6.4), FORD_DECK, 1.25, 0.56, masonry)
+	_wall(origin, turn, Vector2(-3.45, 9.1), Vector2(3.45, 9.1), FORD_DECK, 2.25, 0.63, masonry)
+	_wall(origin, turn, Vector2(-10.75, 3.3), Vector2(-4.3, 5.0), FORD_DECK, 2.1, 0.63, masonry)
+	_wall(origin, turn, Vector2(4.6, 4.7), Vector2(10.75, 5.65), FORD_DECK, 1.55, 0.63, masonry)
+	_put(origin, turn, -10.3, 18.0, BANK_LEVEL - 0.1, Vector3(2.4, 1.1, 1.6), MapScene.Kind.WOOD, 0.14)
+	_put(origin, turn, 10.5, 19.2, BANK_LEVEL - 0.1, Vector3(1.9, 1.05, 2.0), MapScene.Kind.WOOD)
+	_put(origin, turn, -5.4, 26.6, BANK_LEVEL - 0.1, Vector3(3.0, 1.25, 1.2), MapScene.Kind.SANDBAG, -0.18)
+	_put(origin, turn, 4.7, 32.4, BANK_LEVEL - 0.2, Vector3(4.0, 1.55, 1.4), MapScene.Kind.SANDBAG, 0.30)
+	_put(origin, turn, 11.9, 27.2, BANK_LEVEL - 0.1, Vector3(2.0, 1.27, 2.1), MapScene.Kind.WOOD)
 
 
-## _ford lays stepping stones across the shallow middle of the river.
+## A single deck spans the channel, keeping the river visible downstream.
 func _ford() -> void:
-	for i in 3:
-		var at := Vector3(1.4 * sin(i * 1.7 + 0.4), 0, 1.25 + i * 2.5)
-		for sign: float in [1.0, -1.0]:
-			var stone := _on_ground(at * sign)
-			_scene.add_box(Vector3(0.5, 0.2, 0.45), stone + Vector3(0, 0.05, 0), Basis(Vector3.UP, i * 0.7 + (0.0 if sign > 0 else PI)), MapScene.Kind.ROCK)
+	_scene.add_box(Vector3(11.45, 0.29, 14.8), Vector3(0, FORD_DECK - 0.29, 0), Basis(), MapScene.Kind.COBBLES)
+	for side: float in [-1.0, 1.0]:
+		_wall(Vector3.ZERO, 0.0, Vector2(side * 11.2, -6.6), Vector2(side * 11.2, 6.6),
+			FORD_DECK, 1.0, 0.55, MapScene.Kind.MASONRY)
+		for column_z: float in [-4.7, 4.7]:
+			_put(Vector3.ZERO, 0.0, side * 10.0, column_z, RIVER_BED,
+				Vector3(2.2, FORD_DECK - RIVER_BED - 0.4, 1.2), MapScene.Kind.MASONRY)
 	var water := MapScene.Water.new()
 	water.center = Vector3(0, WATER_LEVEL, 0)
 	water.half_extents = Vector2(SIZE / 2.0, SIZE / 2.0)
@@ -354,13 +495,17 @@ func _boundary() -> void:
 
 func _roads() -> void:
 	var west := PackedVector2Array([Vector2(0, 62), Vector2(-24, 47), Vector2(-40, 30), Vector2(-45, 16),
-		Vector2(-45, river_z(-45)), Vector2(-45, -22), Vector2(-30, -48), Vector2(0, -62)])
+		Vector2(-45, river_z(-45)), Vector2(-45, -22), Vector2(-52, -36), Vector2(-40, -48), Vector2(-23, -55), Vector2(0, -62)])
 	var east := PackedVector2Array()
 	for point in west:
 		east.append(-point)
 	roads.append(west)
 	roads.append(east)
-	roads.append(PackedVector2Array([Vector2(0, 62), Vector2(2, 30), Vector2(0, 0), Vector2(-2, -30), Vector2(0, -62)]))
+	for side: float in [-1.0, 1.0]:
+		roads.append(PackedVector2Array([Vector2(0, 62 * side), Vector2(0, 43 * side),
+			Vector2(-FORD_PASSAGE_X, 23 * side), Vector2(-FORD_PASSAGE_X, FORD_GATE_Z * side)]))
+		roads.append(PackedVector2Array([Vector2(0, 43 * side),
+			Vector2(FORD_PASSAGE_X, 23 * side), Vector2(FORD_PASSAGE_X, FORD_GATE_Z * side)]))
 
 
 ## _nature scatters woods on the flanks, single trees, bushes and rocks over
@@ -419,7 +564,7 @@ func _clear(at: Vector2, margin: float) -> bool:
 	if absf(at.y - river_z(at.x)) < RIVER_HALF_WIDTH + margin * 0.5:
 		return false
 	for sign: float in [1.0, -1.0]:
-		for place: Array in [[BASE, 26.0], [VILLAGE, 22.0], [HILL, 13.0], [RUINS, 9.0]]:
+		for place: Array in [[BASE, 26.0], [VILLAGE, 22.0], [HILL, 13.0], [FORD_BANK, 17.0]]:
 			var center := Vector2(place[0].x, place[0].z) * sign
 			if at.distance_to(center) < place[1] + margin:
 				return false
@@ -437,13 +582,15 @@ func _objectives() -> void:
 		_scene.patches.append(MapScene.Zone.new("base", _on_ground(BASE * sign), 15))
 		_scene.patches.append(MapScene.Zone.new("square", _on_ground(VILLAGE * sign), 6))
 		_scene.patches.append(MapScene.Zone.new("post", _on_ground(HILL * sign), 7))
-		_scene.patches.append(MapScene.Zone.new("ruins", _on_ground(RUINS * sign), 5))
+		_scene.patches.append(MapScene.Zone.new("staging", _on_ground(FORD_BANK * sign), 10))
 		var side := "south" if sign > 0 else "north"
 		var village := "west village" if sign > 0 else "east village"
-		var bridge := "west bridge" if sign > 0 else "east bridge"
 		_scene.objectives.append(MapScene.Zone.new(village, _on_ground(VILLAGE * sign), 13))
 		_scene.objectives.append(MapScene.Zone.new("%s hill" % side, _on_ground(HILL * sign), 7))
-		_scene.objectives.append(MapScene.Zone.new("%s ruins" % side, _on_ground(RUINS * sign), 7))
-		var x := -BRIDGE_X * sign
-		_scene.objectives.append(MapScene.Zone.new(bridge, Vector3(x, 0.7, river_z(x)), 3))
-	_scene.objectives.append(MapScene.Zone.new("ford", _on_ground(Vector3.ZERO), 8))
+		_scene.objectives.append(MapScene.Zone.new("%s staging" % side, _on_ground(FORD_BANK * sign), 9))
+	_scene.flags = [
+		MapScene.Zone.new("West Bridge", Vector3(-BRIDGE_X, 0.7, river_z(-BRIDGE_X)), 5),
+		MapScene.Zone.new("Ford", Vector3(0.0, FORD_DECK, 0.0), FORD_RADIUS),
+		MapScene.Zone.new("East Bridge", Vector3(BRIDGE_X, 0.7, river_z(BRIDGE_X)), 5),
+	]
+	_scene.objectives.append_array(_scene.flags)

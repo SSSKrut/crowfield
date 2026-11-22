@@ -46,6 +46,7 @@ var received := 0
 
 var server_tick := 0
 var player := PlayerState.new()
+var match_state: MatchState
 ## soldiers are the soldiers the client knows, by slot.
 var soldiers := {}
 var baselines := Baselines.new()
@@ -62,6 +63,7 @@ var graph := NetGraph.new()
 ## failure tells why the session ended, or is empty while it runs.
 var failure := ""
 var _heard := 0.0
+var _uses_local_clock := false
 
 
 func _init(connection: Conn, player_name: String, accepted: Messages.Welcome, handshake_rtt: float) -> void:
@@ -71,6 +73,13 @@ func _init(connection: Conn, player_name: String, accepted: Messages.Welcome, ha
 	clock = InterpolationClock.new(accepted.snapshot_rate)
 	_heard = _now()
 	_set_clock(accepted.server_tick, handshake_rtt)
+
+
+## In solo play the client drives the embedded server from the same tick budget.
+## The memory transport delivers that command before the same server tick.
+func use_local_clock(next_tick: int) -> void:
+	tick = next_tick
+	_uses_local_clock = true
 
 
 func is_alive() -> bool:
@@ -195,6 +204,7 @@ func _apply(snapshot: Snapshot) -> bool:
 		return false
 	server_tick = snapshot.server_tick
 	player = snapshot.player
+	match_state = snapshot.match_state
 	clock.observe(snapshot.server_tick)
 	var own := local_soldier()
 	if own != null:
@@ -209,7 +219,7 @@ func _apply(snapshot: Snapshot) -> bool:
 ## Only snapshots of ticks whose commands were sent under the current clock
 ## count.
 func _keep_lead(at_tick: int) -> void:
-	if not player.processed or player.input_lead == PlayerState.NO_INPUT or at_tick < judge_from \
+	if _uses_local_clock or not player.processed or player.input_lead == PlayerState.NO_INPUT or at_tick < judge_from \
 			or tick < settle_until or (has_lead and at_tick == lead_tick):
 		return
 	var sample := float(player.input_lead)

@@ -4,6 +4,284 @@ extends TestCase
 ## soldiers drawn in the past.
 
 
+func test_grounded_boots_lift_only_leg_pose_on_a_slope() -> void:
+	var tree := Engine.get_main_loop() as SceneTree
+	await tree.process_frame
+	var asset := CharacterAsset.load_asset()
+	var view := asset.instantiate()
+	tree.root.add_child(view)
+	cleanup(view.free)
+	view.face(Vector3.ZERO, 0.0)
+	view.player.seek(0.0, true)
+	var ground := Terrain.create(6, func(x: float, z: float) -> float: return 0.75 * x + 0.24 * z)
+	var skeleton := view.skeleton
+	var highest_foot: int = asset.bones["Foot.R"]
+	var hip: int = asset.bones["Hips"]
+	var hand: int = asset.bones["Palm1.R"]
+	var hip_pose := skeleton.get_bone_global_pose(hip)
+	var hand_pose := skeleton.get_bone_global_pose(hand)
+	var rig := RagdollRig.build(asset, skeleton)
+	var initial := skeleton.global_transform * skeleton.get_bone_global_pose(highest_foot)
+	var before := GroundedFeet.sole_contact(initial, ground)
+	check(before.y < ground.height_at(before.x, before.z) - 0.055, "the uphill boot begins below the test slope")
+
+	view.set_foot_terrain(ground)
+	check(view.grounded_feet.active, "the visual modifier follows grounded detail")
+	view.grounded_feet.place_boots()
+	var applied := skeleton.global_transform * skeleton.get_bone_global_pose(highest_foot)
+	var after := GroundedFeet.sole_contact(applied, ground)
+	check(after.y > ground.height_at(after.x, after.z) - 0.015, "the boot clears the slope to the sole tolerance")
+	check(before.distance_squared_to(Vector3(after.x, before.y, after.z)) < 0.000004, "boot retains its horizontal contact")
+	check(initial.basis.is_equal_approx(applied.basis), "boot keeps its pitch and roll")
+	check_equal(skeleton.get_bone_global_pose(hip), hip_pose, "pelvis has the current animation")
+	check_equal(skeleton.get_bone_global_pose(hand), hand_pose, "weapon hand has the current animation")
+
+	view.set_foot_terrain(null)
+	check(not view.grounded_feet.active, "airborne and coarse models skip the correction")
+
+	view.player.seek(0.0, true)
+	view.set_foot_terrain(ground)
+	var pool := RagdollPool.new(rig, view.get_world_3d().space)
+	var fall := view.fall(pool, Vector3.ZERO, CharacterView.Strike.new(-1, Vector3.ZERO, Vector3.ZERO))
+	if check(fall, "an adjusted soldier still enters the ragdoll pool"):
+		var boot := RagdollRig.Part.FOOT_RIGHT
+		var frozen := view.ragdoll.transforms()[boot] * rig.parts[boot].to_part.affine_inverse()
+		check(frozen.is_equal_approx(applied), "ragdoll inherits the adjusted boot at death")
+		check(not view.grounded_feet.active, "ground correction ends at the ragdoll transition")
+		view.stand_up()
+		check_equal(pool.lent(), 0, "standing up returns the ragdoll to the pool")
+	pool.close()
+
+
+func test_armed_pose_tracks_both_grips_and_keeps_the_stance_height() -> void:
+	var tree := Engine.get_main_loop() as SceneTree
+	await tree.process_frame
+	var weapons := ViewModel.new()
+	tree.root.add_child(weapons)
+	cleanup(weapons.free)
+	var asset := CharacterAsset.load_asset()
+	var view := asset.instantiate()
+	tree.root.add_child(view)
+	cleanup(view.free)
+	view.set_detail(false)
+	view.face(Vector3(5, 2, 10), 0.71)
+	var skeleton := view.skeleton
+	var head: int = asset.bones["Head_2"]
+	var crown := Vector3(0, 0.239, -0.011)
+	for stance in [
+		Vector3.ZERO, Vector3(4.25, 0, 0), Vector3(6.65, 0, 0),
+		Vector3(0, 1, 0), Vector3(1.67, 1, 0), Vector3(0, 0, 1), Vector3(0, 1, 1),
+	]:
+		var crouched: bool = stance.y > 0
+		view.animate(0.3, stance.x, crouched, stance.z > 0)
+		var limit: float = (Hitboxes.CROUCH_B[0].y + Hitboxes.CROUCH_RADII[0]) if crouched else (Hitboxes.B[0].y + Hitboxes.RADII[0])
+		for phase: float in [0.0, 0.23, 0.48, 0.65, 0.88]:
+			for kind in [WeaponTuning.Kind.ASSAULT_RIFLE, WeaponTuning.Kind.RIFLE, WeaponTuning.Kind.PISTOL]:
+				for pitch: float in [-0.75, 0.0, 0.75]:
+					skeleton.reset_bone_poses()
+					view.player.seek(view.player.current_animation_length * phase, true)
+					var carried := view.carry(weapons, kind, pitch)
+					view.armed_pose.apply_pose()
+					for side: String in ["R", "L"]:
+						var support := side == "L"
+						var contact := InfantryMesh.SUPPORT_CONTACT if support else InfantryMesh.TRIGGER_CONTACT
+						var palm := skeleton.get_bone_global_pose(asset.bones["Palm1." + side])
+						var aim := carried * weapons.held_grip(kind, support)
+						var actual := skeleton.global_transform * (palm * contact)
+						check(aim.distance_to(actual) < 0.025,
+							"%s must reach %s at %.2f pitch and %.2f phase in %s (gap %.3f)" % [side, kind, pitch, phase, view.player.current_animation, aim.distance_to(actual)])
+					var y := (skeleton.get_bone_global_pose(head) * crown).y
+					check(y < limit + 0.015 and y > limit - 0.17, "%s crown %.3f tracks hitbox %.3f" % [view.player.current_animation, y, limit])
+
+	skeleton.reset_bone_poses()
+	view.player.seek(0, true)
+	var steady := view.carry(weapons, WeaponTuning.Kind.ASSAULT_RIFLE, 0.0)
+	var looking_up := view.carry(weapons, WeaponTuning.Kind.ASSAULT_RIFLE, 0.42)
+	var looking_down := view.carry(weapons, WeaponTuning.Kind.ASSAULT_RIFLE, -0.42)
+	check(-looking_up.basis.z.y > 0.25 and -looking_down.basis.z.y < -0.25,
+		"the muzzle follows the slope of aim in both directions")
+	view.fired()
+	var recoil := view.carry(weapons, WeaponTuning.Kind.ASSAULT_RIFLE, 0.0)
+	check(recoil.origin.distance_to(steady.origin) > 0.035, "a shot moves the carried weapon")
+	check(recoil.basis.z.y < steady.basis.z.y, "a shot tips the barrel upward")
+
+	for crouched: bool in [false, true]:
+		view.animate(0.3, 0.0, crouched, true)
+		skeleton.reset_bone_poses()
+		view.player.seek(view.player.current_animation_length * 0.24, true)
+		var shouldered := view.carry(weapons, WeaponTuning.Kind.ASSAULT_RIFLE, 0.0)
+		view.armed_pose.apply_pose()
+		var eye := skeleton.global_transform * (skeleton.get_bone_global_pose(head) * Vector3(-0.032, 0.11, 0.105))
+		var rear_sight := shouldered * Vector3(0, -0.008, 0.05)
+		var bore := -shouldered.basis.z.normalized()
+		var eye_offset := eye - rear_sight
+		check((eye_offset - eye_offset.dot(bore) * bore).length() < 0.09, "aim brings the sight to the eyeline")
+
+	view.animate(0.3, 0.0)
+	view.player.seek(0, true)
+	var ready := view.carry(weapons, WeaponTuning.Kind.ASSAULT_RIFLE, 0.0)
+	view.fired()
+	var first_shot := view.carry(weapons, WeaponTuning.Kind.ASSAULT_RIFLE, 0.0)
+	check(first_shot.origin.y > ready.origin.y + 0.11, "the first shot comes from a raised weapon")
+	check(absf(first_shot.basis.z.y) < 0.07, "the first shot from ready is aligned with the aim")
+
+
+func test_valley_ambience_tracks_the_water_and_respects_mute() -> void:
+	var root := (Engine.get_main_loop() as SceneTree).root
+	await root.get_tree().process_frame
+	var sounds := Sounds.new(1.0)
+	var muted := Sounds.new(0.0)
+	root.add_child(sounds)
+	root.add_child(muted)
+	cleanup(func() -> void:
+		sounds.free()
+		muted.free())
+	sounds.start_ambience(MapScene.prototype())
+	check(sounds.get_node_or_null("ValleyWind") == null, "the practice map has no wind loop")
+	check(sounds.get_node_or_null("ValleyRiver") == null, "the practice map has no river loop")
+	var valley := MapScene.named("valley")
+	muted.start_ambience(valley)
+	check_equal(muted.get_child_count(), 0, "muted games create no audio players")
+
+	sounds.start_ambience(valley)
+	var wind := sounds.get_node_or_null("ValleyWind") as AudioStreamPlayer
+	var river := sounds.get_node_or_null("ValleyRiver") as AudioStreamPlayer3D
+	if not check(wind != null and river != null, "Valley has both ambient voices"):
+		return
+	check((wind.stream as AudioStreamOggVorbis).loop, "wind loops")
+	check((river.stream as AudioStreamOggVorbis).loop, "river loops")
+	var voices := sounds.get_child_count()
+	sounds.start_ambience(valley)
+	check_equal(sounds.get_child_count(), voices, "starting twice keeps just one pair of voices")
+	var x := 42.0
+	var source := Vector3(x, valley.waters[0].center.y, ValleyMap.river_z(x))
+	sounds.update_ambience(source + Vector3(0, 2, 4), 1.0)
+	check_equal(river.global_position, source, "river follows the meandering water line")
+	check(river.volume_db > -20.0, "river plays at the bank")
+	sounds.update_ambience(source + Vector3(0, 2, 50), 1.0)
+	check(river.volume_db <= -79.0, "the river falls silent away from water")
+
+
+func test_reload_audio_tracks_visible_contacts_without_repeating() -> void:
+	var tree := Engine.get_main_loop() as SceneTree
+	await tree.process_frame
+	var sounds := Sounds.new(1.0)
+	tree.root.add_child(sounds)
+	cleanup(sounds.free)
+	var rifle := WeaponTuning.Kind.ASSAULT_RIFLE
+	var ready := Arsenal.Action.READY
+	var reload := Arsenal.Action.RELOADING
+	var release := ViewModel.RELOAD_RELEASE_PROGRESS
+	var seat := ViewModel.RELOAD_SEAT_PROGRESS
+	sounds.weapon(rifle, Arsenal.EVENT_RELOAD_STARTED)
+	check(not sounds._magazine_out.playing, "start alone no longer makes the release sound")
+	sounds.update_reload(rifle, reload, release - 0.01, Arsenal.EVENT_RELOAD_STARTED)
+	check(not sounds._magazine_out.playing, "a cue waits for the visible contact")
+	sounds.update_reload(rifle, reload, release, 0)
+	check(sounds._magazine_out.playing, "extraction plays at its animation contact")
+	sounds._magazine_out.stop()
+	sounds.update_reload(rifle, reload, release - 0.03, 0)
+	sounds.update_reload(rifle, reload, release + 0.02, 0)
+	check(not sounds._magazine_out.playing, "rewinding through a predicted contact stays quiet")
+	sounds.update_reload(rifle, reload, seat, 0)
+	check(sounds._magazine_in.playing, "seating plays before the action completes")
+	sounds._magazine_in.stop()
+	sounds.update_reload(rifle, ready, 0.0, Arsenal.EVENT_RELOADED)
+	sounds.update_reload(rifle, reload, seat + 0.05, 0)
+	check(not sounds._magazine_in.playing, "a correction across completion cannot repeat the seating click")
+	sounds.weapon(rifle, Arsenal.EVENT_RELOADED)
+	check(not sounds._magazine_in.playing, "completion no longer plays a second click")
+
+	sounds.update_reload(rifle, reload, seat + 0.08, Arsenal.EVENT_RELOAD_STARTED)
+	check(sounds._magazine_in.playing and not sounds._magazine_out.playing, "a skipped interval plays its latest contact")
+	sounds._magazine_in.stop()
+	sounds.update_reload(rifle, reload, release, Arsenal.EVENT_RELOAD_STARTED)
+	check(sounds._magazine_out.playing, "a subsequent reload cues its own release")
+	sounds.update_reload(WeaponTuning.Kind.PISTOL, Arsenal.Action.EQUIPPING, seat, Arsenal.EVENT_EQUIP_STARTED)
+	check(not sounds._magazine_in.playing, "an interrupted reload has no scheduled seating cue")
+
+
+func test_remote_shots_behind_cover_filter_and_reuse_voices() -> void:
+	var tree := Engine.get_main_loop() as SceneTree
+	await tree.process_frame
+	var scene := Node3D.new()
+	tree.root.add_child(scene)
+	cleanup(scene.free)
+	var camera := Camera3D.new()
+	scene.add_child(camera)
+	camera.make_current()
+	var wall := StaticBody3D.new()
+	wall.collision_layer = Game.LAYER_STATIC
+	wall.position = Vector3(0, 0, -3)
+	var shape := CollisionShape3D.new()
+	var box := BoxShape3D.new()
+	box.size = Vector3(4, 3, 0.5)
+	shape.shape = box
+	wall.add_child(shape)
+	scene.add_child(wall)
+	var sounds := Sounds.new(1.0)
+	scene.add_child(sounds)
+	await tree.physics_frame
+	await tree.process_frame
+	var kind := WeaponTuning.Kind.ASSAULT_RIFLE
+	var blocked := Vector3(0, 0, -6)
+	sounds.shot_at(kind, blocked)
+	var first := sounds._positional[0]
+	check_equal(first.attenuation_filter_cutoff_hz, Sounds.COVER_FILTER_HZ, "solid cover filters the report")
+	sounds._next_positional = 0
+	sounds.shot_at(kind, -blocked)
+	check_equal(first.attenuation_filter_cutoff_hz, Sounds.DIRECT_FILTER_HZ, "the next clear shot resets a reused voice")
+	var direct_gain := first.volume_db
+	sounds._next_positional = 0
+	sounds.shot_at(kind, blocked)
+	check(first.volume_db < direct_gain - 4.0, "a blocked report is quieter at the same distance")
+	sounds._next_positional = 0
+	sounds.impact_at(Vector3(1, 0, -1))
+	check_equal(first.attenuation_filter_cutoff_hz, Sounds.DIRECT_FILTER_HZ, "an impact resets a reused voice")
+
+	for index in Sounds.SHOT_COVER_RAYS_PER_FRAME:
+		sounds.shot_at(kind, blocked)
+	check_equal(sounds._shot_cover_rays, Sounds.SHOT_COVER_RAYS_PER_FRAME, "a single frame has a bounded ray budget")
+	var overflow := sounds._positional[sounds._next_positional]
+	sounds.shot_at(kind, blocked)
+	check_equal(overflow.attenuation_filter_cutoff_hz, Sounds.DIRECT_FILTER_HZ, "overflow still has a positional report")
+	var previous_frame := sounds._shot_cover_frame
+	await tree.process_frame
+	sounds.shot_at(kind, blocked * 200)
+	check_equal(sounds._shot_cover_frame, previous_frame, "an inaudible shot does not open a new ray budget")
+	sounds.shot_at(kind, blocked)
+	check_equal(sounds._shot_cover_rays, 1, "the next frame restores its ray budget")
+
+
+func test_remote_spatial_reports_use_distinct_distance_edits() -> void:
+	var tree := Engine.get_main_loop() as SceneTree
+	await tree.process_frame
+	var scene := Node3D.new()
+	tree.root.add_child(scene)
+	cleanup(scene.free)
+	var camera := Camera3D.new()
+	scene.add_child(camera)
+	camera.make_current()
+	var sounds := Sounds.new(1.0)
+	scene.add_child(sounds)
+	var kind := WeaponTuning.Kind.RIFLE
+	for distance: float in [8.0, 32.0, 72.0]:
+		sounds.shot_at(kind, Vector3(0, 0, -distance))
+	var near := sounds._positional[0]
+	var middle := sounds._positional[1]
+	var far := sounds._positional[2]
+	check_equal(near.stream, Sounds.GUNSHOTS[kind], "the close cue has the original attack")
+	check_equal(middle.stream, Sounds.MID_REPORTS[kind], "middle range has a separate report")
+	check_equal(far.stream, Sounds.FAR_REPORTS[kind], "distant cue has a separate report")
+	check(far.stream.get_length() > middle.stream.get_length() and middle.stream.get_length() > near.stream.get_length(),
+		"the outdoor reflections add natural decay time with distance")
+	check(far.volume_db < middle.volume_db and middle.volume_db < near.volume_db,
+		"each report still falls off with distance")
+	check_equal(sounds._next_positional, 3, "each shot uses only one spatial voice")
+	sounds.weapon(kind, Arsenal.EVENT_FIRED)
+	check_equal(sounds._shots[kind][0].stream, near.stream, "the local trigger retains its immediate cue")
+
+
 func test_embedded_clock_ignores_time_spent_loading_the_map() -> void:
 	var tree := Engine.get_main_loop() as SceneTree
 	await tree.process_frame
@@ -119,6 +397,43 @@ func test_remote_soldier_stays_on_the_floor_and_turns_the_short_way() -> void:
 ## A soldier seen a second apart, running and then dead: it is drawn alive
 ## along the way and dies where the server has it dead, at the tick of that
 ## state, with the momentum it ran with.
+func test_remote_footsteps_follow_grounded_render_samples() -> void:
+	var remote := RemoteSoldier.new()
+	remote.add(0, _soldier(Vector3.ZERO, Vector3.ZERO, true, true))
+	remote.add(6, _soldier(Vector3.UP, Vector3.ZERO))
+	remote.add(12, _soldier(Vector3.ZERO, Vector3.ZERO, true, true))
+	for sample in [[0.0, true], [5.5, true], [6.0, false], [11.9, false], [12.0, true], [20.0, true]]:
+		remote.evaluate(sample[0])
+		check_equal(remote.grounded, sample[1], "grounded at render tick %s" % sample[0])
+
+
+func test_remote_footsteps_require_continuous_nearby_ground_travel() -> void:
+	var entry := SoldierViews.Entry.new()
+	var remote := RemoteSoldier.new()
+	remote.grounded = true
+	check(not entry.footstep_due(remote, 0.5, 0.1, true), "first sample made a step")
+	for step in range(1, 5):
+		remote.position.x = step * 0.4
+		check_equal(entry.footstep_due(remote, 0.5, 0.1, true), step == 4, "walking sample %d" % step)
+	remote.position = Vector3(10, 0, 0)
+	check(not entry.footstep_due(remote, 0.5, 0.1, true), "teleport made a step")
+	remote.grounded = false
+	remote.position.x += 0.8
+	check(not entry.footstep_due(remote, 0.5, 0.1, true), "airborne soldier made a step")
+	remote.grounded = true
+	remote.position.x += 0.8
+	check(not entry.footstep_due(remote, 0.5, 0.1, true), "landing reused airborne travel")
+	remote.position.x += 0.8
+	check(not entry.footstep_due(remote, 0.5, 0.1, false), "distant soldier made a step")
+	remote.position.x += 0.8
+	check(not entry.footstep_due(remote, 0.5, 0.1, true), "re-entry reused distant travel")
+	for i in 12:
+		remote.position.x += 0.1
+		check(not entry.footstep_due(remote, 0.0, 0.1, true), "stationary correction made a step")
+	remote.position.x += 0.4
+	check(not entry.footstep_due(remote, 0.5, 0.1, true), "movement reused stationary corrections")
+
+
 func test_remote_soldier_dies_where_it_died() -> void:
 	var remote := RemoteSoldier.new()
 	var run := Vector3(5, 0, 0)

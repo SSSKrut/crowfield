@@ -2,9 +2,10 @@ class_name Effects
 extends Node3D
 ## Effects are what shots leave in the world: tracers, bullet holes, the dust
 ## they kick up, the flashes of other soldiers' shots and the sparks of hits on
-## soldiers; the smoke behind a rocket, and blasts: a fireball, a flash of
-## light, flying sparks and a cloud of smoke. They are cosmetic; where a shot hits is the server's call, and the
-## client only shows its own guess of the wall it struck. Pools have limits
+## soldiers, plus smoke from the local weapon; the smoke behind a rocket, and
+## blasts: a fireball, a flash of light, flying sparks and a cloud of smoke.
+## These effects are cosmetic. The server decides what was hit. The client
+## estimates where to draw marks. Pools have limits
 ## (ARCHITECTURE.md, 10.3): past a limit the oldest gives way.
 ##
 ## The app calls update once a frame; every pool is drawn by one multimesh.
@@ -13,6 +14,9 @@ const MAX_TRACERS := 64
 const MAX_IMPACTS := 128
 const MAX_SPARKS := 256
 const MAX_FLASHES := 32
+const MAX_MUZZLE_PUFFS := 8
+const MUZZLE_SMOKE_TIME := 0.50
+const MUZZLE_SMOKE_MASK := preload("res://assets/effects/muzzle-smoke.png")
 ## A tracer is a streak TRACER_LENGTH long flying at TRACER_SPEED, thinner at
 ## its tail than at its head.
 const TRACER_SPEED := 400.0
@@ -33,8 +37,8 @@ const FLASH_RADIUS := 0.07
 const TRACER_COLOR := Color8(255, 214, 140, 210)
 const IMPACT_COLOR := Color8(28, 26, 24, 255)
 const SPARK_COLORS := [Color8(170, 160, 140), Color8(130, 120, 105), Color8(255, 200, 110)]
-## A bullet strikes sparks from a robot.
-const HIT_COLORS := [Color8(255, 220, 120), Color8(255, 150, 60), Color8(80, 80, 85)]
+## A short, readable spray of dust and gear chips marks contact.
+const HIT_COLORS := [Color8(232, 203, 157), Color8(189, 158, 116), Color8(105, 104, 96)]
 const FLASH_COLOR := Color8(255, 200, 110)
 const MAX_PUFFS := 256
 const MAX_FIREBALLS := 16
@@ -55,6 +59,7 @@ var _tracer_direction := PackedVector3Array()
 var _tracer_length := PackedFloat32Array()
 var _tracer_flown := PackedFloat32Array()
 var _impact_position := PackedVector3Array()
+var _impact_normal := PackedVector3Array()
 var _impact_age := PackedFloat32Array()
 var _spark_position := PackedVector3Array()
 var _spark_velocity := PackedVector3Array()
@@ -75,6 +80,9 @@ var _fireball_size := PackedFloat32Array()
 var _lights: Array[OmniLight3D] = []
 var _light_age := PackedFloat32Array()
 var _next_light := 0
+var _muzzle_puff_position := PackedVector3Array()
+var _muzzle_puff_velocity := PackedVector3Array()
+var _muzzle_puff_age := PackedFloat32Array()
 
 var _tracers: MultiMesh
 var _impacts: MultiMesh
@@ -82,6 +90,7 @@ var _sparks: MultiMesh
 var _flashes: MultiMesh
 var _puffs: MultiMesh
 var _fireballs: MultiMesh
+var _muzzle_puffs: MultiMesh
 
 
 func _init() -> void:
@@ -110,12 +119,12 @@ func _init() -> void:
 	puff.height = 2.0
 	puff.radial_segments = 10
 	puff.rings = 5
-	var smoke := StandardMaterial3D.new()
-	smoke.vertex_color_use_as_albedo = true
-	smoke.vertex_color_is_srgb = true
-	smoke.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	smoke.roughness = 1.0
-	_puffs = _pool(puff, MAX_PUFFS, smoke)
+	var cloud := StandardMaterial3D.new()
+	cloud.vertex_color_use_as_albedo = true
+	cloud.vertex_color_is_srgb = true
+	cloud.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	cloud.roughness = 1.0
+	_puffs = _pool(puff, MAX_PUFFS, cloud)
 	for i in BLAST_LIGHTS:
 		var light := OmniLight3D.new()
 		light.light_color = Color8(255, 180, 100)
@@ -125,6 +134,12 @@ func _init() -> void:
 		add_child(light)
 		_lights.append(light)
 		_light_age.append(BLAST_LIGHT_TIME)
+	var smoke := _material(false, true)
+	smoke.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	smoke.billboard_keep_scale = true
+	smoke.albedo_texture = MUZZLE_SMOKE_MASK
+	smoke.texture_repeat = false
+	_muzzle_puffs = _pool(QuadMesh.new(), MAX_MUZZLE_PUFFS, smoke)
 
 
 ## warm_up lets the Compatibility renderer draw every pool before combat.
@@ -133,7 +148,7 @@ func _init() -> void:
 ## themselves sit behind the camera until update replaces them.
 func warm_up(camera: Camera3D) -> void:
 	var transform := Transform3D(Basis(), camera.to_global(Vector3(0, 0, 2)))
-	for pool: MultiMesh in [_tracers, _impacts, _sparks, _flashes, _fireballs, _puffs]:
+	for pool: MultiMesh in [_tracers, _impacts, _sparks, _flashes, _muzzle_puffs, _fireballs, _puffs]:
 		pool.set_instance_transform(0, transform)
 		pool.set_instance_color(0, Color.TRANSPARENT)
 		pool.visible_instance_count = 1
@@ -148,6 +163,18 @@ func flash(muzzle: Vector3) -> void:
 	_flash_age.append(0.0)
 
 
+## Start a world-space puff beyond the local muzzle. The pool
+## replaces the oldest puff when several shots arrive in one frame.
+func puff_muzzle(muzzle: Vector3, direction: Vector3) -> void:
+	if _muzzle_puff_position.size() == MAX_MUZZLE_PUFFS:
+		_muzzle_puff_position.remove_at(0)
+		_muzzle_puff_velocity.remove_at(0)
+		_muzzle_puff_age.remove_at(0)
+	_muzzle_puff_position.append(muzzle + direction * 0.075)
+	_muzzle_puff_velocity.append(direction * 0.35 + Vector3.UP * 0.19)
+	_muzzle_puff_age.append(0.0)
+
+
 ## hit throws sparks off a soldier struck at point by a shot travelling along
 ## direction.
 func hit(point: Vector3, direction: Vector3) -> void:
@@ -159,7 +186,7 @@ func hit(point: Vector3, direction: Vector3) -> void:
 
 ## shot adds the tracer of a shot from the muzzle to where it ends, and a hole
 ## with dust when it struck something there.
-func shot(muzzle: Vector3, end: Vector3, struck: bool) -> void:
+func shot(muzzle: Vector3, end: Vector3, struck: bool, normal := Vector3.ZERO) -> void:
 	var path := end - muzzle
 	var length := path.length()
 	if length > 0.5:
@@ -171,19 +198,23 @@ func shot(muzzle: Vector3, end: Vector3, struck: bool) -> void:
 		_tracer_from.append(muzzle)
 		_tracer_direction.append(path / length)
 		_tracer_length.append(length)
-		_tracer_flown.append(0.0)
+		_tracer_flown.append(-1.0)
 	if not struck:
 		return
 	if _impact_position.size() == MAX_IMPACTS:
 		_impact_position.remove_at(0)
+		_impact_normal.remove_at(0)
 		_impact_age.remove_at(0)
-	_impact_position.append(end)
+	var back := -path.normalized()
+	if normal == Vector3.ZERO:
+		normal = back if back != Vector3.ZERO else Vector3.UP
+	_impact_position.append(end + normal * 0.003)
+	_impact_normal.append(normal)
 	_impact_age.append(0.0)
-	var back := path * (-1.0 / maxf(length, 1e-3))
 	for i in SPARKS_PER_HIT:
 		var scatter := Vector3(random.randf() * 2 - 1, random.randf() * 2 - 1, random.randf() * 2 - 1)
-		var velocity := back * (1.5 + 2 * random.randf()) + scatter * 1.2 + Vector3.UP
-		_spark(end, velocity, SPARK_COLORS[random.randi_range(0, SPARK_COLORS.size() - 1)])
+		var velocity := normal * (1.2 + 2.2 * random.randf()) + back * 0.4 + scatter * 1.2 + Vector3.UP
+		_spark(end + normal * 0.025, velocity, SPARK_COLORS[random.randi_range(0, SPARK_COLORS.size() - 1)])
 
 
 ## trail leaves a puff of the smoke behind a rocket.
@@ -247,20 +278,27 @@ func _spark(at: Vector3, velocity: Vector3, color: Color) -> void:
 
 ## update advances every effect by a frame, drops the finished ones and shows
 ## the rest.
-func update(delta: float) -> void:
+func update(delta: float, show_muzzle_smoke := true) -> void:
 	_update_tracers(delta)
 	_update_impacts(delta)
 	_update_sparks(delta)
 	_update_flashes(delta)
 	_update_puffs(delta)
 	_update_fireballs(delta)
+	_update_muzzle_smoke(delta, show_muzzle_smoke)
 
 
 func _update_tracers(delta: float) -> void:
 	var kept := 0
 	for i in _tracer_from.size():
-		var flown := _tracer_flown[i] + TRACER_SPEED * delta
-		if flown - TRACER_LENGTH >= _tracer_length[i]:
+		var previous := _tracer_flown[i]
+		var length := _tracer_length[i]
+		var flown := maxf(0.0, previous) + TRACER_SPEED * delta
+		# Always draw a short-range tracer for one frame, even if the first
+		# frame's delta covers its entire flight before the render starts.
+		if previous < 0.0:
+			flown = clampf(flown, 0.02, length)
+		elif flown - TRACER_LENGTH >= length:
 			continue
 		_tracer_from[kept] = _tracer_from[i]
 		_tracer_direction[kept] = _tracer_direction[i]
@@ -296,14 +334,21 @@ func _update_impacts(delta: float) -> void:
 		var age := _impact_age[i] + delta
 		if age >= IMPACT_LIFETIME:
 			continue
+		var normal := _impact_normal[i]
 		_impact_position[kept] = _impact_position[i]
+		_impact_normal[kept] = normal
 		_impact_age[kept] = age
 		var tint := IMPACT_COLOR
 		tint.a = minf(1.0, IMPACT_LIFETIME - age)
-		_impacts.set_instance_transform(kept, Transform3D(Basis.from_scale(Vector3.ONE * IMPACT_SIZE), _impact_position[i]))
+		var helper := Vector3.UP if absf(normal.y) < 0.99 else Vector3.RIGHT
+		var right := helper.cross(normal).normalized()
+		var tangent := right.cross(normal)
+		var basis := Basis(right * IMPACT_SIZE, normal * 0.005, tangent * IMPACT_SIZE)
+		_impacts.set_instance_transform(kept, Transform3D(basis, _impact_position[i]))
 		_impacts.set_instance_color(kept, tint)
 		kept += 1
 	_impact_position.resize(kept)
+	_impact_normal.resize(kept)
 	_impact_age.resize(kept)
 	_impacts.visible_instance_count = kept
 
@@ -347,6 +392,29 @@ func _update_flashes(delta: float) -> void:
 	_flash_position.resize(kept)
 	_flash_age.resize(kept)
 	_flashes.visible_instance_count = kept
+
+
+func _update_muzzle_smoke(delta: float, shown: bool) -> void:
+	var kept := 0
+	for i in _muzzle_puff_position.size():
+		var age := _muzzle_puff_age[i] + delta
+		if age >= MUZZLE_SMOKE_TIME:
+			continue
+		var velocity := _muzzle_puff_velocity[i]
+		var position := _muzzle_puff_position[i] + velocity * delta
+		_muzzle_puff_position[kept] = position
+		_muzzle_puff_velocity[kept] = velocity
+		_muzzle_puff_age[kept] = age
+		if shown:
+			var size := 0.11 + age * 0.29
+			var alpha := 0.23 * smoothstep(0.0, 0.055, age) * (1.0 - smoothstep(0.10, MUZZLE_SMOKE_TIME, age))
+			_muzzle_puffs.set_instance_transform(kept, Transform3D(Basis.from_scale(Vector3.ONE * size), position))
+			_muzzle_puffs.set_instance_color(kept, Color(0.70, 0.73, 0.71, alpha))
+		kept += 1
+	_muzzle_puff_position.resize(kept)
+	_muzzle_puff_velocity.resize(kept)
+	_muzzle_puff_age.resize(kept)
+	_muzzle_puffs.visible_instance_count = kept if shown else 0
 
 
 ## _pool makes the multimesh of a pool, drawn by a child of the node.

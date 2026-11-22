@@ -15,23 +15,32 @@ extends Node3D
 ## left asks to end the game: the player chose to leave, with an empty
 ## message, or the game failed, with the reason.
 signal left(message: String)
+signal replay_requested
+
+var allow_solo_replay := false
 
 const RECONNECT_WINDOW := 60.0
 const HELP_LINES := [
-	"WASD move | Space jump | Shift sprint | LMB fire | RMB aim | R reload | 1-7, wheel weapon",
+	"WASD move | Space jump | C crouch | Shift sprint | LMB fire | RMB aim | R reload | 1-7, wheel weapon",
 	"K ragdoll | Backspace respawn | L knock down nearest | F1 physics | F2 network | F3 camera | Esc menu",
 	"F4 save playtest state | Shift+F4 save state and screenshot",
 ]
 enum PlaytestCapture { NONE, STATE, IMAGE }
 const PLAYTEST_DIR := "user://playtests"
 const FRAME_DIAGNOSTIC_WINDOW_USEC := 1000000
+const MUZZLE_SMOKE_AIM_LIMIT := 0.55
+const PERFORMANCE_MAX_PIXELS := 1600.0 * 900.0
+const PERFORMANCE_MAX_SCALE := 0.85
+const PERFORMANCE_SHADOW_DISTANCE := 45.0
+const BENCHMARK_MAX_SECONDS := 120.0
+const BENCHMARK_MAX_SAMPLES := 262144
 const GAME_MENU := preload("res://menu/game_menu.tscn")
 const PlaytestTrace := preload("res://client/playtest_trace.gd")
 const NATIVE_INPUT_EXTENSION := "res://.godot/playtest-native/native-input.gdextension"
 const NATIVE_INPUT_PATH_ENV := "CROWFIELD_NATIVE_INPUT_PATH"
 const NATIVE_INPUT_GAMEPLAY_ENV := "CROWFIELD_NATIVE_INPUT_GAMEPLAY"
 const MOVE_ACTIONS := ["move_forward", "move_back", "move_left", "move_right"]
-const HELD_ACTIONS := MOVE_ACTIONS + ["jump", "sprint", "fire", "aim"]
+const HELD_ACTIONS := MOVE_ACTIONS + ["jump", "crouch", "sprint", "fire", "aim"]
 const TRACE_ACTIONS := HELD_ACTIONS + ["reload", "weapon_1", "weapon_2", "weapon_3", "weapon_4", "weapon_5", "weapon_6",
 	"weapon_7", "weapon_next", "weapon_previous"]
 const VIRTUAL_INTERFACES := ["lo", "docker", "br-", "veth", "virbr"]
@@ -58,10 +67,16 @@ var debug: DebugDraw
 var camera: Camera3D
 var sun: DirectionalLight3D
 
+var _graphics_viewport: Viewport
+var _previous_msaa := Viewport.MSAA_DISABLED
+var _previous_scale := 1.0
+var _previous_scaling_mode := Viewport.SCALING_3D_MODE_BILINEAR
+
 var _conditions: NetworkConditions
 var _handshake: Handshake
 var _connector: Connector
 var _local: ServerRunner
+var _solo_clock := false
 var _local_listeners: Array[Listener] = []
 ## _fingerprint is the certificate fingerprint of a host.
 var _fingerprint := ""
@@ -103,6 +118,9 @@ var _buttons := 0
 ## it lies dead, until a new one comes.
 var _feet := Vector3.ZERO
 var _fallen := 0
+var _view_soldier_id := 0
+var _reinforcement := ""
+var _reinforcement_until := 0
 ## _momentum is the velocity the own soldier was last predicted with.
 var _momentum := Vector3.ZERO
 ## _shake shakes the camera after a blast nearby, fading.
@@ -126,6 +144,8 @@ var _previous_frame_window_longest_usec := 0
 var _frame_warmup := 1.0
 var _frame_stats := FrameStats.new()
 var _report := FrameStats.new()
+var _benchmark_started_usec := -1
+var _benchmark_samples := PackedInt32Array()
 var _knockdowns := 0
 ## _reconnect is the restoring of a lost connection to a remote server.
 var _reconnect_since := -1.0
@@ -152,11 +172,16 @@ static func create(arguments: PackedStringArray) -> ClientApp:
 	return app
 
 
+static func default_graphics_preset() -> String:
+	return "performance" if OS.get_name() == "macOS" else "quality"
+
+
 static func define_flags(flags: Flags) -> void:
 	flags.define("width", ProjectSettings.get_setting("display/window/size/viewport_width"), "window width")
 	flags.define("height", ProjectSettings.get_setting("display/window/size/viewport_height"), "window height")
 	flags.define("frames", 0, "close after this many frames")
 	flags.define("exit-on-leave", false, "close the game when leaving a match")
+	flags.define("solo-replay", false, "offer immediate replay after a solo round started by flags")
 	flags.define("dev-capture-dir", "", "write gameplay.jsonl to this development run directory")
 	flags.define("dev-native-input", false, "record local macOS movement key timing when the dev monitor is available")
 	flags.define("screenshot", "", "save a screenshot on the final frame")
@@ -180,6 +205,12 @@ static func define_flags(flags: Flags) -> void:
 	flags.define("bot-deaths", 0.0, "bots of the embedded server killed at random every second")
 	flags.define("respawn-delay", Flags.Duration.new(0), "how long the dead of the embedded server wait; 0 is the default")
 	flags.define("stats", Flags.Duration.new(0), "log frame rate, memory and ragdolls this often")
+	flags.define("graphics", default_graphics_preset(), "rendering preset: performance or quality")
+	flags.define("seed", 0, "embedded match seed; 0 picks a random one outside benchmarks")
+	flags.define("benchmark", Flags.Duration.new(0), "measure frame pacing for this long in play, then exit")
+	flags.define("benchmark-warmup", Flags.Duration.new(6), "discard this much time after the first playable frame")
+	flags.define("benchmark-path", "", "write the benchmark JSON report to this file")
+	flags.define("benchmark-route", "static", "benchmark camera: static or valley, from camp to the ford")
 	flags.define("overview", false, "watch the whole map from above")
 	flags.define("netgraph", false, "show the network graph (F2)")
 	flags.define("max-fps", 144, "frame rate cap; 0 leaves it free")
@@ -199,10 +230,27 @@ func _ready() -> void:
 	if error != "":
 		_quit_with(error)
 		return
-	for name in ["width", "height", "frames", "exit-on-leave", "dev-capture-dir", "dev-native-input", "screenshot", "demo", "movement", "shoot", "cycles", "debug", "tuning",
+	for name in ["width", "height", "frames", "exit-on-leave", "solo-replay", "dev-capture-dir", "dev-native-input", "screenshot", "demo", "movement", "shoot", "cycles", "debug", "tuning",
 			"weapons", "volume", "name", "netsim", "host", "connect", "fingerprint", "config-dir", "map", "bots", "bot-ai",
-			"bot-deaths", "respawn-delay", "stats", "overview", "netgraph", "max-fps", "knockdowns", "sensitivity", "fov"]:
+			"bot-deaths", "respawn-delay", "stats", "overview", "netgraph", "max-fps", "knockdowns", "sensitivity", "fov",
+			"graphics", "seed", "benchmark", "benchmark-warmup", "benchmark-path", "benchmark-route"]:
 		settings[name] = flags.get_value(name)
+	if settings["graphics"] not in ["performance", "quality"]:
+		_quit_with("-graphics must be performance or quality")
+		return
+	if settings["benchmark"] > BENCHMARK_MAX_SECONDS or settings["benchmark-warmup"] > BENCHMARK_MAX_SECONDS:
+		_quit_with("-benchmark and -benchmark-warmup must each be at most %.0f seconds" % BENCHMARK_MAX_SECONDS)
+		return
+	if settings["benchmark"] > 0 and settings["frames"] > 0:
+		_quit_with("-benchmark controls when the run ends; omit -frames")
+		return
+	if settings["benchmark-route"] not in ["static", "valley"]:
+		_quit_with("-benchmark-route must be static or valley")
+		return
+	if settings["benchmark-route"] == "valley" and (settings["benchmark"] <= 0 or _map_name() != "valley"
+			or settings["connect"] != "" or settings["host"] != "" or settings["overview"]):
+		_quit_with("-benchmark-route=valley needs a solo Valley benchmark without -overview")
+		return
 	if settings["dev-capture-dir"] != "":
 		var trace_error := _input_trace.start_run(settings["dev-capture-dir"], Time.get_ticks_usec())
 		if trace_error != OK:
@@ -223,14 +271,11 @@ func _ready() -> void:
 		return
 	_conditions = conditions
 	_setup_window()
+	_setup_graphics()
 	_build_world()
 	# Everything is loaded before connecting: once connected, the client must
 	# send a command every tick, and a stall puts its clock behind the server.
-	var character: Variant = CharacterAsset.load_asset()
-	if character is String:
-		_quit_with(character)
-		return
-	asset = character
+	asset = CharacterAsset.load_asset()
 	_build_soldiers()
 	error = _open()
 	if error != "":
@@ -238,7 +283,7 @@ func _ready() -> void:
 		return
 	_debug = settings["debug"]
 	_net_graph = settings["netgraph"]
-	_captured = settings["frames"] == 0
+	_captured = settings["frames"] == 0 and settings["benchmark"] <= 0
 	var window := get_window()
 	_focused = DisplayServer.get_name() == "headless" or window.has_focus()
 	window.focus_entered.connect(_set_window_focus.bind(true))
@@ -286,46 +331,66 @@ func _setup_window() -> void:
 	if size != Vector2i(ProjectSettings.get_setting("display/window/size/viewport_width"),
 			ProjectSettings.get_setting("display/window/size/viewport_height")):
 		DisplayServer.window_set_size(size)
-	DisplayServer.window_set_title("Crowfield prototype")
+	DisplayServer.window_set_title("Crowfield")
 	if settings["max-fps"] == 0:
 		DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
 
 
+## Limit high-DPI fill rate and the extra geometry drawn for directional
+## shadows, while keeping the HUD at the viewport's native resolution.
+func _setup_graphics() -> void:
+	if settings["graphics"] != "performance" or DisplayServer.get_name() == "headless":
+		return
+	_graphics_viewport = get_viewport()
+	_previous_msaa = _graphics_viewport.msaa_3d
+	_previous_scale = _graphics_viewport.scaling_3d_scale
+	_previous_scaling_mode = _graphics_viewport.scaling_3d_mode
+	_graphics_viewport.msaa_3d = Viewport.MSAA_DISABLED
+	_graphics_viewport.scaling_3d_mode = Viewport.SCALING_3D_MODE_BILINEAR
+	_graphics_viewport.size_changed.connect(_update_render_scale)
+	_update_render_scale()
+
+
+func _update_render_scale() -> void:
+	var size := _graphics_viewport.get_texture().get_size()
+	var native_pixels := maxf(1.0, size.x * size.y)
+	_graphics_viewport.scaling_3d_scale = minf(PERFORMANCE_MAX_SCALE, sqrt(PERFORMANCE_MAX_PIXELS / native_pixels))
+
+
+func _render_diagnostics() -> Dictionary:
+	var viewport := get_viewport()
+	var window_size := DisplayServer.window_get_size()
+	var viewport_size := viewport.get_texture().get_size()
+	var scale := viewport.scaling_3d_scale
+	return {
+		"graphics": settings["graphics"],
+		"renderer": RenderingServer.get_current_rendering_method(),
+		"driver": RenderingServer.get_current_rendering_driver_name(),
+		"adapter": RenderingServer.get_video_adapter_name(),
+		"window_px": [window_size.x, window_size.y],
+		"viewport_px": [viewport_size.x, viewport_size.y],
+		"render_scale_3d": scale,
+		"estimated_render_px_3d": [roundi(viewport_size.x * scale), roundi(viewport_size.y * scale)],
+		"msaa_3d": [0, 2, 4, 8][viewport.msaa_3d],
+		"shadow_distance_m": sun.directional_shadow_max_distance,
+		"shadow_cascades": [1, 2, 4][sun.directional_shadow_mode],
+		"max_fps": Engine.max_fps,
+		"vsync": DisplayServer.window_get_vsync_mode(),
+	}
+
+
 func _build_world() -> void:
-	var sky_material := ProceduralSkyMaterial.new()
-	sky_material.sky_top_color = Color(0.29, 0.47, 0.75)
-	sky_material.sky_horizon_color = Color(0.69, 0.77, 0.86)
-	sky_material.ground_horizon_color = Color(0.69, 0.77, 0.86)
-	sky_material.ground_bottom_color = Color(0.3, 0.34, 0.3)
-	sky_material.sun_angle_max = 20.0
-	var sky := Sky.new()
-	sky.sky_material = sky_material
-	var environment := Environment.new()
-	environment.background_mode = Environment.BG_SKY
-	environment.sky = sky
-	environment.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
-	environment.ambient_light_energy = 0.55
-	environment.tonemap_mode = Environment.TONE_MAPPER_FILMIC
-	environment.fog_enabled = true
-	environment.fog_light_color = Color(0.66, 0.74, 0.84)
-	environment.fog_density = 0.0011
-	environment.fog_aerial_perspective = 0.4
-	environment.fog_sky_affect = 0.15
-	environment.ssao_enabled = true
-	environment.ssao_radius = 1.2
-	environment.ssao_intensity = 1.5
-	environment.glow_enabled = true
-	environment.glow_intensity = 0.3
-	environment.glow_hdr_threshold = 1.4
 	var world_environment := WorldEnvironment.new()
-	world_environment.environment = environment
+	world_environment.environment = preload("res://assets/sky/valley_environment.tres")
 	add_child(world_environment)
 	sun = DirectionalLight3D.new()
-	sun.rotation = Vector3(-0.8, 0.65, 0)
-	sun.light_color = Color(1.0, 0.95, 0.87)
-	sun.light_energy = 1.05
+	sun.rotation = Vector3(-0.39, 0.89, 0)
+	sun.light_color = Color(1.0, 0.91, 0.79)
+	sun.light_energy = 0.88
 	sun.shadow_enabled = true
-	sun.directional_shadow_max_distance = 140.0
+	if settings["graphics"] == "performance":
+		sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
+		sun.directional_shadow_max_distance = PERFORMANCE_SHADOW_DISTANCE
 	add_child(sun)
 	camera = Camera3D.new()
 	camera.fov = settings["fov"]
@@ -355,6 +420,7 @@ func _load_map(map_name: String) -> Variant:
 	_map_collision = scene.build_collision(get_world_3d().space)
 	map_view = MapView.new(scene)
 	add_child(map_view)
+	sounds.start_ambience(scene)
 	return scene
 
 
@@ -367,6 +433,7 @@ func _build_soldiers() -> void:
 	add_child(sounds)
 	view_model = ViewModel.new()
 	view_model.sun = sun
+	view_model.performance_mode = settings["graphics"] == "performance"
 	add_child(view_model)
 	projectiles = ProjectileViews.new()
 	projectiles.rules = rules
@@ -384,6 +451,7 @@ func _build_soldiers() -> void:
 	menu = GAME_MENU.instantiate()
 	menu.visible = false
 	menu.resumed.connect(_close_menu)
+	menu.replayed.connect(_replay_round)
 	menu.left.connect(func() -> void: _quit_with(""))
 	var menu_layer := CanvasLayer.new()
 	menu_layer.layer = 2
@@ -427,6 +495,9 @@ func _open() -> String:
 	server_settings.stats_interval = 0
 	server_settings.map = _map_name()
 	server_settings.bots = settings["bots"]
+	server_settings.seed = settings["seed"]
+	if server_settings.seed == 0 and settings["benchmark"] > 0:
+		server_settings.seed = 1
 	server_settings.bot_ai = settings["bot-ai"]
 	server_settings.bot_deaths = settings["bot-deaths"]
 	if settings["respawn-delay"] > 0:
@@ -434,6 +505,7 @@ func _open() -> String:
 	# Going back to the spawn at will is for solo play only.
 	server_settings.allow_respawn = settings["host"] == ""
 	var host: String = settings["host"]
+	_solo_clock = host == "" and _conditions.is_none()
 	var certificate: Array = []
 	if host != "":
 		server_settings.max_players = Game.MAX_PLAYERS
@@ -492,6 +564,11 @@ func _join(conn: Conn, token: PackedByteArray = PackedByteArray()) -> void:
 
 
 func _exit_tree() -> void:
+	if is_instance_valid(_graphics_viewport):
+		_graphics_viewport.size_changed.disconnect(_update_render_scale)
+		_graphics_viewport.msaa_3d = _previous_msaa
+		_graphics_viewport.scaling_3d_scale = _previous_scale
+		_graphics_viewport.scaling_3d_mode = _previous_scaling_mode
 	if _gameplay_capture_marked:
 		DirAccess.remove_absolute(_gameplay_capture_marker)
 	if _native_input_loaded:
@@ -557,6 +634,11 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if not _captured:
 		return
+	if event is InputEventKey and event.pressed and not event.echo and event.keycode in [KEY_ENTER, KEY_KP_ENTER]:
+		if _can_replay():
+			_replay_round()
+			get_viewport().set_input_as_handled()
+			return
 	if event.is_echo():
 		# Godot also updates held actions from key repeat events.
 		for action in HELD_ACTIONS:
@@ -605,6 +687,20 @@ static func _slot_pressed(event: InputEvent) -> int:
 	return -1
 
 
+func _can_replay() -> bool:
+	return (allow_solo_replay or settings["solo-replay"]) and not _failed \
+		and session != null and _reconnect_since < 0 and settings["host"] == "" \
+		and settings["connect"] == "" and session.match_state != null \
+		and session.match_state.result != MatchState.Result.ACTIVE
+
+
+func _replay_round() -> void:
+	if _can_replay():
+		_failed = true
+		_update_native_input_scope()
+		replay_requested.emit()
+
+
 ## _open_menu shows the game menu and frees the cursor; the soldier stands
 ## still meanwhile.
 func _open_menu() -> void:
@@ -612,7 +708,7 @@ func _open_menu() -> void:
 	_reset_gameplay_input()
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	menu.about = _about()
-	menu.open()
+	menu.open(_can_replay())
 	_update_native_input_scope()
 	_input_trace.event(Time.get_ticks_usec(), {"type": "menu", "open": true})
 
@@ -705,17 +801,21 @@ func _process(delta: float) -> void:
 	_lap = Time.get_ticks_usec() if _frame_warmup <= 0 and settings["stats"] > 0 else 0
 	if not _connect(delta):
 		return
+	if settings["benchmark"] > 0 and _measure_benchmark_frame():
+		return
 	# The automatic scenarios count their time from the first frame in play.
 	_elapsed += delta
 	_played += delta
 	_accumulator += delta
 	# Ticks last a little more or less than TICK_DELTA while the session brings
 	# its commands to the right lead.
+	var sent := 0
 	while _reconnect_since < 0 and _accumulator >= session.tick_duration():
 		_accumulator -= session.tick_duration()
 		var command := session.send_command(_command())
 		if command == null:
 			break
+		sent += 1
 		var result := predictor.predict(command)
 		_events |= result.events
 		if result.has(Arsenal.EVENT_FIRED):
@@ -729,6 +829,12 @@ func _process(delta: float) -> void:
 			})
 	_alpha = _accumulator / session.tick_duration()
 	_charge("ticks")
+	if _solo_clock:
+		for _tick in sent:
+			_local.server.step()
+		# The server records its own profile.
+		if _lap > 0:
+			_lap = Time.get_ticks_usec()
 	var updated := false
 	if _reconnect_since < 0:
 		updated = session.poll()
@@ -758,6 +864,7 @@ func _process(delta: float) -> void:
 		_net_bytes = session.bytes
 		_net_window = 0.0
 	var own := _own_soldier()
+	var crouched := own != null and own.crouched
 	if settings["demo"] and own != null and not _ragdoll and _elapsed >= 1.2:
 		_die(predictor.drawn(_alpha), own.velocity)
 	if settings["demo"] and _ragdoll and _elapsed >= 3 and _demo_cycle + 1 < settings["cycles"]:
@@ -774,17 +881,23 @@ func _process(delta: float) -> void:
 		# Dead, or not yet predicted: where the server has the soldier.
 		feet = server_own.position
 	_feet = feet
-	_update_self(delta, feet, speed, server_own)
+	_update_self(delta, feet, speed, server_own, crouched)
 	bodies.update(delta)
 	_charge("bodies")
-	_update_camera(feet)
+	_update_camera(feet, crouched)
+	sounds.update_ambience(camera.global_position, delta)
+	var local_feedback := own != null and _first_person() and _focused and not menu.visible and _reconnect_since < 0
+	var footfall := view_model.footing(delta, feet, own != null and own.grounded,
+		speed / rules.movement.sprint_speed, local_feedback)
+	if footfall != ViewModel.Footfall.NONE:
+		sounds.footstep(feet, scene, footfall == ViewModel.Footfall.LAND)
 	_update_weapon(delta, own, speed)
 	projectiles.update(session.clock.render_tick, session.tick - 1 + _alpha)
-	effects.update(delta)
+	effects.update(delta, local_feedback and view_model.aim < MUZZLE_SMOKE_AIM_LIMIT)
 	_shake *= exp(-delta * 4.0)
 	_charge("weapon")
-	soldier_views.update(session, delta, camera)
-	soldier_views.aim(feet + Vector3(0, rules.movement.eye_height, 0), Game.view_direction(_yaw, _pitch), rules.movement.center_height())
+	soldier_views.update(session, delta, camera, scene)
+	soldier_views.aim(feet + Vector3.UP * rules.movement.view_height(crouched), Game.view_direction(_yaw, _pitch))
 	var aimed := 0
 	var aimed_updates := 0
 	if soldier_views.aimed != null:
@@ -844,6 +957,11 @@ func _connect(_delta: float) -> bool:
 		return false
 	session = _handshake.session
 	_handshake = null
+	if _solo_clock:
+		# Solo simulation uses the same bounded frame budget as input. The
+		# server advances only through the ticks the client has sent.
+		_local.set_process(false)
+		session.use_local_clock(_local.server.tick)
 	predictor.join(session.welcome.match_seed)
 	_trace_match()
 	return true
@@ -885,6 +1003,8 @@ func _command() -> InputCommand:
 			buttons |= InputCommand.JUMP
 		if Input.is_action_pressed("sprint"):
 			buttons |= InputCommand.SPRINT
+		if Input.is_action_pressed("crouch"):
+			buttons |= InputCommand.CROUCH
 		if Input.is_action_pressed("fire") or _fire_pressed:
 			buttons |= InputCommand.FIRE
 		if Input.is_action_pressed("aim"):
@@ -976,6 +1096,7 @@ func _sample_input_trace() -> void:
 		"pitch_radians": _pitch,
 		"last_frame_ms": _last_frame_usec / 1000.0,
 		"health": session.player.health if session.player.processed else null,
+		"crouched": predictor.soldier.crouched if predictor.started else null,
 		"soldier": session.player.soldier if session.player.processed else null,
 		"weapon": WeaponTuning.kind_name(arsenal.weapon()) if armed else null,
 		"magazine": arsenal.magazine[arsenal.current] if armed else null,
@@ -1040,12 +1161,14 @@ func _team() -> int:
 
 ## _update_self shows the own soldier's model in third person, in overview
 ## and when it lies fallen; in first person the player sees its weapon only.
-func _update_self(delta: float, feet: Vector3, speed: float, server_own: Soldier) -> void:
+func _update_self(delta: float, feet: Vector3, speed: float, server_own: Soldier, crouched: bool) -> void:
 	var shown: bool = _ragdoll or ((_third_person or settings["overview"]) and server_own != null)
 	_self_view.visible = shown
 	if not _ragdoll:
 		_self_view.face(feet, _yaw)
-		_self_view.animate(delta, speed)
+		var aiming := shown and _buttons & InputCommand.AIM != 0 and server_own.arsenal.action == Arsenal.Action.READY
+		_self_view.animate(delta, speed, crouched, aiming)
+		_self_view.set_foot_terrain(scene.terrain if shown and server_own.grounded else null)
 	_self_view.update_fall(delta)
 	_self_view.set_tint(soldier_views.tint(_team()))
 	var kind := WeaponTuning.Kind.NONE
@@ -1059,14 +1182,17 @@ func _update_self(delta: float, feet: Vector3, speed: float, server_own: Soldier
 		_self_held_kind = kind
 		if _self_held != null:
 			add_child(_self_held)
+	if _self_held != null and not _shots.is_empty():
+		_self_view.fired()
+	var carried := _self_view.carry(view_model, kind, _pitch)
 	if _self_held != null:
-		_self_held.transform = ViewModel.held_transform(feet, _yaw, _pitch)
+		_self_held.transform = carried
 
 
 ## _update_camera looks where the player aims, turned by the kick of the
 ## weapon, which the aim of the next shot has too. Aiming down the sights
 ## narrows the field of view by the weapon's zoom.
-func _update_camera(feet: Vector3) -> void:
+func _update_camera(feet: Vector3, crouched := false) -> void:
 	var yaw := _yaw
 	var pitch := _pitch
 	var fov: float = settings["fov"]
@@ -1078,8 +1204,11 @@ func _update_camera(feet: Vector3) -> void:
 		if tuning != null and _first_person():
 			fov *= 1 + (tuning.aim_zoom - 1) * view_model.aim
 	camera.fov = fov
+	if settings["benchmark-route"] == "valley":
+		_update_benchmark_camera()
+		return
 	var forward := Game.view_direction(yaw, pitch)
-	var eye := feet + Vector3(0, rules.movement.eye_height, 0)
+	var eye := feet + Vector3.UP * rules.movement.view_height(crouched)
 	if settings["overview"]:
 		# High above the south edge of the map: every soldier is in view.
 		var area := scene.play_area
@@ -1107,42 +1236,56 @@ func _update_weapon(delta: float, own: Soldier, speed: float) -> void:
 		_shots.clear()
 		_events = 0
 		view_model.hide_weapon()
+		sounds.update_reload(WeaponTuning.Kind.NONE, Arsenal.Action.READY, 0.0, 0)
 		return
 	var held := _buttons & InputCommand.AIM != 0
 	var aiming := held and arsenal.action == Arsenal.Action.READY
-	var sprinting := _buttons & InputCommand.SPRINT != 0 and not held and _buttons & InputCommand.FIRE == 0 \
+	var sprinting := not own.crouched and _buttons & InputCommand.SPRINT != 0 and not held and _buttons & InputCommand.FIRE == 0 \
 		and speed > rules.movement.walk_speed
 	view_model.update(delta, aiming, sprinting, own.grounded, speed / rules.movement.sprint_speed, _look)
 	var progress := 0.0
 	var tuning := rules.weapons.get_tuning(arsenal.weapon())
 	if tuning != null:
 		var total := tuning.reload_ticks() if arsenal.action == Arsenal.Action.RELOADING else tuning.equip_ticks()
-		progress = 1 - (arsenal.action_ticks - _alpha) / maxi(1, total)
+		progress = clampf(1 - (arsenal.action_ticks - _alpha) / maxi(1, total), 0.0, 1.0)
+	sounds.update_reload(arsenal.weapon(), arsenal.action, progress, _events)
 	var placed := false
 	if _first_person():
 		view_model.show_weapon(arsenal.weapon(), soldier_views.tint(_team()))
-		placed = view_model.place(camera, arsenal.weapon(), arsenal.action, clampf(progress, 0, 1))
+		if not _shots.is_empty():
+			view_model.fired(_noise(_shots[-1].direction))
+		placed = view_model.place(camera, arsenal.weapon(), arsenal.action, progress)
 	else:
 		view_model.hide_weapon()
 	var state := get_world_3d().direct_space_state
 	for shot in _shots:
 		var shot_tuning := rules.weapons.get_tuning(shot.weapon)
-		var muzzle := view_model.held_muzzle(shot.weapon, _feet, _yaw, _pitch)
+		var carried := _self_held.transform if _self_held != null else ViewModel.held_transform(_feet, _yaw, _pitch)
+		var muzzle := view_model.held_muzzle(shot.weapon, carried)
 		if muzzle == Vector3.INF:
 			muzzle = camera.global_position
 		if placed:
 			muzzle = view_model.muzzle_in_world(camera)
-			view_model.fired(_noise(shot.direction))
+			# Guns and the launcher smoke; a throw and a medkit do not.
+			if not aiming and view_model.aim < MUZZLE_SMOKE_AIM_LIMIT and shot_tuning.use != WeaponTuning.Use.HEAL \
+					and shot_tuning.bounce <= 0:
+				effects.puff_muzzle(muzzle, shot.direction)
 		sounds.weapon(shot.weapon, Arsenal.EVENT_FIRED)
 		if shot_tuning.use != WeaponTuning.Use.BULLETS:
 			continue
-		# A tracer for every pellet of a shotgun.
+		# A tracer for every pellet of a shotgun, and one sound for those that
+		# struck.
 		var directions := shot.pellets if not shot.pellets.is_empty() else PackedVector3Array([shot.direction])
+		var struck := Vector3.INF
 		for direction in directions:
 			var query := PhysicsRayQueryParameters3D.create(shot.origin, shot.origin + direction * shot_tuning.range, Game.LAYER_STATIC | Game.LAYER_VEHICLE)
 			var hit := state.intersect_ray(query)
 			var end: Vector3 = hit["position"] if not hit.is_empty() else shot.origin + direction * shot_tuning.range
-			effects.shot(muzzle, end, not hit.is_empty())
+			if not hit.is_empty():
+				struck = end
+			effects.shot(muzzle, end, not hit.is_empty(), hit.get("normal", Vector3.ZERO))
+		if struck != Vector3.INF:
+			sounds.impact_at(struck)
 	sounds.weapon(arsenal.weapon(), _events & ~Arsenal.EVENT_FIRED)
 	_shots.clear()
 	_events = 0
@@ -1175,7 +1318,7 @@ func _die(feet: Vector3, velocity: Vector3) -> void:
 		Game.view_direction(_yaw, 0) * 35 + Vector3(0, 20, 0))
 	var own := session.local_soldier()
 	if _fallen != 0 and own != null:
-		blow = soldier_views.blow(feet, _yaw, own.hit_box, own.hit_yaw, session.clock.render_tick)
+		blow = soldier_views.blow(feet, _yaw, own.hit_box, own.hit_yaw, session.clock.render_tick, own.crouched)
 	bodies.make_room(pool, camera.global_position)
 	if _self_view.fall(pool, velocity, blow):
 		_self_view.visible = true
@@ -1187,6 +1330,14 @@ func _die(feet: Vector3, velocity: Vector3) -> void:
 func _follow_life() -> void:
 	var player := session.player
 	var dead := player.soldier != 0 and player.health == 0
+	if scene.name == "valley" and not dead and player.soldier != 0 and player.soldier != _view_soldier_id:
+		var deployed := session.local_soldier()
+		if deployed != null:
+			_yaw = PI if deployed.team == Game.Team.RED else 0.0
+			_pitch = 0.0
+			if _fallen != 0:
+				_face_reinforcement(deployed)
+			_view_soldier_id = player.soldier
 	if dead and _fallen != player.soldier:
 		# The body falls where the server has it dead, which everyone else sees,
 		# not where the prediction ran on to, with the momentum it had.
@@ -1203,6 +1354,22 @@ func _follow_life() -> void:
 		_ragdoll = false
 		feedback.killed_by = ""
 		_self_view.stand_up()
+
+
+## A forward respawn is inside the approaches to the held crossings. The
+## home gate is farther away. Turn toward the nearest crossing on arrival.
+func _face_reinforcement(soldier: Soldier) -> void:
+	var best: MapScene.Zone
+	var nearest := 30.0
+	for zone in scene.flags:
+		var distance := Game.horizontal_length(zone.center - soldier.position)
+		if distance < nearest:
+			best = zone
+			nearest = distance
+	if best != null:
+		_yaw = Game.yaw_of(best.center - soldier.position)
+		_reinforcement = "Reinforced near " + best.name
+		_reinforcement_until = Time.get_ticks_msec() + 4000
 
 
 func _reset() -> void:
@@ -1278,14 +1445,14 @@ func _draw_debug(spawned: bool) -> void:
 	for box in scene.boxes:
 		debug.box(box.transform, box.half_extents, Color.BLACK)
 	for entry in soldier_views.shown:
-		debug.hitboxes(entry.known.remote.position, entry.known.remote.yaw)
+		debug.hitboxes(entry.known.remote.position, entry.known.remote.yaw, entry.known.remote.crouched)
 	if spawned and not _ragdoll:
 		# The server's view of the own soldier, to compare with the prediction.
 		var server_own := session.local_soldier()
 		if server_own != null:
 			var radius := rules.movement.capsule_radius
 			debug.capsule(server_own.position + Vector3(0, radius, 0),
-				server_own.position + Vector3(0, 2 * rules.movement.center_height() - radius, 0), radius, Color.ORANGE)
+				server_own.position + Vector3(0, 2 * rules.movement.center_height(server_own.crouched) - radius, 0), radius, Color.ORANGE)
 	debug.grid(30, Color(0.4, 0.4, 0.4))
 	var origin := camera.global_position
 	var forward := -camera.global_basis.z
@@ -1297,17 +1464,19 @@ func _draw_debug(spawned: bool) -> void:
 
 
 func _update_hud(feet: Vector3, own: Soldier) -> void:
-	var lines := PackedStringArray(HELP_LINES)
+	var lines := PackedStringArray()
 	var connected := session != null
-	lines.append("FPS %d | XYZ %.2f %.2f %.2f | %s | drawn %d (full %d) | bodies %d (ragdolls %d)" % [
-		Engine.get_frames_per_second(), feet.x, feet.y, feet.z, CharacterAsset.CLIPS[_self_view.clip],
-		soldier_views.drawn, soldier_views.full, bodies.all.size(), bodies.ragdolls()])
-	if connected:
-		lines.append("%d Hz | tick %d server %d lead %d (clock %+.1f%%) | RTT %d ms | snapshots %.1f KB/s | jumps %d | corrections %d (last %.3f m) | soldiers %d" % [
-			Game.TICK_RATE, session.tick, session.server_tick, session.player.input_lead, 100 * session.dilation,
-			roundi(session.conn.stats.rtt * 1000), _net_rate, session.resyncs, predictor.corrections, predictor.last_error,
-			session.soldiers.size()])
-	else:
+	if _debug or _net_graph:
+		lines.append_array(HELP_LINES)
+		lines.append("FPS %d | XYZ %.2f %.2f %.2f | %s | drawn %d (full %d) | bodies %d (ragdolls %d)" % [
+			Engine.get_frames_per_second(), feet.x, feet.y, feet.z, CharacterAsset.CLIPS[_self_view.clip],
+			soldier_views.drawn, soldier_views.full, bodies.all.size(), bodies.ragdolls()])
+		if connected:
+			lines.append("%d Hz | tick %d server %d lead %d (clock %+.1f%%) | RTT %d ms | snapshots %.1f KB/s | jumps %d | corrections %d (last %.3f m) | soldiers %d" % [
+				Game.TICK_RATE, session.tick, session.server_tick, session.player.input_lead, 100 * session.dilation,
+				roundi(session.conn.stats.rtt * 1000), _net_rate, session.resyncs, predictor.corrections, predictor.last_error,
+				session.soldiers.size()])
+	if not connected:
 		lines.append(_status + "…")
 	if _capture_notice != "" and Time.get_ticks_msec() < _capture_notice_until:
 		lines.append(_capture_notice)
@@ -1316,6 +1485,8 @@ func _update_hud(feet: Vector3, own: Soldier) -> void:
 	hud.arsenal = arsenal
 	hud.fov = camera.fov
 	hud.aim = view_model.aim if _first_person() else 0.0
+	if map_view != null:
+		map_view.set_flag_labels_visible(hud.aim < 0.25)
 	hud.scoped = arsenal != null and _first_person() and view_model.scoped(arsenal.weapon())
 	if arsenal != null and own != null:
 		hud.spread = arsenal.spread(rules.weapons, _buttons & InputCommand.AIM != 0,
@@ -1325,7 +1496,7 @@ func _update_hud(feet: Vector3, own: Soldier) -> void:
 	hud.dead = player.soldier != 0 and player.health == 0
 	hud.health = player.health
 	hud.respawn_ticks = player.respawn
-	hud.team = _team()
+	_update_match_hud(session.match_state if connected else null, feet, _team())
 	hud.view_yaw = _yaw
 	hud.net_graph = session.graph if connected and _net_graph else null
 	hud.jumps = session.resyncs if connected else 0
@@ -1336,6 +1507,29 @@ func _update_hud(feet: Vector3, own: Soldier) -> void:
 			"Reconnecting: attempt %d, %d s of %d" % [_reconnect_attempts, int(ClientSession._now() - _reconnect_since), int(RECONNECT_WINDOW)],
 		])
 	hud.queue_redraw()
+
+
+func _update_match_hud(state: MatchState, feet: Vector3, team: int) -> void:
+	var previous := hud.match_state
+	if state != null and previous != null and state != previous and team == hud.team and team != Game.Team.NONE:
+		var captured := false
+		var lost := false
+		for index in mini(state.flags.size(), previous.flags.size()):
+			var old_owner := previous.flags[index].owner
+			var owner := state.flags[index].owner
+			if old_owner != owner:
+				captured = captured or owner == team
+				lost = lost or old_owner == team
+		if captured or lost:
+			sounds.flag_changed(captured)
+	hud.team = team
+	hud.match_state = state
+	hud.replay_available = _can_replay()
+	hud.reinforcement = _reinforcement if Time.get_ticks_msec() < _reinforcement_until else ""
+	hud.map_scene = scene
+	hud.feet = feet
+	if map_view != null and state != previous:
+		map_view.update_flags(state)
 
 
 func _request_capture(kind: PlaytestCapture) -> void:
@@ -1384,6 +1578,7 @@ func _capture_playtest(with_image: bool) -> void:
 		"health": session.player.health,
 		"grounded": soldier.grounded if soldier != null else null,
 		"fps": Engine.get_frames_per_second(),
+		"rendering": _render_diagnostics(),
 		"last_frame_ms": _last_frame_usec / 1000.0,
 		"recent_worst_frame_ms": maxi(_frame_window_longest_usec, _previous_frame_window_longest_usec) / 1000.0,
 		"input": _input_diagnostics(),
@@ -1478,6 +1673,96 @@ func _sample_frame() -> void:
 		soldier_views.drawn, soldier_views.falls, parts])
 	_report = FrameStats.new()
 	_profile.clear()
+
+
+## A fixed first-person render route cuts scene variation out of the
+## comparison: use elapsed wall time so a slower renderer sees the same views.
+## The local server and bots still play the same seeded match.
+func _update_benchmark_camera() -> void:
+	var elapsed := maxf(0.0, (_frame_started_usec - _benchmark_started_usec) / 1000000.0) if _benchmark_started_usec >= 0 else 0.0
+	var warmup: float = settings["benchmark-warmup"]
+	var phase := clampf((elapsed - warmup) / settings["benchmark"], 0.0, 1.0)
+	if elapsed < warmup:
+		phase = elapsed / warmup
+	var from := Vector3(0, 0, 70)
+	var toward := Vector3(0, 0, 14)
+	var point := from.lerp(toward, smoothstep(0.18, 0.58, phase))
+	point.y = scene.terrain.height_at(point.x, point.z) + rules.movement.eye_height
+	var yaw := 0.52 * sin(phase * TAU * 1.25)
+	camera.look_at_from_position(point, point + Game.view_direction(yaw, -0.055), Vector3.UP)
+
+
+## Measure wall time from the first playable frame instead of using engine
+## delta, which is adjusted after a stall and for a steady tick rate.
+func _measure_benchmark_frame() -> bool:
+	if _benchmark_started_usec < 0:
+		if predictor.started:
+			_benchmark_started_usec = _frame_started_usec
+		return false
+	var warmup_end := _benchmark_started_usec + roundi(settings["benchmark-warmup"] * 1000000)
+	if _frame_started_usec - _last_frame_usec >= warmup_end and _last_frame_usec > 0:
+		_benchmark_samples.append(_last_frame_usec)
+		if _benchmark_samples.size() >= BENCHMARK_MAX_SAMPLES:
+			_quit_with("benchmark exceeded the frame sample limit")
+			return true
+	if _frame_started_usec < warmup_end + roundi(settings["benchmark"] * 1000000) or _benchmark_samples.is_empty():
+		return false
+	var report := _benchmark_summary(_benchmark_samples)
+	report.merge(_render_diagnostics())
+	report.merge({
+		"map": scene.name,
+		"seed": str(session.welcome.match_seed),
+		"bots": settings["bots"],
+		"bot_ai": settings["bot-ai"],
+		"overview": settings["overview"],
+		"route": settings["benchmark-route"],
+		"fov_degrees": settings["fov"],
+		"warmup_seconds": settings["benchmark-warmup"],
+		"requested_seconds": settings["benchmark"],
+	})
+	var record := JSON.stringify(report)
+	var path: String = settings["benchmark-path"]
+	if path != "":
+		var file := FileAccess.open(path, FileAccess.WRITE)
+		if file == null:
+			_quit_with("could not write benchmark report: " + error_string(FileAccess.get_open_error()))
+			return true
+		file.store_line(record)
+		file.flush()
+		if file.get_error() != OK:
+			_quit_with("could not write benchmark report: " + error_string(file.get_error()))
+			return true
+	print("benchmark: ", record)
+	_finish()
+	return true
+
+
+static func _benchmark_summary(samples: PackedInt32Array) -> Dictionary:
+	samples.sort()
+	var count := samples.size()
+	var total := 0
+	var frames_over_33ms := 0
+	var frames_over_50ms := 0
+	for frame in samples:
+		total += frame
+		frames_over_33ms += int(frame > 33333)
+		frames_over_50ms += int(frame > 50000)
+	var tail_size := ceili(count * 0.01)
+	var tail_total := 0
+	for i in range(count - tail_size, count):
+		tail_total += samples[i]
+	return {
+		"frames": count,
+		"elapsed_seconds": total / 1000000.0,
+		"average_fps": count * 1000000.0 / total,
+		"fps_1pct_low": tail_size * 1000000.0 / tail_total,
+		"p50_ms": samples[ceili(count * 0.50) - 1] / 1000.0,
+		"p95_ms": samples[ceili(count * 0.95) - 1] / 1000.0,
+		"p99_ms": samples[ceili(count * 0.99) - 1] / 1000.0,
+		"max_ms": samples[count - 1] / 1000.0,
+		"frames_over_33ms": frames_over_33ms,
+		"frames_over_50ms": frames_over_50ms,
+	}
 
 
 func _finish() -> void:

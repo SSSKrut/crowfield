@@ -118,7 +118,7 @@ func test_shotgun_kills_with_one_shot_up_close() -> void:
 	var target := range.target(_enemy(range), range.shooter_soldier().position + Vector3(0, 0, -5))
 	_take(range, SHOTGUN)
 	range.client.events.clear()
-	_pull(range, SHOTGUN, range.server.soldiers.get_soldier(target).position + Vector3(0, 0.85, 0))
+	_pull(range, SHOTGUN, range.server.soldiers.get_soldier(target).position + Vector3(0, Bots.AIM_HEIGHT, 0))
 	check(not range.server.soldiers.get_soldier(target).alive, "the target lives with %d health" % range.health(target))
 	var confirms := _events(range, Messages.HitConfirm)
 	check(confirms.size() == 1 and confirms[0].killed, "%d hit confirmations for one shot" % confirms.size())
@@ -137,7 +137,7 @@ func test_rocket_bursts_on_a_soldier_and_hurts_by_distance() -> void:
 	var beyond := range.target(enemy, feet + Vector3(9, 0, -20))
 	_take(range, LAUNCHER)
 	range.client.events.clear()
-	_pull(range, LAUNCHER, range.server.soldiers.get_soldier(struck).position + Vector3(0, 0.85, 0))
+	_pull(range, LAUNCHER, range.server.soldiers.get_soldier(struck).position + Vector3(0, Bots.AIM_HEIGHT, 0))
 	range.step(Game.TICK_RATE)
 	check(not range.server.soldiers.get_soldier(struck).alive, "the soldier struck lives with %d health" % range.health(struck))
 	var share := range.server.rules.weapons.rocket_launcher.blast_share(4)
@@ -148,7 +148,7 @@ func test_rocket_bursts_on_a_soldier_and_hurts_by_distance() -> void:
 	var blasts := _events(range, Messages.Blast)
 	if check_equal(blasts.size(), 1, "blasts told"):
 		var at: Vector3 = blasts[0].position
-		check(at.distance_to(range.server.soldiers.get_soldier(struck).position + Vector3(0, 0.85, 0)) < 0.8, "the rocket burst at %s" % at)
+		check(at.distance_to(range.server.soldiers.get_soldier(struck).position + Vector3(0, Bots.AIM_HEIGHT, 0)) < 0.8, "the rocket burst at %s" % at)
 
 
 ## A wall shields a soldier behind it from a blast in front of it; one in front

@@ -3,32 +3,40 @@ extends Node3D
 ## MapView draws a map: the terrain as one mesh coloured in its vertices, the
 ## boxes as one MultiMesh for each kind, tree crowns, bushes and water, which
 ## only the client has, and the balls of the prototype, which roll in the
-## client's own physics. A noise texture laid over everything in world space
-## breaks up the flat colours.
+## client's own physics. Valley adds instanced scenery and weathered materials.
 
 ## The colour of each kind of box; an instance varies it a little.
+const VALLEY_GROUND := preload("res://assets/valley/ground.gdshader")
+const VALLEY_RIVER := preload("res://assets/valley/river.gdshader")
+const MEADOW_DETAIL := preload("res://assets/valley/aerial_grass_rock-diff.jpg")
+const DIRT_DETAIL := preload("res://assets/valley/dirt_aerial_02-diff.jpg")
+const ROCK_DETAIL := preload("res://assets/valley/rocky_terrain_02-diff.jpg")
+const PLASTER_DETAIL := preload("res://assets/valley/painted_plaster_wall-diff.jpg")
+const PLANK_DETAIL := preload("res://assets/valley/wood_planks_dirt-diff.jpg")
+const SANDBAG_CANVAS := preload("res://assets/valley/sandbag-canvas.png")
+
 const COLORS := {
 	MapScene.Kind.GROUND: Color8(115, 125, 115),
-	MapScene.Kind.CONCRETE: Color8(150, 150, 146),
-	MapScene.Kind.PLASTER: Color8(214, 202, 178),
-	MapScene.Kind.ROOF: Color8(138, 70, 52),
-	MapScene.Kind.WOOD: Color8(145, 110, 72),
-	MapScene.Kind.PLANKS: Color8(160, 128, 88),
-	MapScene.Kind.SANDBAG: Color8(170, 154, 112),
-	MapScene.Kind.ROCK: Color8(124, 120, 112),
-	MapScene.Kind.METAL: Color8(84, 98, 82),
-	MapScene.Kind.TRUNK: Color8(92, 70, 52),
-	MapScene.Kind.HAY: Color8(212, 182, 92),
+	MapScene.Kind.CONCRETE: Color8(130, 135, 124),
+	MapScene.Kind.PLASTER: Color8(219, 209, 182),
+	MapScene.Kind.ROOF: Color8(110, 119, 109),
+	MapScene.Kind.WOOD: Color8(156, 128, 89),
+	MapScene.Kind.PLANKS: Color8(137, 119, 88),
+	MapScene.Kind.SANDBAG: Color8(116, 105, 75),
+	MapScene.Kind.ROCK: Color8(137, 142, 128),
+	MapScene.Kind.METAL: Color8(77, 91, 78),
+	MapScene.Kind.TRUNK: Color8(81, 70, 53),
+	MapScene.Kind.HAY: Color8(159, 143, 83),
 	MapScene.Kind.BLUE_CLOTH: Color8(60, 110, 220),
 	MapScene.Kind.RED_CLOTH: Color8(210, 70, 60),
+	MapScene.Kind.MASONRY: Color8(174, 183, 174),
+	MapScene.Kind.SLATE: Color8(133, 147, 151),
+	MapScene.Kind.COBBLES: Color8(159, 150, 127),
 }
+const MASONRY_DETAIL := preload("res://assets/valley/old_stone_wall-diff.jpg")
+const SLATE_DETAIL := preload("res://assets/valley/roof_slates_02-diff.jpg")
+const COBBLE_DETAIL := preload("res://assets/valley/cobblestone_01-diff.jpg")
 const PROTOTYPE_COLORS := {MapScene.Kind.GROUND: Color8(115, 125, 115), MapScene.Kind.WOOD: Color8(145, 130, 105)}
-const GRASS := Color(0.3, 0.47, 0.17)
-const LUSH := Color(0.21, 0.4, 0.14)
-const DRY := Color(0.55, 0.52, 0.27)
-const DIRT := Color(0.43, 0.35, 0.25)
-const MUD := Color(0.36, 0.32, 0.25)
-const STONE := Color(0.46, 0.45, 0.42)
 const PROP_TINTS := [Color8(255, 161, 0), Color8(102, 191, 255), Color8(255, 109, 194)]
 
 var scene: MapScene
@@ -37,6 +45,9 @@ var props: Array[RigidBody3D] = []
 var _detail: NoiseTexture2D
 ## _fine is a subtler detail for the walls of buildings.
 var _fine: NoiseTexture2D
+var _flag_cloth: Array[StandardMaterial3D] = []
+var _flag_labels: Array[Label3D] = []
+var _flag_colors: Array[Color] = []
 
 
 func _init(map: MapScene) -> void:
@@ -48,12 +59,84 @@ func _ready() -> void:
 	_detail = _detail_texture(Color(0.74, 0.74, 0.74), Color(1.06, 1.06, 1.06))
 	_fine = _detail_texture(Color(0.88, 0.88, 0.88), Color(1.04, 1.04, 1.04))
 	if scene.terrain != null:
-		_build_terrain()
+		var wear := _build_terrain()
+		add_child(ValleyScenery.new(scene, wear))
 	_build_boxes()
-	_build_plants()
 	for water in scene.waters:
 		_build_water(water)
 	_build_props()
+	_build_flags()
+
+
+## update_flags paints the world markers from the last server snapshot.
+func update_flags(state: MatchState) -> void:
+	if state == null:
+		return
+	for index in _flag_cloth.size():
+		var flag := state.flags[index]
+		var color := _flag_color(flag.owner, flag.contested)
+		if _flag_colors[index] == color:
+			continue
+		_flag_colors[index] = color
+		_flag_cloth[index].albedo_color = color
+		_flag_labels[index].modulate = color.lightened(0.30)
+
+
+## Keep the objective names out of the first-person weapon sights.
+func set_flag_labels_visible(shown: bool) -> void:
+	for label in _flag_labels:
+		label.visible = shown
+
+
+static func _flag_color(team: int, contested: bool) -> Color:
+	if contested:
+		return Color8(242, 189, 83)
+	return Hud.TEAM_COLORS.get(team, Color8(208, 208, 184))
+
+
+func _build_flags() -> void:
+	var pole_material := StandardMaterial3D.new()
+	pole_material.albedo_color = Color8(63, 72, 68)
+	pole_material.metallic = 0.3
+	for zone in scene.flags:
+		var root := Node3D.new()
+		root.position = zone.center
+		add_child(root)
+		var pole_mesh := CylinderMesh.new()
+		pole_mesh.height = 4.5
+		pole_mesh.top_radius = 0.045
+		pole_mesh.bottom_radius = 0.07
+		pole_mesh.radial_segments = 8
+		var pole := MeshInstance3D.new()
+		pole.mesh = pole_mesh
+		pole.material_override = pole_material
+		pole.position.y = 2.25
+		root.add_child(pole)
+		var cloth_mesh := BoxMesh.new()
+		cloth_mesh.size = Vector3(1.25, 0.80, 0.045)
+		var cloth := MeshInstance3D.new()
+		cloth.mesh = cloth_mesh
+		cloth.position = Vector3(0.65, 3.95, 0.0)
+		var material := StandardMaterial3D.new()
+		material.roughness = 0.86
+		var neutral := _flag_color(Game.Team.NONE, false)
+		material.albedo_color = neutral
+		cloth.material_override = material
+		root.add_child(cloth)
+		_flag_cloth.append(material)
+		_flag_colors.append(neutral)
+		var label := Label3D.new()
+		label.text = zone.name
+		label.position.y = 4.95
+		label.font_size = 23
+		label.outline_size = 7
+		label.modulate = neutral.lightened(0.30)
+		label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+		label.fixed_size = true
+		label.pixel_size = 0.0012
+		label.visibility_range_end = 45.0
+		root.add_child(label)
+		_flag_labels.append(label)
 
 
 ## reset puts the props back where they started.
@@ -97,7 +180,7 @@ func _material(color: Color, detail_scale: float, detail: Texture2D = null) -> S
 # The terrain.
 
 
-func _build_terrain() -> void:
+func _build_terrain() -> PackedFloat32Array:
 	var terrain := scene.terrain
 	var count := terrain.samples
 	var half := terrain.half_size()
@@ -111,13 +194,19 @@ func _build_terrain() -> void:
 	for z in count:
 		for x in count:
 			var i := z * count + x
-			var h := terrain.heights[i]
-			var dx := terrain.sample(x + 1, z) - terrain.sample(x - 1, z)
-			var dz := terrain.sample(x, z + 1) - terrain.sample(x, z - 1)
+			var world_x := x - half
+			var world_z := z - half
+			var h := ValleyScenery.visual_height(terrain.heights[i], world_x, world_z, scene.play_area)
+			var dx := ValleyScenery.visual_height(terrain.sample(x + 1, z), world_x + 1, world_z, scene.play_area) \
+				- ValleyScenery.visual_height(terrain.sample(x - 1, z), world_x - 1, world_z, scene.play_area)
+			var dz := ValleyScenery.visual_height(terrain.sample(x, z + 1), world_x, world_z + 1, scene.play_area) \
+				- ValleyScenery.visual_height(terrain.sample(x, z - 1), world_x, world_z - 1, scene.play_area)
 			var normal := Vector3(-dx, 2.0, -dz).normalized()
 			vertices[i] = Vector3(x - half, h, z - half)
 			normals[i] = normal
-			colors[i] = _ground_color(x - half, z - half, h, normal.y, worn[i])
+			var dry := 0.5 + 0.25 * sin((x - half) * 0.063 + (z - half) * 0.117) \
+				+ 0.25 * sin((x - half) * 0.109 - (z - half) * 0.091 + 1.4)
+			colors[i] = Color(worn[i], dry, smoothstep(0.15, 0.55, 1.0 - normal.y))
 	var indices := PackedInt32Array()
 	indices.resize((count - 1) * (count - 1) * 6)
 	var at := 0
@@ -140,11 +229,17 @@ func _build_terrain() -> void:
 	arrays[Mesh.ARRAY_INDEX] = indices
 	var mesh := ArrayMesh.new()
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-	mesh.surface_set_material(0, _material(Color.WHITE, 0.08))
+	var material := ShaderMaterial.new()
+	material.shader = VALLEY_GROUND
+	material.set_shader_parameter("meadow", MEADOW_DETAIL)
+	material.set_shader_parameter("track", DIRT_DETAIL)
+	material.set_shader_parameter("shale", ROCK_DETAIL)
+	mesh.surface_set_material(0, material)
 	var instance := MeshInstance3D.new()
 	instance.name = "Terrain"
 	instance.mesh = mesh
 	add_child(instance)
+	return worn
 
 
 ## _worn_ground is how worn the ground is at every point of the terrain, from
@@ -177,18 +272,6 @@ func _worn_ground() -> PackedFloat32Array:
 	return worn
 
 
-## _ground_color mixes grass of a few shades with dry patches, then worn
-## ground, mud low by the river and stone on steep slopes.
-static func _ground_color(x: float, z: float, h: float, up: float, worn: float) -> Color:
-	var patch := 0.5 + 0.25 * sin(x * 0.11 + z * 0.07) + 0.25 * sin(x * 0.05 - z * 0.13 + 1.7)
-	var color := LUSH.lerp(GRASS, patch)
-	var dry := smoothstep(0.62, 0.9, 0.5 + 0.3 * sin(x * 0.031 - z * 0.023 + 0.4) + 0.2 * cos(x * 0.077 + z * 0.091))
-	color = color.lerp(DRY, dry * 0.7)
-	color = color.lerp(DIRT, worn)
-	color = color.lerp(MUD, smoothstep(-0.6, -1.4, h))
-	color = color.lerp(STONE, smoothstep(0.78, 0.6, up) * 0.8)
-	var grain := 0.97 + 0.06 * fposmod(sin(x * 12.9898 + z * 78.233) * 43758.5453, 1.0)
-	return Color(color.r * grain, color.g * grain, color.b * grain)
 
 
 # The boxes.
@@ -206,93 +289,198 @@ func _build_boxes() -> void:
 	var colors: Dictionary = PROTOTYPE_COLORS if scene.terrain == null else COLORS
 	for kind: int in by_kind:
 		var boxes: Array = by_kind[kind]
+		var transforms: Array[Transform3D] = []
+		var shades: Array[Color] = []
+		var box_mesh: Mesh = unit
+		if kind == MapScene.Kind.SANDBAG and scene.terrain != null:
+			box_mesh = _sandbag_mesh()
+			for box in boxes:
+				_stack_sandbags(box, transforms, shades)
+		else:
+			if kind == MapScene.Kind.TRUNK and scene.terrain != null:
+				box_mesh = _trunk_mesh()
+			for i in boxes.size():
+				var box: MapScene.Box = boxes[i]
+				var basis := box.transform.basis.scaled_local(box.half_extents * 2)
+				var position := box.transform.origin
+				if kind == MapScene.Kind.TRUNK and scene.terrain != null:
+					var ground := scene.terrain.height_at(position.x, position.z)
+					position.y += ValleyScenery.visual_height(ground, position.x, position.z, scene.play_area) - ground
+				transforms.append(Transform3D(basis, position))
+				var shade := _surface_shade(i, kind)
+				if scene.terrain != null:
+					shade *= CustomsScenery.surface_tint(kind, position)
+				shades.append(shade)
 		var multimesh := MultiMesh.new()
 		multimesh.transform_format = MultiMesh.TRANSFORM_3D
 		multimesh.use_colors = true
-		multimesh.mesh = unit
-		multimesh.instance_count = boxes.size()
-		for i in boxes.size():
-			var box: MapScene.Box = boxes[i]
-			var basis := box.transform.basis.scaled_local(box.half_extents * 2)
-			multimesh.set_instance_transform(i, Transform3D(basis, box.transform.origin))
-			var shade := 0.92 + 0.16 * fposmod(sin(i * 91.7 + kind * 13.1) * 4375.85, 1.0)
-			multimesh.set_instance_color(i, Color(shade, shade, shade))
+		multimesh.mesh = box_mesh
+		multimesh.instance_count = transforms.size()
+		for i in transforms.size():
+			multimesh.set_instance_transform(i, transforms[i])
+			multimesh.set_instance_color(i, shades[i])
 		var instance := MultiMeshInstance3D.new()
 		instance.name = MapScene.Kind.keys()[kind].capitalize()
 		instance.multimesh = multimesh
-		var cloth := kind == MapScene.Kind.BLUE_CLOTH or kind == MapScene.Kind.RED_CLOTH
-		instance.material_override = _material(colors.get(kind, Color.GRAY), 0.0 if cloth else 0.6, _fine)
+		instance.material_override = _box_material(kind, colors.get(kind, Color.GRAY))
 		add_child(instance)
 
 
-# Plants and water.
+func _box_material(kind: int, color: Color) -> StandardMaterial3D:
+	var cloth := kind == MapScene.Kind.BLUE_CLOTH or kind == MapScene.Kind.RED_CLOTH
+	if cloth or scene.terrain == null:
+		return _material(color, 0.0 if cloth else 0.6, _fine)
+	match kind:
+		MapScene.Kind.MASONRY:
+			return _material(color, 0.50, MASONRY_DETAIL)
+		MapScene.Kind.SLATE:
+			return _material(color, 0.72, SLATE_DETAIL)
+		MapScene.Kind.COBBLES:
+			return _material(color, 0.60, COBBLE_DETAIL)
+		MapScene.Kind.PLASTER:
+			return _material(color, 0.48, PLASTER_DETAIL)
+		MapScene.Kind.ROCK, MapScene.Kind.CONCRETE:
+			return _material(color, 0.72, ROCK_DETAIL)
+		MapScene.Kind.WOOD, MapScene.Kind.PLANKS, MapScene.Kind.TRUNK:
+			return _material(color, 0.55, PLANK_DETAIL)
+		MapScene.Kind.SANDBAG:
+			var canvas := _material(color, 0.0)
+			canvas.albedo_texture = SANDBAG_CANVAS
+			canvas.roughness = 1.0
+			canvas.texture_repeat = false
+			return canvas
+		MapScene.Kind.METAL, MapScene.Kind.ROOF:
+			var metal := _material(color, 0.66, _fine)
+			metal.roughness = 0.83
+			metal.metallic = 0.12
+			return metal
+	return _material(color, 0.6, _fine)
 
 
-func _build_plants() -> void:
-	var round := SphereMesh.new()
-	round.radial_segments = 12
-	round.rings = 7
-	var cone := CylinderMesh.new()
-	cone.top_radius = 0.0
-	cone.bottom_radius = 1.0
-	cone.height = 1.0
-	cone.radial_segments = 10
-	cone.rings = 1
-	var crowns: Array[Transform3D] = []
-	var pines: Array[Transform3D] = []
-	var crown_colors: Array[Color] = []
-	var pine_colors: Array[Color] = []
-	for i in scene.trees.size():
-		var tree := scene.trees[i]
-		var size := tree.size
-		var shade := 0.85 + 0.3 * fposmod(sin(i * 37.1) * 4375.85, 1.0)
-		if tree.pine:
-			var height := 5.5 * size
-			for layer in 2:
-				var wide := (2.0 - layer * 0.6) * size
-				var tall := height * (0.62 - layer * 0.16)
-				var bottom := height * (0.28 + layer * 0.3)
-				pines.append(Transform3D(Basis().scaled(Vector3(wide, tall, wide)), tree.position + Vector3(0, bottom + tall / 2, 0)))
-				pine_colors.append(Color(0.16 * shade, 0.32 * shade, 0.15 * shade))
-		else:
-			var top := 3.2 * size
-			crowns.append(Transform3D(Basis(Vector3.UP, i).scaled(Vector3(2.0, 1.6, 2.0) * size), tree.position + Vector3(0, top + 0.4 * size, 0)))
-			crown_colors.append(Color(0.3 * shade, 0.47 * shade, 0.2 * shade))
-	for i in scene.bushes.size():
-		var bush := scene.bushes[i]
-		var shade := 0.85 + 0.3 * fposmod(sin(i * 53.3) * 4375.85, 1.0)
-		crowns.append(Transform3D(Basis(Vector3.UP, i).scaled(Vector3(1.0, 0.7, 1.1) * bush.size), bush.position + Vector3(0, 0.25 * bush.size, 0)))
-		crown_colors.append(Color(0.29 * shade, 0.43 * shade, 0.19 * shade))
-	_instances("Crowns", round, crowns, crown_colors)
-	_instances("Pines", cone, pines, pine_colors)
+static func _surface_shade(index: int, kind: int) -> Color:
+	var shade := 0.87 + 0.21 * fposmod(sin(index * 91.7 + kind * 13.1) * 4375.85, 1.0)
+	return Color(shade, shade, shade)
 
 
-func _instances(label: String, mesh: Mesh, transforms: Array[Transform3D], colors: Array[Color]) -> void:
-	if transforms.is_empty():
-		return
-	var multimesh := MultiMesh.new()
-	multimesh.transform_format = MultiMesh.TRANSFORM_3D
-	multimesh.use_colors = true
-	multimesh.mesh = mesh
-	multimesh.instance_count = transforms.size()
-	for i in transforms.size():
-		multimesh.set_instance_transform(i, transforms[i])
-		multimesh.set_instance_color(i, colors[i])
-	var instance := MultiMeshInstance3D.new()
-	instance.name = label
-	instance.multimesh = multimesh
-	instance.material_override = _material(Color.WHITE, 0.6)
-	add_child(instance)
+## Keep the full width of the collision box through the lower stem, then
+## taper inside the crown. Small bevels take the edge off the square section.
+static func _trunk_mesh() -> ArrayMesh:
+	const OUTLINE := [
+		Vector2(0.5, -0.4), Vector2(0.5, 0.4), Vector2(0.4, 0.5), Vector2(-0.4, 0.5),
+		Vector2(-0.5, 0.4), Vector2(-0.5, -0.4), Vector2(-0.4, -0.5), Vector2(0.4, -0.5),
+	]
+	const PROFILE := [Vector2(-0.5, 1.06), Vector2(-0.35, 1.0), Vector2(0.23, 1.0), Vector2(0.5, 0.28)]
+	var surface := SurfaceTool.new()
+	surface.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for ring in PROFILE.size() - 1:
+		var low: Vector2 = PROFILE[ring]
+		var high: Vector2 = PROFILE[ring + 1]
+		for side in OUTLINE.size():
+			var next := (side + 1) % OUTLINE.size()
+			var a: Vector2 = OUTLINE[side]
+			var b: Vector2 = OUTLINE[next]
+			var positions := [
+				Vector3(a.x * low.y, low.x, a.y * low.y), Vector3(b.x * low.y, low.x, b.y * low.y),
+				Vector3(a.x * high.y, high.x, a.y * high.y), Vector3(b.x * high.y, high.x, b.y * high.y),
+			]
+			var u := float(side) / OUTLINE.size()
+			var v := float(side + 1) / OUTLINE.size()
+			var uvs := [
+				Vector2(u, low.x + 0.5), Vector2(v, low.x + 0.5),
+				Vector2(u, high.x + 0.5), Vector2(v, high.x + 0.5),
+			]
+			for vertex in [0, 1, 2, 1, 3, 2]:
+				surface.set_uv(uvs[vertex])
+				surface.add_vertex(positions[vertex])
+	for side in OUTLINE.size():
+		var a: Vector2 = OUTLINE[side] * PROFILE[-1].y
+		var b: Vector2 = OUTLINE[(side + 1) % OUTLINE.size()] * PROFILE[-1].y
+		for point: Vector2 in [Vector2.ZERO, a, b]:
+			surface.set_uv(point + Vector2(0.5, 0.5))
+			surface.add_vertex(Vector3(point.x, PROFILE[-1].x, point.y))
+	surface.generate_normals()
+	surface.index()
+	return surface.commit()
+
+
+## Four cross sections form the filled body and pinched, stitched end.
+## The UV runs from the folded end along the length and around the sack.
+static func _sandbag_mesh() -> ArrayMesh:
+	const SIDES := 12
+	# Length from the center, relative height, and relative depth.
+	const PROFILE := [Vector3(-0.5, 0.54, 0.64), Vector3(-0.37, 1.0, 0.95),
+		Vector3(0.37, 0.98, 1.0), Vector3(0.5, 0.26, 0.73)]
+	var surface := SurfaceTool.new()
+	surface.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for section in PROFILE.size() - 1:
+		var a: Vector3 = PROFILE[section]
+		var b: Vector3 = PROFILE[section + 1]
+		for side in SIDES:
+			var start := float(side) / SIDES
+			var end := float(side + 1) / SIDES
+			_sandbag_vertex(surface, a, start)
+			_sandbag_vertex(surface, a, end)
+			_sandbag_vertex(surface, b, start)
+			_sandbag_vertex(surface, a, end)
+			_sandbag_vertex(surface, b, end)
+			_sandbag_vertex(surface, b, start)
+	for section in [0, PROFILE.size() - 1]:
+		var at: Vector3 = PROFILE[section]
+		for side in SIDES:
+			var start := float(side) / SIDES
+			var end := float(side + 1) / SIDES
+			surface.set_normal(Vector3(signf(at.x), 0, 0))
+			surface.set_uv(Vector2(at.x + 0.5, 0.5))
+			surface.add_vertex(Vector3(at.x, 0, 0))
+			_sandbag_vertex(surface, at, end if section == 0 else start)
+			_sandbag_vertex(surface, at, start if section == 0 else end)
+	surface.index()
+	return surface.commit()
+
+
+static func _sandbag_vertex(surface: SurfaceTool, section: Vector3, around: float) -> void:
+	var angle := TAU * fposmod(around, 1.0)
+	var y := sin(angle)
+	var z := cos(angle)
+	var x := section.x
+	surface.set_uv(Vector2(x + 0.5, around))
+	var shoulder := smoothstep(0.37, 0.5, absf(x)) * signf(x)
+	surface.set_normal(Vector3(1.3 * shoulder, y, z).normalized())
+	# Broader flats than an ellipse let the courses settle together.
+	surface.add_vertex(Vector3(x, 0.5 * section.y * signf(y) * pow(absf(y), 0.62),
+		0.5 * section.z * signf(z) * pow(absf(z), 0.62)))
+
+
+## Overlap the courses enough for the visual cover to match the collision wall.
+static func _stack_sandbags(box: MapScene.Box, transforms: Array[Transform3D], shades: Array[Color]) -> void:
+	var half := box.half_extents
+	var rows := maxi(2, roundi(half.y * 2.0 / 0.27))
+	var step := 2.0 * half.y / rows
+	var columns := maxi(1, ceili(half.x * 2.0 / 0.73))
+	var span := 2.0 * half.x / columns
+	for row in rows:
+		var offset := span * 0.5 if row % 2 == 1 else 0.0
+		var y := -half.y + step * (row + 0.5)
+		for column in range(-1, columns):
+			var left := maxf(-half.x, -half.x + span * column + offset)
+			var right := minf(half.x, -half.x + span * (column + 1) + offset)
+			if right - left < 0.04:
+				continue
+			var size := Vector3((right - left) * 1.13, step * 1.24, half.z * 2.0)
+			var center := Vector3((left + right) / 2.0, y, sin(float(column) * 2.6 + row) * 0.017)
+			var facing := Basis(Vector3.UP, PI) if (row + column) % 2 == 0 else Basis.IDENTITY
+			transforms.append(box.transform * Transform3D(facing.scaled_local(size), center))
+			shades.append(_surface_shade(transforms.size(), MapScene.Kind.SANDBAG))
+
+
+# River.
 
 
 func _build_water(water: MapScene.Water) -> void:
 	var plane := PlaneMesh.new()
 	plane.size = water.half_extents * 2
-	var material := StandardMaterial3D.new()
-	material.albedo_color = Color(0.17, 0.32, 0.38, 0.75)
-	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	material.roughness = 0.22
-	material.metallic_specular = 0.45
+	var material := ShaderMaterial.new()
+	material.shader = VALLEY_RIVER
 	plane.material = material
 	var instance := MeshInstance3D.new()
 	instance.name = "Water"

@@ -1,7 +1,9 @@
-[gd_scene load_steps=3 format=3]
+[gd_scene load_steps=4 format=3]
 
 [ext_resource type="Script" path="res://menu/game_menu.gd" id="1_menu"]
 [ext_resource type="Theme" path="res://menu/theme.tres" id="2_theme"]
+
+[ext_resource type="FontFile" path="res://assets/type/BarlowCondensed-Bold.ttf" id="3_display"]
 
 [node name="GameMenu" type="Control"]
 layout_mode = 3
@@ -40,8 +42,9 @@ theme_override_constants/separation = 12
 
 [node name="Title" type="Label" parent="Center/Panel/Rows"]
 layout_mode = 2
-theme_override_font_sizes/font_size = 28
-text = "Menu"
+theme_override_fonts/font = ExtResource("3_display")
+theme_override_font_sizes/font_size = 38
+text = "MATCH MENU"
 horizontal_alignment = 1
 
 [node name="About" type="Label" parent="Center/Panel/Rows"]
@@ -52,6 +55,14 @@ theme_override_colors/font_color = Color(0.72, 0.77, 0.84, 1)
 theme_override_font_sizes/font_size = 15
 autowrap_mode = 3
 
+[node name="Controls" type="Label" parent="Center/Panel/Rows"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.72, 0.77, 0.84, 1)
+theme_override_font_sizes/font_size = 15
+text = "WASD Move   ·   Shift Sprint   ·   Space Jump   ·   C Hold to crouch
+Mouse Fire / Aim   ·   R Reload   ·   1–7 Switch weapon"
+autowrap_mode = 3
+
 [node name="Separator" type="HSeparator" parent="Center/Panel/Rows"]
 layout_mode = 2
 
@@ -59,7 +70,15 @@ layout_mode = 2
 unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 42)
 layout_mode = 2
+theme_type_variation = &"PrimaryButton"
 text = "Resume"
+
+[node name="Replay" type="Button" parent="Center/Panel/Rows"]
+unique_name_in_owner = true
+visible = false
+custom_minimum_size = Vector2(0, 42)
+layout_mode = 2
+text = "Play again"
 
 [node name="Leave" type="Button" parent="Center/Panel/Rows"]
 custom_minimum_size = Vector2(0, 42)
@@ -74,3 +93,4 @@ text = "Quit the game"
 [connection signal="pressed" from="Center/Panel/Rows/Resume" to="." method="_on_resume_pressed"]
 [connection signal="pressed" from="Center/Panel/Rows/Leave" to="." method="_on_leave_pressed"]
 [connection signal="pressed" from="Center/Panel/Rows/Quit" to="." method="_on_quit_pressed"]
+[connection signal="pressed" from="Center/Panel/Rows/Replay" to="." method="_on_replay_pressed"]

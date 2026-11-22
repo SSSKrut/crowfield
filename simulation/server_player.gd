@@ -21,6 +21,7 @@ var soldier := 0
 var controller: CharacterController
 ## respawn_at is the tick when a dead soldier of the player comes back.
 var respawn_at := 0
+var kills := 0
 
 var last_input := 0.0
 var last := InputCommand.new()

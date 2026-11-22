@@ -12,7 +12,10 @@ var _ticks := PackedInt64Array()
 var _ids := PackedInt32Array()
 var _positions := PackedVector3Array()
 var _yaws := PackedFloat32Array()
-var _alive := PackedByteArray()
+const ALIVE := 1
+const CROUCHED := 2
+
+var _flags := PackedByteArray()
 
 
 func _init(capacity: int) -> void:
@@ -21,7 +24,7 @@ func _init(capacity: int) -> void:
 	_ids.resize(capacity * TICKS)
 	_positions.resize(capacity * TICKS)
 	_yaws.resize(capacity * TICKS)
-	_alive.resize(capacity * TICKS)
+	_flags.resize(capacity * TICKS)
 
 
 func record(tick: int, soldiers: SoldierSet) -> void:
@@ -35,11 +38,11 @@ func record(tick: int, soldiers: SoldierSet) -> void:
 		_ids[i] = soldier.id
 		_positions[i] = soldier.position
 		_yaws[i] = soldier.yaw
-		_alive[i] = 1 if soldier.alive else 0
+		_flags[i] = (ALIVE if soldier.alive else 0) | (CROUCHED if soldier.crouched else 0)
 
 
 ## at returns a soldier's pose at a fractional tick, between the two recorded
-## ticks around it, as [position, yaw, alive]. It returns [] for times not
+## ticks around it, as [position, yaw, alive, crouched]. It returns [] for times not
 ## recorded, or recorded for another soldier that had the same slot.
 func at(id: int, tick: float) -> Array:
 	var whole := floori(tick)
@@ -48,13 +51,13 @@ func at(id: int, tick: float) -> Array:
 		return []
 	var fraction := tick - whole
 	if fraction == 0.0:
-		return [_positions[earlier], float(_yaws[earlier]), _alive[earlier] == 1]
+		return [_positions[earlier], float(_yaws[earlier]), _flags[earlier] & ALIVE != 0, _flags[earlier] & CROUCHED != 0]
 	var later := _recorded(id, whole + 1)
 	if later < 0:
 		return []
 	var position := _positions[earlier].lerp(_positions[later], fraction)
 	var yaw := _yaws[earlier] + Game.remainder(_yaws[later] - _yaws[earlier]) * fraction
-	return [position, yaw, _alive[earlier] == 1]
+	return [position, yaw, _flags[earlier] & ALIVE != 0, _flags[earlier] & CROUCHED != 0]
 
 
 func _recorded(id: int, tick: int) -> int:

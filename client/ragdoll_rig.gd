@@ -1,6 +1,6 @@
 class_name RagdollRig
 extends RefCounted
-## RagdollRig is how the skeleton of the robot falls (ARCHITECTURE.md, 10.2):
+## RagdollRig is how the infantry skeleton falls (ARCHITECTURE.md, 10.2):
 ## thirteen parts in the reference pose, the first frame of the idle clip,
 ## standing at the origin; the bone each part follows and where the part sits
 ## on that bone; and the joints between the parts. It is built once and every
@@ -37,7 +37,7 @@ static func build(asset: CharacterAsset, reference: Skeleton3D) -> RagdollRig:
 	var rig := RagdollRig.new()
 	rig.part_of_bone.resize(reference.get_bone_count())
 	rig.part_of_bone.fill(-1)
-	rig._box(asset, reference, "Hips", Vector3(0.17, 0.14, 0.13), 12, -1, Joint.NONE, 0)
+	rig._box(asset, reference, "Hips", Vector3(0.16, 0.11, 0.13), 12, -1, Joint.NONE, 0)
 	rig._capsule(asset, reference, "Torso_2", "Neck", 0.18, 16, Part.HIPS, Joint.SWING_TWIST, 0.55)
 	rig._head(asset, reference)
 	for side in ["L", "R"]:
@@ -46,7 +46,8 @@ static func build(asset: CharacterAsset, reference: Skeleton3D) -> RagdollRig:
 	for side in ["L", "R"]:
 		rig._capsule(asset, reference, "UpperLeg." + side, "LowerLeg." + side, 0.105, 6, Part.HIPS, Joint.SWING_TWIST, 0.85)
 		rig._capsule(asset, reference, "LowerLeg." + side, "Foot." + side, 0.09, 4, rig.parts.size() - 1, Joint.HINGE, 1.15)
-		rig._box(asset, reference, "Foot." + side, Vector3(0.1, 0.07, 0.16), 1.2, rig.parts.size() - 1, Joint.POINT, 0)
+		rig._box(asset, reference, "Foot." + side, Vector3(0.081, 0.071, 0.137), 1.2, rig.parts.size() - 1, Joint.POINT, 0,
+			Vector3(0, -0.048, 0.055))
 	var needed := {}
 	for i in rig.parts.size():
 		var part := rig.parts[i]
@@ -77,7 +78,7 @@ static func bone_world(skeleton: Skeleton3D, bone: int) -> Transform3D:
 
 func _bone(skeleton: Skeleton3D, name: String) -> int:
 	var bone := skeleton.find_bone(name)
-	assert(bone >= 0, "the robot has no bone %s" % name)
+	assert(bone >= 0, "the infantry skeleton has no bone %s" % name)
 	return bone
 
 
@@ -85,11 +86,12 @@ func _add(part: PartSpec) -> void:
 	parts.append(part)
 
 
-func _box(_asset: CharacterAsset, skeleton: Skeleton3D, name: String, half: Vector3, mass: float, parent: int, joint: int, limit: float) -> void:
+func _box(_asset: CharacterAsset, skeleton: Skeleton3D, name: String, half: Vector3, mass: float, parent: int, joint: int, limit: float,
+		center := Vector3.ZERO) -> void:
 	var part := PartSpec.new()
 	part.bone = _bone(skeleton, name)
 	var at := bone_world(skeleton, part.bone)
-	part.reference = at
+	part.reference = Transform3D(at.basis, at * center)
 	part.shape = Shape.BOX
 	part.size = half
 	part.mass = mass
@@ -129,9 +131,9 @@ func _head(_asset: CharacterAsset, skeleton: Skeleton3D) -> void:
 	var part := PartSpec.new()
 	part.bone = _bone(skeleton, "Head_2")
 	var at := bone_world(skeleton, part.bone)
-	part.reference = Transform3D(at.basis, at.origin + at.basis * Vector3(0, 0.13, 0))
+	part.reference = Transform3D(at.basis, at.origin + at.basis * Vector3(0, 0.115, 0))
 	part.shape = Shape.SPHERE
-	part.size = Vector3(0.17, 0, 0)
+	part.size = Vector3(0.115, 0, 0)
 	part.mass = 4
 	part.parent = Part.TORSO
 	part.joint = Joint.SWING_TWIST

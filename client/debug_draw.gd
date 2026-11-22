@@ -53,9 +53,12 @@ func capsule(a: Vector3, b: Vector3, radius: float, color: Color) -> void:
 	line(a - up * radius, b + up * radius, color)
 
 
-func hitboxes(position: Vector3, yaw: float) -> void:
+func hitboxes(position: Vector3, yaw: float, crouched := false) -> void:
+	var a := Hitboxes.CROUCH_A if crouched else Hitboxes.A
+	var b := Hitboxes.CROUCH_B if crouched else Hitboxes.B
+	var radii := Hitboxes.CROUCH_RADII if crouched else Hitboxes.RADII
 	for i in Hitboxes.COUNT:
-		capsule(Hitboxes.place(Hitboxes.A[i], position, yaw), Hitboxes.place(Hitboxes.B[i], position, yaw), Hitboxes.RADII[i], ZONE_COLORS[Hitboxes.ZONES[i]])
+		capsule(Hitboxes.place(a[i], position, yaw), Hitboxes.place(b[i], position, yaw), radii[i], ZONE_COLORS[Hitboxes.ZONES[i]])
 
 
 func grid(size: int, color: Color) -> void:

@@ -12,11 +12,11 @@ extends Node
 ## The node adds the overlay itself, under a CanvasLayer of layer -1: a HUD on
 ## the default canvas or any layer from 0 up is drawn over it.
 ##
-## A weapon model is built of boxes in a space where X points right, Y up and Z
+## Weapon parts are built in a space where X points right, Y up and Z
 ## forward, with the line of its sights along +Z through the origin, so that
 ## aiming puts that line on the crosshair. Its meshes have Z pointing
 ## backwards, as Godot cameras look along -Z: _forward turns a point of the
-## boxes' space into mesh space.
+## author's space into mesh space.
 
 ## FIELD_OF_VIEW draws the weapon in hand at a constant size, while the world
 ## zooms when aiming.
@@ -26,20 +26,29 @@ const FIELD_OF_VIEW := 58.0
 const AIM_TIME := 0.15
 const RECOIL_TIME := 0.06
 const FLASH_TIME := 0.05
+const RELOAD_RELEASE_PROGRESS := 0.22
+const RELOAD_SEAT_PROGRESS := 0.75
+const FULL_HD_PIXELS := 1920.0 * 1080.0
+
+enum Footfall { NONE, STEP, LAND }
 ## A soldier holds its weapon at its right side, at the height of the chest and
-## somewhat forward, along its aim; a little larger than in first person, to
-## suit the chunky robot.
-const HELD_SCALE := 1.2
-const HELD_OFFSET := Vector3(0.26, 1.0, 0.3)
+## somewhat forward, along its aim.
+const HELD_SCALE := 0.94
+const HELD_OFFSET := Vector3(0.085, 1.29, 0.30)
 ## LIGHT is where the light of the world comes from when no sun is given: the
 ## direction the box models of the prototype were lit from.
 const LIGHT := Vector3(0.4, 1.0, 0.3)
 
-const GUN_METAL := Color8(58, 60, 64)
-const GUN_DARK := Color8(32, 33, 36)
-const GUN_POLYMER := Color8(74, 76, 66)
-const GUN_WOOD := Color8(124, 82, 47)
-const SLEEVE := Color8(86, 92, 102)
+enum Finish { STEEL, POLYMER, CANVAS, WOOD, TEAM, OPTIC }
+const GUN_METAL := Color8(72, 80, 82)
+const GUN_DARK := Color8(42, 50, 52)
+const GUN_EDGE := Color8(108, 119, 116)
+const GUN_POLYMER := Color8(109, 111, 86)
+const GUN_WOOD := Color8(133, 86, 52)
+const SLEEVE := Color8(102, 117, 91)
+const SLEEVE_SEAM := Color8(70, 82, 66)
+const GLOVE := Color8(58, 65, 57)
+const SIGHT := Color8(231, 181, 90)
 const TUBE := Color8(88, 96, 70)
 const TUBE_DARK := Color8(60, 66, 48)
 const GRENADE_BODY := Color8(70, 82, 52)
@@ -53,6 +62,7 @@ var aim := 0.0
 ## sun is the light of the world, which the overlay copies; without one the
 ## overlay is lit from LIGHT.
 var sun: DirectionalLight3D
+var performance_mode := false
 ## overlay shows the weapon in hand over the world; layer holds it.
 var overlay: SubViewportContainer
 var layer: CanvasLayer
@@ -63,17 +73,29 @@ var layer: CanvasLayer
 var _shapes: Array[Shape] = []
 var _models: Array[ArrayMesh] = []
 var _held: Array[ArrayMesh] = []
-var _gun_material := StandardMaterial3D.new()
-var _accent_material := StandardMaterial3D.new()
+var _support_meshes: Array[ArrayMesh] = []
+var _support_sleeve_meshes: Array[ArrayMesh] = []
+var _magazine_meshes: Array[ArrayMesh] = []
+var _finishes: Array[StandardMaterial3D] = []
+var _held_material: StandardMaterial3D
 var _viewport: SubViewport
 var _camera: Camera3D
 var _light: DirectionalLight3D
 var _instances: Array[MeshInstance3D] = []
+var _support_hands: Array[MeshInstance3D] = []
+var _support_sleeves: Array[MeshInstance3D] = []
+var _magazines: Array[MeshInstance3D] = []
 var _flash_core: MeshInstance3D
 var _flash_flame: MeshInstance3D
+var _flash_light: OmniLight3D
 var _shown := WeaponTuning.Kind.NONE
-## The walk sways the model: _bob is its phase, _stride its strength.
-var _bob := 0.0
+## One unit of step phase is one footfall. The weapon follows the same cadence.
+var _step_phase := 0.0
+var _foot_position := Vector3.INF
+var _was_grounded := false
+var _air_time := 0.0
+var _air_peak := 0.0
+var _landing_dip := 0.0
 var _stride := 0.0
 var _sway := Vector2.ZERO
 var _sprint := 0.0
@@ -87,22 +109,62 @@ var _muzzle := Vector3.ZERO
 
 func _init() -> void:
 	name = "ViewModel"
-	for material in [_gun_material, _accent_material]:
-		material.roughness = 1.0
-		material.metallic_specular = 0.2
-	_gun_material.vertex_color_use_as_albedo = true
-	_gun_material.vertex_color_is_srgb = true
+	_finishes = [
+		_finish(0.52, 0.32, 61, 0.22),
+		_finish(0.78, 0.04, 43, 0.09),
+		_finish(0.95, 0.0, 50, 0.14),
+		_finish(0.76, 0.0, 23, 0.20),
+		_finish(0.87, 0.0, 40, 0.10, false),
+		_finish(0.38, 0.08),
+	]
+	_held_material = _finish(0.83, 0.0)
 	_shapes = _weapon_shapes()
 	_models.resize(WeaponTuning.KINDS)
+	_support_meshes.resize(WeaponTuning.KINDS)
+	_support_sleeve_meshes.resize(WeaponTuning.KINDS)
+	_magazine_meshes.resize(WeaponTuning.KINDS)
 	_held.resize(WeaponTuning.KINDS)
 	for kind in WeaponTuning.KINDS:
 		var shape := _shapes[kind]
-		if shape != null:
-			var all: Array[Box] = []
-			all.append_array(shape.gun)
-			all.append_array(shape.arms)
-			_models[kind] = _mesh(all)
-			_held[kind] = _mesh(shape.gun)
+		if shape == null:
+			continue
+		var elbow := shape.support_elbow
+		var upper_sleeve := _limb(elbow + Vector3(-0.060, -0.43, -0.16),
+			elbow + (shape.support_grip - elbow) * 0.08, Vector2(0.051, 0.048), SLEEVE, Finish.CANVAS)
+		var upper: Array[Piece] = shape.gun + shape.right_arm
+		upper.append(upper_sleeve)
+		_models[kind] = _mesh(upper)
+		_support_meshes[kind] = _mesh(_glove(shape.support_grip, -1.0))
+		_support_sleeve_meshes[kind] = _mesh(_sleeve(shape.support_grip, shape.support_elbow))
+		_magazine_meshes[kind] = _mesh(shape.magazine)
+		_held[kind] = _mesh(shape.gun + shape.magazine, true)
+
+
+static func _finish(roughness: float, metal: float, detail_scale: int = 0,
+		amount: float = 0.0, vertex_color: bool = true) -> StandardMaterial3D:
+	var material := StandardMaterial3D.new()
+	material.roughness = roughness
+	material.metallic = metal
+	material.metallic_specular = 0.35
+	material.vertex_color_use_as_albedo = vertex_color
+	material.vertex_color_is_srgb = true
+	if detail_scale > 0:
+		var noise := FastNoiseLite.new()
+		noise.frequency = 0.09
+		noise.fractal_octaves = 2
+		var ramp := Gradient.new()
+		ramp.set_color(0, Color.WHITE * (1.0 - amount))
+		ramp.set_color(1, Color.WHITE)
+		var texture := NoiseTexture2D.new()
+		texture.width = 96
+		texture.height = 96
+		texture.seamless = true
+		texture.noise = noise
+		texture.color_ramp = ramp
+		material.albedo_texture = texture
+		material.uv1_triplanar = true
+		material.uv1_scale = Vector3.ONE * detail_scale
+	return material
 
 
 func _ready() -> void:
@@ -121,14 +183,17 @@ func _ready() -> void:
 	_viewport.own_world_3d = true
 	_viewport.transparent_bg = true
 	_viewport.gui_disable_input = true
-	_viewport.msaa_3d = Viewport.MSAA_4X
-	_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	_viewport.msaa_3d = Viewport.MSAA_2X if performance_mode else Viewport.MSAA_4X
+	_viewport.render_target_update_mode = SubViewport.UPDATE_WHEN_VISIBLE
 	overlay.add_child(_viewport)
+	if performance_mode:
+		overlay.resized.connect(_update_overlay_resolution)
+		_update_overlay_resolution()
 	var environment := Environment.new()
 	environment.background_mode = Environment.BG_CLEAR_COLOR
 	environment.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	environment.ambient_light_color = Color(1, 1, 1)
-	environment.ambient_light_energy = 0.55
+	environment.ambient_light_color = Color(0.84, 0.91, 1.0)
+	environment.ambient_light_energy = 0.69
 	environment.tonemap_mode = Environment.TONE_MAPPER_LINEAR
 	var world := WorldEnvironment.new()
 	world.environment = environment
@@ -144,15 +209,18 @@ func _ready() -> void:
 	_light.shadow_enabled = false
 	_viewport.add_child(_light)
 	_instances.resize(WeaponTuning.KINDS)
+	_support_hands.resize(WeaponTuning.KINDS)
+	_support_sleeves.resize(WeaponTuning.KINDS)
+	_magazines.resize(WeaponTuning.KINDS)
 	for kind in WeaponTuning.KINDS:
 		if _models[kind] == null:
 			continue
-		var instance := MeshInstance3D.new()
-		instance.mesh = _models[kind]
-		instance.visible = false
-		instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		_viewport.add_child(instance)
-		_instances[kind] = instance
+		var root := _mesh_part(_models[kind], _viewport)
+		root.visible = false
+		_instances[kind] = root
+		_support_hands[kind] = _mesh_part(_support_meshes[kind], root)
+		_support_sleeves[kind] = _mesh_part(_support_sleeve_meshes[kind], root)
+		_magazines[kind] = _mesh_part(_magazine_meshes[kind], root)
 	var core := SphereMesh.new()
 	core.radius = 1.0
 	core.height = 2.0
@@ -166,6 +234,26 @@ func _ready() -> void:
 	flame.radial_segments = 6
 	flame.rings = 1
 	_flash_flame = _flash_part(flame, FLASH_FLAME)
+	_flash_light = OmniLight3D.new()
+	_flash_light.light_color = Color8(255, 169, 77)
+	_flash_light.omni_range = 0.83
+	_flash_light.visible = false
+	_viewport.add_child(_flash_light)
+
+
+## The alpha overlay is a separate render target from the scaled world. At
+## large window sizes, keep its projection and spend fewer samples on it.
+func _update_overlay_resolution() -> void:
+	var pixels := overlay.size.x * overlay.size.y
+	overlay.stretch_shrink = maxi(1, ceili(sqrt(pixels / FULL_HD_PIXELS)))
+
+
+static func _mesh_part(mesh: Mesh, parent: Node) -> MeshInstance3D:
+	var instance := MeshInstance3D.new()
+	instance.mesh = mesh
+	instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	parent.add_child(instance)
+	return instance
 
 
 func _flash_part(mesh: PrimitiveMesh, color: Color) -> MeshInstance3D:
@@ -185,11 +273,11 @@ func _flash_part(mesh: PrimitiveMesh, color: Color) -> MeshInstance3D:
 
 
 ## show_weapon shows the model of a kind in first person, its hands in the
-## team colour tint.
+## team wrist bands.
 func show_weapon(kind: int, tint: Color) -> void:
 	if layer == null:
 		return
-	_accent_material.albedo_color = tint
+	_finishes[Finish.TEAM].albedo_color = tint.lerp(Color8(105, 117, 109), 0.27)
 	if kind != _shown:
 		for instance in _instances:
 			if instance != null:
@@ -216,6 +304,47 @@ func fired(turn: float) -> void:
 	_flash_turn = turn
 
 
+## footing uses the drawn feet, so a blocked movement key or a stationary
+## correction cannot roll the gait forward. Reset the sample after a discontinuity
+## such as spawning, focus loss or switching away from the first-person view.
+func footing(delta: float, feet: Vector3, grounded: bool, speed: float, active: bool) -> Footfall:
+	if not active:
+		_foot_position = Vector3.INF
+		return Footfall.NONE
+	var offset := feet - _foot_position
+	_foot_position = feet
+	if not offset.is_finite() or offset.length_squared() > pow(maxf(0.9, delta * 12.0), 2):
+		_step_phase = 0.0
+		_air_time = 0.0
+		_air_peak = feet.y
+		_was_grounded = grounded
+		_landing_dip = 0.0
+		return Footfall.NONE
+	if not grounded:
+		if _was_grounded:
+			_air_peak = feet.y - offset.y
+			_air_time = 0.0
+		_air_peak = maxf(_air_peak, feet.y)
+		_air_time += delta
+		_was_grounded = false
+		return Footfall.NONE
+	if not _was_grounded:
+		_was_grounded = true
+		var fall := _air_peak - feet.y
+		if _air_time >= 0.10 and fall >= 0.18:
+			_landing_dip = clampf(fall * 0.052, 0.009, 0.026)
+			_step_phase = 0.0
+			return Footfall.LAND
+		return Footfall.NONE
+	if speed < 0.04:
+		return Footfall.NONE
+	var stride_length := lerpf(0.80, 2.0, clampf(speed, 0.0, 1.0))
+	var next := _step_phase + Vector2(offset.x, offset.z).length() / stride_length
+	var planted := floori(next) > floori(_step_phase)
+	_step_phase = fposmod(next, 2.0)
+	return Footfall.STEP if planted else Footfall.NONE
+
+
 ## update moves the model for a frame. speed is the soldier's share of the
 ## sprint speed; look is how far the view turned this frame, in radians: yaw
 ## to the right, pitch up.
@@ -224,11 +353,11 @@ func update(delta: float, aiming: bool, sprinting: bool, grounded: bool, speed: 
 	aim = minf(1.0, aim + rate) if aiming else maxf(0.0, aim - rate)
 	var stride := minf(1.0, speed) if grounded else 0.0
 	_stride += (stride - _stride) * minf(1.0, delta * 8)
-	_bob += delta * (5 + 6 * speed)
+	_landing_dip *= exp(-delta / 0.115)
 	_sprint += ((1.0 if sprinting else 0.0) - _sprint) * minf(1.0, delta * 10)
-	for i in 2:
-		var target := clampf(-look[i] * 0.6, -0.04, 0.04)
-		_sway[i] += (target - _sway[i]) * minf(1.0, delta * 12)
+	var eye_turn := look / maxf(1.0, delta * 60.0)
+	var target := (-eye_turn * 0.45).clamp(Vector2(-0.032, -0.032), Vector2(0.032, 0.032))
+	_sway = _sway.lerp(target, 1.0 - exp(-delta * 15.0))
 	_recoil *= exp(-delta / RECOIL_TIME)
 	_flash = maxf(0.0, _flash - delta)
 
@@ -241,16 +370,17 @@ func place(camera: Camera3D, kind: int, action: int, progress: float) -> bool:
 	if shape == null:
 		return false
 	var calm := 1 - 0.85 * aim
+	var phase := PI * _step_phase
 	var offset := shape.hip + (shape.aim - shape.hip) * aim
 	offset += Vector3(
-		0.012 * _stride * sin(_bob) * calm + _sway.x * calm,
-		-0.01 * _stride * absf(cos(_bob)) * calm + _sway.y * calm,
+		0.012 * _stride * sin(phase) * calm + _sway.x * calm,
+		(-0.009 * _stride * absf(cos(phase)) + _sway.y - _landing_dip) * calm,
 		-shape.kick_back * _recoil * (1 - 0.5 * aim))
-	offset += Vector3(-0.03, -0.06, -0.06) * _sprint
-	var pitch := shape.kick_pitch * _recoil * calm - 0.45 * _sprint
-	# Sprinting carries the weapon across the body, muzzle down and left.
-	var yaw := -0.55 * _sprint
-	var roll := 0.0
+	# Lower and cant the weapon while keeping the fore-end in the frame.
+	offset += Vector3(-0.03, -0.012, -0.04) * _sprint
+	var pitch := shape.kick_pitch * _recoil * calm - 0.13 * _sprint
+	var yaw := -0.42 * _sprint
+	var roll := (_sway.x * -0.5 + 0.018 * sin(phase) * _stride) * calm + 0.26 * _sprint
 	match action:
 		Arsenal.Action.EQUIPPING:
 			var lower := (1 - progress) * (1 - progress)
@@ -258,9 +388,10 @@ func place(camera: Camera3D, kind: int, action: int, progress: float) -> bool:
 			pitch -= 0.7 * lower
 		Arsenal.Action.RELOADING:
 			var dip := sin(PI * progress)
-			offset += Vector3(0, -0.07 * dip, -0.03 * dip)
-			pitch -= 0.25 * dip
-			roll += 0.6 * dip
+			offset += Vector3(-0.081, 0.178, 0.29) * dip
+			pitch += 0.105 * dip
+			yaw -= 0.25 * dip
+			roll += 0.82 * dip
 	var basis := Basis(Vector3.UP, -yaw) * Basis(Vector3.RIGHT, pitch) * Basis(Vector3.BACK, roll)
 	var local := Transform3D(basis, _forward(offset))
 	_muzzle = local * _forward(shape.muzzle)
@@ -269,26 +400,60 @@ func place(camera: Camera3D, kind: int, action: int, progress: float) -> bool:
 	var visible := not scoped(kind)
 	var instance := _instances[kind]
 	instance.transform = local
+	_reload_parts(kind, shape, progress if action == Arsenal.Action.RELOADING else 0.0)
 	instance.visible = visible and kind == _shown
-	_place_flash(visible and kind == _shown)
+	_place_flash(visible and kind == _shown, basis)
 	_place_light(camera)
 	return true
 
 
-func _place_flash(visible: bool) -> void:
+## The magazine slides out along the well; the support hand reaches for it,
+## drops out of frame, seats the replacement and returns to its foregrip.
+func _reload_parts(kind: int, shape: Shape, progress: float) -> void:
+	var hand := _support_hands[kind]
+	var magazine := _magazines[kind]
+	var sleeve := _support_sleeves[kind]
+	var reach := smoothstep(0.08, RELOAD_RELEASE_PROGRESS, progress) \
+		* (1.0 - smoothstep(RELOAD_SEAT_PROGRESS, 0.97, progress))
+	var pull := smoothstep(RELOAD_RELEASE_PROGRESS, 0.44, progress) \
+		* (1.0 - smoothstep(0.55, RELOAD_SEAT_PROGRESS, progress))
+	var travel := Vector3(-0.018, -shape.magazine_throw, -0.027) * pull
+	magazine.position = _forward(travel)
+	magazine.visible = progress <= 0.44 or progress >= 0.55
+	var motion := _forward((shape.magazine_grip - shape.support_grip) * reach + travel)
+	hand.position = motion
+	if motion == Vector3.ZERO:
+		sleeve.transform = Transform3D.IDENTITY
+		return
+	# Pivot the sleeve at the elbow while its cuff follows the glove.
+	var elbow := _forward(shape.support_elbow)
+	var rest := _forward(shape.support_grip) - elbow
+	var extended := rest + motion
+	var axis := Basis.looking_at(rest, Vector3.UP)
+	var length_scale := axis.scaled_local(Vector3(1, 1, extended.length() / rest.length())) * axis.transposed()
+	var flex := Basis(Quaternion(rest.normalized(), extended.normalized())) * length_scale
+	sleeve.transform = Transform3D(flex, elbow - flex * elbow)
+
+
+func _place_flash(visible: bool, weapon_basis: Basis) -> void:
 	if not visible or _flash <= 0:
 		_flash_core.visible = false
 		_flash_flame.visible = false
+		_flash_light.visible = false
 		return
 	var size := _flash / FLASH_TIME
 	_flash_core.visible = true
 	_flash_core.transform = Transform3D(Basis.from_scale(Vector3.ONE * 0.028 * size), _muzzle)
-	var length := 0.09 + 0.05 * _flash_turn
-	var radius := 0.03 * size
+	var length := (0.12 + 0.09 * _flash_turn) * size
+	var radius := 0.032 * size
+	var along := -weapon_basis.z
 	_flash_flame.visible = true
-	# The flame points along the view: -Z of the eye.
-	_flash_flame.transform = Transform3D(Basis(Vector3(radius, 0, 0), Vector3(0, 0, -length), Vector3(0, radius, 0)),
-		_muzzle + Vector3(0, 0, -length / 2))
+	_flash_flame.transform = Transform3D(
+		Basis(weapon_basis.x * radius, along * length, weapon_basis.y * radius),
+		_muzzle + along * length * 0.5)
+	_flash_light.visible = true
+	_flash_light.position = _muzzle
+	_flash_light.light_energy = 2.0 * size
 
 
 ## _place_light turns the light of the overlay so that it falls on the model in
@@ -325,18 +490,13 @@ func muzzle_in_world(camera: Camera3D) -> Vector3:
 
 
 ## make_held returns a new node showing the weapon of a kind as soldiers carry
-## it, or null for none. Place it with held_transform every frame. tint is the
-## colour of team-coloured parts; the guns have none yet.
-func make_held(kind: int, tint: Color = Color.WHITE) -> Node3D:
+## it, or null for none. Place it with held_transform every frame.
+func make_held(kind: int, _tint: Color = Color.WHITE) -> Node3D:
 	if _shape_of(kind) == null:
 		return null
 	var instance := MeshInstance3D.new()
 	instance.name = "Held"
 	instance.mesh = _held[kind]
-	if _held[kind].get_surface_count() > 1:
-		var accent := _accent_material.duplicate() as StandardMaterial3D
-		accent.albedo_color = tint
-		instance.set_surface_override_material(1, accent)
 	return instance
 
 
@@ -352,11 +512,17 @@ static func held_transform(position: Vector3, yaw: float, pitch: float) -> Trans
 
 ## held_muzzle is where the weapon a soldier carries fires from, or
 ## Vector3.INF when the kind has no model.
-func held_muzzle(kind: int, position: Vector3, yaw: float, pitch: float) -> Vector3:
+func held_muzzle(kind: int, carried: Transform3D) -> Vector3:
 	var shape := _shape_of(kind)
 	if shape == null:
 		return Vector3.INF
-	return held_transform(position, yaw, pitch) * _forward(shape.muzzle)
+	return carried * _forward(shape.muzzle)
+
+
+## Contact points on the carried weapon, in the same mesh space as its muzzle.
+func held_grip(kind: int, support: bool) -> Vector3:
+	var shape := _shape_of(kind)
+	return _forward(shape.support_grip if support else shape.trigger_grip)
 
 
 func _shape_of(kind: int) -> Shape:
@@ -371,252 +537,419 @@ static func _forward(point: Vector3) -> Vector3:
 	return Vector3(point.x, point.y, -point.z)
 
 
-## _mesh builds boxes into one mesh with flat faces: a surface of the coloured
-## boxes, and one of the accent boxes, which take the team colour.
-func _mesh(boxes: Array[Box]) -> ArrayMesh:
-	var plain := Part.new()
-	var accent := Part.new()
-	for box in boxes:
-		_add_box(accent if box.accent else plain, box)
+## Held versions use one surface across the whole weapon. The close-up
+## version gives canvas, polymer, steel and wood their own light response.
+func _mesh(pieces: Array[Piece], held: bool = false) -> ArrayMesh:
 	var mesh := ArrayMesh.new()
-	for part: Part in [plain, accent]:
-		if part.vertices.is_empty():
+	for finish in (1 if held else _finishes.size()):
+		var surface := Surface.new()
+		for piece in pieces:
+			if held and minf(piece.half.x, minf(piece.half.y, piece.half.z)) < 0.0045:
+				continue
+			if held or piece.finish == finish:
+				_add_piece(surface, piece, held)
+		if surface.vertices.is_empty():
 			continue
 		var arrays := []
 		arrays.resize(Mesh.ARRAY_MAX)
-		arrays[Mesh.ARRAY_VERTEX] = part.vertices
-		arrays[Mesh.ARRAY_NORMAL] = part.normals
-		arrays[Mesh.ARRAY_COLOR] = part.colors
+		arrays[Mesh.ARRAY_VERTEX] = surface.vertices
+		arrays[Mesh.ARRAY_NORMAL] = surface.normals
+		arrays[Mesh.ARRAY_COLOR] = surface.colors
 		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-		mesh.surface_set_material(mesh.get_surface_count() - 1, _accent_material if part == accent else _gun_material)
+		mesh.surface_set_material(mesh.get_surface_count() - 1, _held_material if held else _finishes[finish])
 	return mesh
 
 
-## Every face of a box by its corners in turn; bits 0, 1 and 2 of a corner's
-## index choose its side in X, Y and Z.
-const _FACES := [[0, 2, 6, 4], [1, 5, 7, 3], [0, 4, 5, 1], [2, 3, 7, 6], [0, 1, 3, 2], [4, 6, 7, 5]]
+## Extrude a rounded or chamfered cross section, with a beveled edge at both
+## ends. The small facets keep the clean silhouette of the stylized models.
+static func _add_piece(surface: Surface, piece: Piece, held: bool) -> void:
+	var profile := PackedVector2Array()
+	var width := piece.half.x
+	var height := piece.half.y
+	if piece.round:
+		var sides := 8 if held else 12
+		for i in sides:
+			var point := Vector2.from_angle(TAU * i / sides)
+			profile.append(point * Vector2(width, height))
+	else:
+		var bevel := minf(width, height) * 0.33
+		profile = PackedVector2Array([
+			Vector2(-width + bevel, -height), Vector2(width - bevel, -height),
+			Vector2(width, -height + bevel), Vector2(width, height - bevel),
+			Vector2(width - bevel, height), Vector2(-width + bevel, height),
+			Vector2(-width, height - bevel), Vector2(-width, -height + bevel),
+		])
+	var length := piece.half.z
+	var end_bevel := minf(length * 0.40, minf(width, height) * 0.22)
+	var basis := Basis(Vector3.UP, -piece.yaw) * Basis(Vector3.RIGHT, piece.pitch)
+	var center := _forward(piece.center)
+	var rings: Array[PackedVector3Array] = []
+	var ring_count := 2 if held else 4
+	for ring_index in ring_count:
+		var at_end := ring_index == 0 or ring_index == ring_count - 1
+		var depth := (length if at_end else length - end_bevel) * (1.0 if ring_index < ring_count / 2 else -1.0)
+		var ring := PackedVector3Array()
+		for p in profile:
+			var inset := p * (0.82 if at_end and not held else 1.0)
+			ring.append(center + basis * Vector3(inset.x, inset.y, depth))
+		rings.append(ring)
+	for ring_index in ring_count - 1:
+		for i in profile.size():
+			var j := (i + 1) % profile.size()
+			var a := rings[ring_index][i]
+			var b := rings[ring_index][j]
+			var c := rings[ring_index + 1][j]
+			var d := rings[ring_index + 1][i]
+			var outward := (a + b + c + d) * 0.25 - center
+			# The long middle ring is the body color; the end chamfers catch light.
+			var color := piece.tint if held or ring_index == 1 else piece.tint.lightened(0.06)
+			_triangle(surface, a, b, c, outward, color)
+			_triangle(surface, a, c, d, outward, color)
+	for ring_index in [0, ring_count - 1]:
+		var direction := basis.z * (1.0 if ring_index == 0 else -1.0)
+		var cap_center := center + direction * length
+		for i in profile.size():
+			_triangle(surface, cap_center, rings[ring_index][i],
+				rings[ring_index][(i + 1) % profile.size()], direction, piece.tint)
 
 
-func _add_box(part: Part, box: Box) -> void:
-	var center := _forward(box.center)
-	# A turn about X by the pitch lifts what points along -Z, and a turn about
-	# Y against the yaw takes it to the right.
-	var turn := Basis(Vector3.UP, -box.yaw) * Basis(Vector3.RIGHT, box.pitch)
-	var corners: Array[Vector3] = []
-	for i in 8:
-		var corner := Vector3(box.half.x * ((i & 1) * 2 - 1), box.half.y * (((i >> 1) & 1) * 2 - 1),
-			box.half.z * (((i >> 2) & 1) * 2 - 1))
-		corners.append(center + turn * _forward(corner))
-	var color := Color.WHITE if box.accent else box.color
-	for face in _FACES:
-		var a := corners[face[0]]
-		var b := corners[face[1]]
-		var c := corners[face[2]]
-		var d := corners[face[3]]
-		var normal := (b - a).cross(c - a).normalized()
-		var outward := normal if normal.dot((a + c) * 0.5 - center) >= 0 else -normal
-		# Godot draws the faces wound clockwise as seen from outside.
-		var triangles := [a, c, b, a, d, c] if normal.dot(outward) > 0 else [a, b, c, a, c, d]
-		for vertex: Vector3 in triangles:
-			part.vertices.append(vertex)
-			part.normals.append(outward)
-			part.colors.append(color)
+static func _triangle(surface: Surface, a: Vector3, b: Vector3, c: Vector3,
+		outward: Vector3, color: Color) -> void:
+	var normal := (b - a).cross(c - a).normalized()
+	var clockwise := normal.dot(outward) < 0.0
+	var points := PackedVector3Array([a, b, c] if clockwise else [a, c, b])
+	for vertex in points:
+		surface.vertices.append(vertex)
+		surface.normals.append(-normal if clockwise else normal)
+		surface.colors.append(color)
 
 
-## Part is a surface of a mesh being built.
-class Part:
+class Surface:
 	var vertices := PackedVector3Array()
 	var normals := PackedVector3Array()
 	var colors := PackedColorArray()
 
 
-## Box is a part of a model built of boxes. Its center and half size are in the
-## model's space, where X points right, Y up and Z forward. pitch tips its
-## front up, and then yaw turns it to the right, in radians. Accent parts take
-## the team colour.
-class Box:
+class Piece:
 	var center: Vector3
 	var half: Vector3
-	var color: Color
+	var tint: Color
+	var finish: Finish
+	var round: bool
 	var pitch := 0.0
 	var yaw := 0.0
-	var accent := false
 
-	func _init(at: Vector3, size: Vector3, tint: Color, tip: float = 0.0) -> void:
+	func _init(at: Vector3, size: Vector3, color: Color, material: Finish = Finish.STEEL,
+			rounded: bool = false, tip: float = 0.0) -> void:
 		center = at
 		half = size
-		color = tint
+		tint = color
+		finish = material
+		round = rounded
 		pitch = tip
 
 
-## Shape is how a weapon looks in the player's hands.
 class Shape:
-	## gun is the weapon itself, arms the hands that hold it in first person.
-	var gun: Array[Box] = []
-	var arms: Array[Box] = []
+	var gun: Array[Piece] = []
+	var magazine: Array[Piece] = []
+	var right_arm: Array[Piece] = []
+	var support_elbow: Vector3
+	var magazine_grip: Vector3
+	var support_grip: Vector3
+	var trigger_grip: Vector3
+	var magazine_throw := 0.19
 	var muzzle: Vector3
-	## hip and aim place the origin of the model in front of the eye: X right,
-	## Y up, Z forward.
 	var hip: Vector3
 	var aim: Vector3
-	## A shot throws the model back by kick_back metres and its muzzle up by
-	## kick_pitch radians.
 	var kick_back: float
 	var kick_pitch: float
-	## scope replaces the model with the view through a scope when aiming.
 	var scope := false
 	## flash is whether a shot flashes at the muzzle: a throw or a medkit
 	## does not.
 	var flash := true
 
 
-## _limb is a box from one point to another, for arms.
-static func _limb(from: Vector3, to: Vector3, half: float, tint: Color) -> Box:
+static func _limb(from: Vector3, to: Vector3, radius: Vector2, tint: Color, finish: Finish) -> Piece:
 	var d := to - from
-	var box := Box.new((from + to) * 0.5, Vector3(half, half, d.length() / 2), tint)
-	box.pitch = atan2(d.y, Vector2(d.x, d.z).length())
-	box.yaw = atan2(d.x, d.z)
-	return box
+	var piece := Piece.new((from + to) * 0.5, Vector3(radius.x, radius.y, d.length() / 2),
+		tint, finish, true)
+	piece.pitch = atan2(d.y, Vector2(d.x, d.z).length())
+	piece.yaw = atan2(d.x, d.z)
+	return piece
 
 
-## _arms are the sleeves from the elbows to the hands; the hands, in the team
-## colour, hold the weapon at the given points.
-static func _arms(right: Vector3, right_elbow: Vector3, left: Vector3, left_elbow: Vector3) -> Array[Box]:
-	var hand := Vector3(0.032, 0.036, 0.042)
-	var right_hand := Box.new(right, hand, Color.WHITE)
-	right_hand.accent = true
-	var left_hand := Box.new(left, hand, Color.WHITE)
-	left_hand.accent = true
-	return [_limb(right_elbow, right, 0.038, SLEEVE), _limb(left_elbow, left, 0.036, SLEEVE), right_hand, left_hand]
+## An overlapping cuff, reinforced knuckles and separate fingers make the
+## glove read as a hand even at the extreme first-person camera distance.
+static func _arm(grip: Vector3, elbow: Vector3, side: float) -> Array[Piece]:
+	return _sleeve(grip, elbow) + _glove(grip, side)
+
+
+static func _sleeve(grip: Vector3, elbow: Vector3) -> Array[Piece]:
+	var wrist := grip.lerp(elbow, 0.13)
+	return [
+		_limb(elbow, grip.lerp(elbow, 0.37), Vector2(0.047, 0.044), SLEEVE, Finish.CANVAS),
+		_limb(grip.lerp(elbow, 0.42), wrist, Vector2(0.039, 0.037), SLEEVE, Finish.CANVAS),
+		_limb(grip.lerp(elbow, 0.28), grip.lerp(elbow, 0.37), Vector2(0.040, 0.038), SLEEVE_SEAM, Finish.CANVAS),
+		_limb(grip.lerp(elbow, 0.15), grip.lerp(elbow, 0.27), Vector2(0.041, 0.039), Color.WHITE, Finish.TEAM),
+		_limb(grip.lerp(elbow, 0.06), grip.lerp(elbow, 0.15), Vector2(0.034, 0.033), GLOVE, Finish.CANVAS),
+	]
+
+
+static func _glove(grip: Vector3, side: float) -> Array[Piece]:
+	var pieces: Array[Piece] = [
+		Piece.new(grip, Vector3(0.034, 0.027, 0.045), GLOVE, Finish.CANVAS, true, -0.25),
+		Piece.new(grip + Vector3(side * 0.02, 0.016, -0.014), Vector3(0.019, 0.01, 0.032),
+			GLOVE.lightened(0.065), Finish.POLYMER, false, -0.30),
+		Piece.new(grip + Vector3(-side * 0.023, 0.017, 0.010), Vector3(0.013, 0.012, 0.027),
+			GLOVE, Finish.CANVAS, true, 0.32),
+	]
+	for i in 4:
+		var finger := grip + Vector3(side * (0.025 - 0.014 * i), -0.015, 0.035 - 0.005 * absf(i - 1))
+		pieces.append(Piece.new(finger, Vector3(0.008, 0.016, 0.018), GLOVE, Finish.CANVAS, true, -0.55))
+	return pieces
 
 
 static func _weapon_shapes() -> Array[Shape]:
-	var shapes: Array[Shape] = []
-	shapes.resize(WeaponTuning.KINDS)
-	var rifle := Shape.new()
-	rifle.gun = [
-		Box.new(Vector3(0, -0.055, 0.06), Vector3(0.024, 0.034, 0.17), GUN_METAL),
-		Box.new(Vector3(0, -0.019, 0.07), Vector3(0.01, 0.004, 0.15), GUN_DARK),
-		Box.new(Vector3(0, -0.05, 0.31), Vector3(0.028, 0.03, 0.09), GUN_POLYMER),
-		Box.new(Vector3(0, -0.045, 0.47), Vector3(0.009, 0.009, 0.08), GUN_DARK),
-		Box.new(Vector3(0, -0.045, 0.57), Vector3(0.013, 0.013, 0.025), GUN_DARK),
-		Box.new(Vector3(0, -0.009, 0.37), Vector3(0.0018, 0.009, 0.003), GUN_DARK),
-		Box.new(Vector3(0, -0.026, 0.37), Vector3(0.012, 0.008, 0.006), GUN_DARK),
-		Box.new(Vector3(-0.0065, -0.007, -0.045), Vector3(0.002, 0.009, 0.003), GUN_DARK),
-		Box.new(Vector3(0.0065, -0.007, -0.045), Vector3(0.002, 0.009, 0.003), GUN_DARK),
-		Box.new(Vector3(0, -0.16, 0.12), Vector3(0.015, 0.07, 0.028), GUN_DARK, 0.3),
-		Box.new(Vector3(0, -0.125, -0.06), Vector3(0.015, 0.05, 0.02), GUN_POLYMER, -0.35),
-		Box.new(Vector3(0, -0.07, -0.24), Vector3(0.02, 0.04, 0.09), GUN_POLYMER),
+	return [null, _carbine(), _marksman(), _sidearm(), _shotgun(), _launcher(), _grenade(), _medkit()]
+
+
+static func _carbine() -> Shape:
+	var shape := Shape.new()
+	shape.gun = [
+		Piece.new(Vector3(0, -0.050, 0.070), Vector3(0.025, 0.031, 0.170), GUN_METAL),
+		Piece.new(Vector3(0, -0.074, 0.045), Vector3(0.022, 0.020, 0.150), GUN_DARK),
+		Piece.new(Vector3(0, -0.017, 0.076), Vector3(0.018, 0.006, 0.146), GUN_DARK),
+		Piece.new(Vector3(0, -0.049, 0.311), Vector3(0.025, 0.024, 0.106), GUN_POLYMER, Finish.POLYMER),
+		Piece.new(Vector3(0, -0.029, 0.311), Vector3(0.021, 0.010, 0.109), GUN_DARK),
+		Piece.new(Vector3(0, -0.045, 0.473), Vector3(0.009, 0.009, 0.080), GUN_DARK, Finish.STEEL, true),
+		Piece.new(Vector3(0, -0.045, 0.565), Vector3(0.014, 0.014, 0.032), GUN_METAL, Finish.STEEL, true),
+		Piece.new(Vector3(0, -0.045, 0.597), Vector3(0.009, 0.009, 0.001), GUN_DARK.darkened(0.72),
+			Finish.STEEL, true),
+		Piece.new(Vector3(0, -0.026, 0.398), Vector3(0.015, 0.009, 0.010), GUN_DARK),
+		Piece.new(Vector3(0, -0.008, 0.398), Vector3(0.002, 0.008, 0.005), GUN_DARK),
+		Piece.new(Vector3(0, -0.001, 0.398), Vector3(0.0018, 0.0018, 0.004), SIGHT),
+		Piece.new(Vector3(0, -0.017, -0.050), Vector3(0.019, 0.005, 0.014), GUN_DARK),
+		Piece.new(Vector3(0, -0.123, -0.076), Vector3(0.017, 0.045, 0.021), GUN_POLYMER, Finish.POLYMER, false, -0.35),
+		Piece.new(Vector3(0, -0.100, 0.125), Vector3(0.020, 0.023, 0.044), GUN_DARK),
+		Piece.new(Vector3(0, -0.048, -0.110), Vector3(0.020, 0.025, 0.026), GUN_METAL),
+		Piece.new(Vector3(0, -0.052, -0.202), Vector3(0.014, 0.015, 0.087), GUN_DARK, Finish.STEEL, true),
+		Piece.new(Vector3(0, -0.083, -0.268), Vector3(0.026, 0.038, 0.075), GUN_POLYMER, Finish.POLYMER),
+		Piece.new(Vector3(0, -0.087, -0.342), Vector3(0.028, 0.042, 0.007), GUN_DARK, Finish.POLYMER),
+		Piece.new(Vector3(0.025, -0.045, 0.103), Vector3(0.003, 0.009, 0.041), GUN_DARK),
+		Piece.new(Vector3(0.027, -0.045, 0.105), Vector3(0.004, 0.004, 0.027), GUN_EDGE),
+		Piece.new(Vector3(0.029, -0.059, 0.047), Vector3(0.008, 0.007, 0.010), GUN_DARK),
 	]
-	rifle.arms = _arms(Vector3(0.004, -0.11, -0.05), Vector3(0.11, -0.3, -0.42), Vector3(-0.006, -0.085, 0.3), Vector3(-0.17, -0.3, 0.02))
-	rifle.muzzle = Vector3(0, -0.045, 0.6)
-	rifle.hip = Vector3(0.15, -0.16, 0.26)
-	rifle.aim = Vector3(0, 0, 0.23)
-	rifle.kick_back = 0.035
-	rifle.kick_pitch = 0.05
-	shapes[WeaponTuning.Kind.ASSAULT_RIFLE] = rifle
-	var marksman := Shape.new()
-	marksman.gun = [
-		Box.new(Vector3(0, -0.065, 0), Vector3(0.022, 0.035, 0.3), GUN_WOOD),
-		Box.new(Vector3(0, -0.04, 0.08), Vector3(0.018, 0.018, 0.13), GUN_METAL),
-		Box.new(Vector3(0, -0.04, 0.45), Vector3(0.01, 0.01, 0.22), GUN_DARK),
-		Box.new(Vector3(0, 0, 0.05), Vector3(0.018, 0.018, 0.12), GUN_DARK),
-		Box.new(Vector3(0, 0, 0.19), Vector3(0.026, 0.026, 0.03), GUN_DARK),
-		Box.new(Vector3(0, 0, -0.085), Vector3(0.022, 0.022, 0.025), GUN_DARK),
-		Box.new(Vector3(0, -0.024, 0), Vector3(0.008, 0.008, 0.01), GUN_METAL),
-		Box.new(Vector3(0, -0.024, 0.11), Vector3(0.008, 0.008, 0.01), GUN_METAL),
-		Box.new(Vector3(0, -0.11, 0.06), Vector3(0.014, 0.025, 0.035), GUN_DARK),
-		Box.new(Vector3(0, -0.11, -0.15), Vector3(0.018, 0.045, 0.06), GUN_WOOD, -0.3),
-		Box.new(Vector3(0, -0.09, -0.32), Vector3(0.02, 0.05, 0.07), GUN_WOOD),
+	for side: int in [-1, 1]:
+		shape.gun.append(Piece.new(Vector3(0.010 * side, -0.007, -0.050), Vector3(0.007, 0.009, 0.011), GUN_DARK))
+		shape.gun.append(Piece.new(Vector3(0.016 * side, -0.013, 0.398), Vector3(0.003, 0.012, 0.009), GUN_DARK))
+		for i in 5:
+			shape.gun.append(Piece.new(Vector3(0.024 * side, -0.046, 0.251 + i * 0.029),
+				Vector3(0.003, 0.006, 0.009), GUN_DARK, Finish.POLYMER))
+		for i in 2:
+			shape.gun.append(Piece.new(Vector3(0.026 * side, -0.060, -0.017 + i * 0.149),
+				Vector3(0.002, 0.004, 0.004), GUN_EDGE, Finish.STEEL, true))
+	for i in 12:
+		shape.gun.append(Piece.new(Vector3(0, -0.012, -0.052 + i * 0.021),
+			Vector3(0.017, 0.0028, 0.0054), GUN_EDGE.darkened(0.31)))
+	# Extrude the magazine along one tilted axis so its shell, floorplate
+	# and ribs follow the same continuous profile through ejection.
+	const MAGAZINE_PITCH := 1.36
+	shape.magazine = [
+		Piece.new(Vector3(0, -0.169, 0.111), Vector3(0.018, 0.031, 0.057),
+			GUN_DARK, Finish.POLYMER, false, MAGAZINE_PITCH),
+		Piece.new(Vector3(0, -0.224, 0.099), Vector3(0.020, 0.032, 0.006),
+			GUN_EDGE.darkened(0.28), Finish.POLYMER, false, MAGAZINE_PITCH),
 	]
-	marksman.arms = _arms(Vector3(0.004, -0.11, -0.13), Vector3(0.12, -0.3, -0.48), Vector3(-0.006, -0.095, 0.24), Vector3(-0.17, -0.3, -0.02))
-	marksman.muzzle = Vector3(0, -0.04, 0.67)
-	marksman.hip = Vector3(0.15, -0.15, 0.24)
-	marksman.aim = Vector3(0, 0, 0.16)
-	marksman.kick_back = 0.07
-	marksman.kick_pitch = 0.12
-	marksman.scope = true
-	shapes[WeaponTuning.Kind.RIFLE] = marksman
-	var pistol := Shape.new()
-	pistol.gun = [
-		Box.new(Vector3(0, -0.012, 0.03), Vector3(0.013, 0.016, 0.09), GUN_METAL),
-		Box.new(Vector3(0, -0.036, 0.025), Vector3(0.012, 0.009, 0.08), GUN_DARK),
-		Box.new(Vector3(0, -0.085, -0.04), Vector3(0.013, 0.048, 0.022), GUN_DARK, -0.25),
-		Box.new(Vector3(0, -0.055, 0.03), Vector3(0.003, 0.012, 0.02), GUN_DARK),
-		Box.new(Vector3(0, 0.006, 0.11), Vector3(0.002, 0.003, 0.003), GUN_DARK),
-		Box.new(Vector3(-0.006, 0.006, -0.05), Vector3(0.003, 0.003, 0.003), GUN_DARK),
-		Box.new(Vector3(0.006, 0.006, -0.05), Vector3(0.003, 0.003, 0.003), GUN_DARK),
+	for side: int in [-1, 1]:
+		for rib in 3:
+			shape.magazine.append(Piece.new(Vector3(0.018 * side, -0.151 - 0.015 * rib, 0.115 - 0.0032 * rib),
+				Vector3(0.002, 0.025, 0.003), GUN_EDGE.darkened(0.34), Finish.POLYMER, false, MAGAZINE_PITCH))
+	shape.support_grip = Vector3(-0.014, -0.085, 0.307)
+	shape.magazine_grip = Vector3(-0.019, -0.178, 0.107)
+	shape.trigger_grip = Vector3(0.004, -0.119, -0.073)
+	shape.right_arm = _arm(shape.trigger_grip, Vector3(0.115, -0.28, -0.42), 1.0)
+	shape.support_elbow = Vector3(-0.18, -0.29, 0.017)
+	shape.muzzle = Vector3(0, -0.045, 0.601)
+	shape.hip = Vector3(0.152, -0.148, 0.245)
+	shape.aim = Vector3(0, 0, 0.220)
+	shape.kick_back = 0.035
+	shape.kick_pitch = 0.05
+	return shape
+
+
+static func _marksman() -> Shape:
+	const RECEIVER := Color8(104, 113, 110)
+	const SCOPE_BODY := Color8(62, 72, 72)
+	const SCOPE_RING := Color8(120, 130, 122)
+	const LENS := Color8(52, 85, 89)
+	var shape := Shape.new()
+	shape.gun = [
+		Piece.new(Vector3(0, -0.069, 0.025), Vector3(0.027, 0.028, 0.258), GUN_WOOD, Finish.WOOD),
+		Piece.new(Vector3(0, -0.088, -0.237), Vector3(0.022, 0.039, 0.140), GUN_WOOD, Finish.WOOD),
+		Piece.new(Vector3(0, -0.089, -0.378), Vector3(0.025, 0.043, 0.007), GUN_DARK, Finish.POLYMER),
+		Piece.new(Vector3(0, -0.044, 0.059), Vector3(0.023, 0.020, 0.145), RECEIVER),
+		Piece.new(Vector3(0, -0.042, 0.389), Vector3(0.010, 0.010, 0.279), GUN_DARK, Finish.STEEL, true),
+		Piece.new(Vector3(0, -0.042, 0.653), Vector3(0.014, 0.014, 0.019), GUN_METAL, Finish.STEEL, true),
+		Piece.new(Vector3(0, -0.042, 0.672), Vector3(0.009, 0.009, 0.001), GUN_DARK.darkened(0.65),
+			Finish.STEEL, true),
+		Piece.new(Vector3(0, -0.024, 0.054), Vector3(0.018, 0.007, 0.131), GUN_DARK),
+		Piece.new(Vector3(0, 0.002, 0.054), Vector3(0.018, 0.018, 0.140), SCOPE_BODY, Finish.STEEL, true),
+		Piece.new(Vector3(0, 0.002, 0.179), Vector3(0.030, 0.030, 0.054), SCOPE_BODY, Finish.STEEL, true),
+		Piece.new(Vector3(0, 0.002, 0.223), Vector3(0.031, 0.031, 0.009), SCOPE_RING, Finish.STEEL, true),
+		Piece.new(Vector3(0, 0.002, 0.233), Vector3(0.024, 0.024, 0.003), LENS, Finish.OPTIC, true),
+		Piece.new(Vector3(0, 0.002, -0.088), Vector3(0.024, 0.024, 0.033), GUN_DARK, Finish.POLYMER, true),
+		Piece.new(Vector3(0, 0.002, -0.117), Vector3(0.025, 0.025, 0.006), SCOPE_RING, Finish.STEEL, true),
+		Piece.new(Vector3(0, 0.002, -0.124), Vector3(0.018, 0.018, 0.003), LENS, Finish.OPTIC, true),
+		Piece.new(Vector3(0, 0.023, 0.029), Vector3(0.012, 0.011, 0.012), GUN_EDGE.darkened(0.3), Finish.STEEL, true),
+		Piece.new(Vector3(0.027, -0.047, -0.016), Vector3(0.008, 0.006, 0.032), GUN_EDGE),
+		Piece.new(Vector3(0.043, -0.066, -0.038), Vector3(0.009, 0.010, 0.013), GUN_DARK, Finish.STEEL, true),
+		Piece.new(Vector3(0, -0.108, -0.124), Vector3(0.019, 0.036, 0.060), GUN_WOOD, Finish.WOOD, false, -0.30),
 	]
-	pistol.arms = _arms(Vector3(0.006, -0.08, -0.05), Vector3(0.1, -0.24, -0.38), Vector3(-0.024, -0.088, -0.035), Vector3(-0.15, -0.24, -0.36))
-	pistol.muzzle = Vector3(0, -0.012, 0.125)
-	pistol.hip = Vector3(0.1, -0.095, 0.4)
-	pistol.aim = Vector3(0, -0.003, 0.36)
-	pistol.kick_back = 0.03
-	pistol.kick_pitch = 0.18
-	shapes[WeaponTuning.Kind.PISTOL] = pistol
-	var shotgun := Shape.new()
-	shotgun.gun = [
-		Box.new(Vector3(0, -0.05, 0.05), Vector3(0.024, 0.03, 0.14), GUN_METAL),
-		Box.new(Vector3(0, -0.035, 0.42), Vector3(0.012, 0.012, 0.24), GUN_DARK),
-		Box.new(Vector3(0, -0.062, 0.36), Vector3(0.011, 0.011, 0.19), GUN_DARK),
-		Box.new(Vector3(0, -0.066, 0.3), Vector3(0.022, 0.022, 0.08), GUN_WOOD),
-		Box.new(Vector3(0, -0.019, 0.65), Vector3(0.003, 0.004, 0.003), GUN_METAL),
-		Box.new(Vector3(0, -0.11, -0.05), Vector3(0.016, 0.045, 0.02), GUN_WOOD, -0.35),
-		Box.new(Vector3(0, -0.085, -0.25), Vector3(0.022, 0.045, 0.11), GUN_WOOD),
+	for position: float in [-0.019, 0.103]:
+		shape.gun.append(Piece.new(Vector3(0, -0.023, position), Vector3(0.013, 0.013, 0.013), RECEIVER))
+		shape.gun.append(Piece.new(Vector3(0, 0.002, position), Vector3(0.020, 0.020, 0.006), SCOPE_RING,
+			Finish.STEEL, true))
+	shape.magazine = [
+		Piece.new(Vector3(0, -0.111, 0.089), Vector3(0.020, 0.028, 0.039), GUN_DARK),
+		Piece.new(Vector3(0, -0.136, 0.089), Vector3(0.022, 0.005, 0.039), GUN_EDGE.darkened(0.3)),
 	]
-	shotgun.arms = _arms(Vector3(0.004, -0.11, -0.05), Vector3(0.11, -0.3, -0.42), Vector3(-0.006, -0.08, 0.3), Vector3(-0.17, -0.3, 0.02))
-	shotgun.muzzle = Vector3(0, -0.035, 0.67)
-	shotgun.hip = Vector3(0.15, -0.16, 0.24)
-	shotgun.aim = Vector3(0, -0.006, 0.22)
-	shotgun.kick_back = 0.08
-	shotgun.kick_pitch = 0.2
-	shapes[WeaponTuning.Kind.SHOTGUN] = shotgun
-	# The tube of the rocket launcher rests on the right shoulder; its sight
-	# stands out to the left.
-	var launcher := Shape.new()
-	launcher.gun = [
-		Box.new(Vector3(0.07, -0.04, 0.05), Vector3(0.045, 0.045, 0.45), TUBE),
-		Box.new(Vector3(0.07, -0.04, 0.58), Vector3(0.06, 0.06, 0.09), TUBE_DARK),
-		Box.new(Vector3(0.07, -0.04, 0.71), Vector3(0.035, 0.035, 0.05), TUBE_DARK),
-		Box.new(Vector3(0.07, -0.1, 0.02), Vector3(0.014, 0.04, 0.02), GUN_DARK, -0.2),
-		Box.new(Vector3(0.07, -0.1, 0.2), Vector3(0.014, 0.035, 0.02), GUN_DARK, -0.1),
-		Box.new(Vector3(0.02, -0.004, 0.18), Vector3(0.008, 0.016, 0.02), GUN_DARK),
+	shape.support_grip = Vector3(-0.025, -0.096, 0.244)
+	shape.magazine_grip = Vector3(-0.024, -0.130, 0.089)
+	shape.magazine_throw = 0.15
+	shape.trigger_grip = Vector3(0.006, -0.120, -0.123)
+	shape.right_arm = _arm(shape.trigger_grip, Vector3(0.124, -0.28, -0.47), 1.0)
+	shape.support_elbow = Vector3(-0.168, -0.26, -0.02)
+	shape.muzzle = Vector3(0, -0.042, 0.674)
+	shape.hip = Vector3(0.143, -0.127, 0.285)
+	shape.aim = Vector3(0, 0, 0.17)
+	shape.kick_back = 0.07
+	shape.kick_pitch = 0.12
+	shape.scope = true
+	return shape
+
+
+static func _sidearm() -> Shape:
+	var shape := Shape.new()
+	shape.gun = [
+		Piece.new(Vector3(0, -0.013, 0.024), Vector3(0.015, 0.015, 0.095), GUN_METAL),
+		Piece.new(Vector3(0, -0.036, 0.024), Vector3(0.014, 0.010, 0.085), GUN_POLYMER, Finish.POLYMER),
+		Piece.new(Vector3(0, -0.086, -0.047), Vector3(0.017, 0.052, 0.022), GUN_POLYMER, Finish.POLYMER, false, -0.24),
+		Piece.new(Vector3(0, -0.013, 0.118), Vector3(0.009, 0.009, 0.005), GUN_DARK, Finish.STEEL, true),
+		Piece.new(Vector3(0, -0.013, 0.123), Vector3(0.005, 0.005, 0.001), GUN_DARK.darkened(0.7), Finish.STEEL, true),
+		Piece.new(Vector3(0, -0.065, 0.030), Vector3(0.005, 0.004, 0.027), GUN_DARK, Finish.POLYMER),
+		Piece.new(Vector3(0, -0.052, 0.053), Vector3(0.005, 0.015, 0.005), GUN_DARK, Finish.POLYMER, false, 0.35),
+		Piece.new(Vector3(0, 0.003, 0.107), Vector3(0.003, 0.004, 0.006), GUN_DARK),
+		Piece.new(Vector3(0, 0.003, 0.102), Vector3(0.0018, 0.0018, 0.001), SIGHT),
+		Piece.new(Vector3(0.015, -0.010, 0.021), Vector3(0.002, 0.007, 0.025), GUN_DARK),
+		Piece.new(Vector3(0.017, -0.011, 0.012), Vector3(0.0025, 0.003, 0.015), GUN_EDGE),
 	]
-	launcher.arms = _arms(Vector3(0.07, -0.13, 0.02), Vector3(0.18, -0.3, -0.3), Vector3(0.06, -0.13, 0.2), Vector3(-0.1, -0.3, 0.0))
-	launcher.muzzle = Vector3(0.07, -0.04, 0.76)
-	launcher.hip = Vector3(0.16, -0.16, 0.34)
-	launcher.aim = Vector3(-0.02, 0, 0.22)
-	launcher.kick_back = 0.07
-	launcher.kick_pitch = 0.1
-	shapes[WeaponTuning.Kind.ROCKET_LAUNCHER] = launcher
-	# A grenade sits in the right hand; a throw swings it forward.
-	var grenade := Shape.new()
-	grenade.gun = [
-		Box.new(Vector3(0, 0, 0), Vector3(0.03, 0.04, 0.03), GRENADE_BODY),
-		Box.new(Vector3(0, 0.046, 0), Vector3(0.012, 0.01, 0.012), GUN_METAL),
-		Box.new(Vector3(0.016, 0.028, -0.008), Vector3(0.004, 0.026, 0.006), GUN_METAL, 0.3),
+	for side: int in [-1, 1]:
+		shape.gun.append(Piece.new(Vector3(0.010 * side, 0.003, -0.060), Vector3(0.005, 0.005, 0.009), GUN_DARK))
+		for i in 5:
+			shape.gun.append(Piece.new(Vector3(0.015 * side, -0.014, -0.057 + i * 0.006),
+				Vector3(0.0014, 0.011, 0.0015), GUN_DARK, Finish.STEEL, false, -0.22))
+	shape.magazine = [
+		Piece.new(Vector3(0, -0.116, -0.052), Vector3(0.012, 0.024, 0.014), GUN_METAL, Finish.STEEL, false, -0.24),
+		Piece.new(Vector3(0, -0.140, -0.058), Vector3(0.017, 0.006, 0.021), GUN_DARK, Finish.POLYMER, false, -0.24),
 	]
-	grenade.arms = _arms(Vector3(0, -0.035, -0.02), Vector3(0.12, -0.25, -0.3), Vector3(-0.16, -0.14, 0.24), Vector3(-0.22, -0.32, 0.0))
-	grenade.muzzle = Vector3(0, 0.05, 0.05)
-	grenade.hip = Vector3(0.14, -0.13, 0.3)
-	grenade.aim = Vector3(0.12, -0.11, 0.3)
-	grenade.kick_back = -0.18
-	grenade.kick_pitch = 0.5
-	grenade.flash = false
-	shapes[WeaponTuning.Kind.GRENADE] = grenade
-	var kit := Shape.new()
-	kit.gun = [
-		Box.new(Vector3(0, 0, 0), Vector3(0.1, 0.07, 0.04), KIT_WHITE),
-		Box.new(Vector3(0, 0, -0.042), Vector3(0.05, 0.015, 0.002), KIT_RED),
-		Box.new(Vector3(0, 0, -0.042), Vector3(0.015, 0.05, 0.002), KIT_RED),
-		Box.new(Vector3(0, 0.078, 0), Vector3(0.04, 0.008, 0.012), GUN_DARK),
+	shape.support_grip = Vector3(-0.024, -0.090, -0.034)
+	shape.magazine_grip = Vector3(-0.020, -0.140, -0.054)
+	shape.magazine_throw = 0.18
+	shape.trigger_grip = Vector3(0.006, -0.077, -0.045)
+	shape.right_arm = _arm(shape.trigger_grip, Vector3(0.113, -0.234, -0.408), 1.0)
+	shape.support_elbow = Vector3(-0.146, -0.232, -0.363)
+	shape.muzzle = Vector3(0, -0.013, 0.126)
+	shape.hip = Vector3(0.105, -0.103, 0.388)
+	shape.aim = Vector3(0, -0.004, 0.36)
+	shape.kick_back = 0.03
+	shape.kick_pitch = 0.18
+	return shape
+
+
+## _hold sets where the hands of a shape hold it. A weapon without a magazine
+## to swap keeps the support hand where it is through a reload.
+static func _hold(shape: Shape, trigger: Vector3, elbow: Vector3, support: Vector3, support_elbow: Vector3) -> void:
+	shape.trigger_grip = trigger
+	shape.right_arm = _arm(trigger, elbow, 1.0)
+	shape.support_grip = support
+	shape.support_elbow = support_elbow
+	if shape.magazine.is_empty():
+		shape.magazine_grip = support
+		shape.magazine_throw = 0.0
+
+
+static func _shotgun() -> Shape:
+	var shape := Shape.new()
+	shape.gun = [
+		Piece.new(Vector3(0, -0.05, 0.05), Vector3(0.024, 0.03, 0.14), GUN_METAL),
+		Piece.new(Vector3(0, -0.035, 0.42), Vector3(0.012, 0.012, 0.24), GUN_DARK, Finish.STEEL, true),
+		Piece.new(Vector3(0, -0.062, 0.36), Vector3(0.011, 0.011, 0.19), GUN_DARK, Finish.STEEL, true),
+		Piece.new(Vector3(0, -0.066, 0.3), Vector3(0.022, 0.022, 0.08), GUN_WOOD, Finish.WOOD),
+		Piece.new(Vector3(0, -0.019, 0.65), Vector3(0.003, 0.004, 0.003), GUN_METAL),
+		Piece.new(Vector3(0, -0.11, -0.05), Vector3(0.016, 0.045, 0.02), GUN_WOOD, Finish.WOOD, false, -0.35),
+		Piece.new(Vector3(0, -0.085, -0.25), Vector3(0.022, 0.045, 0.11), GUN_WOOD, Finish.WOOD),
 	]
-	kit.arms = _arms(Vector3(0.1, -0.03, 0), Vector3(0.2, -0.25, -0.25), Vector3(-0.1, -0.03, 0), Vector3(-0.2, -0.25, -0.25))
-	kit.muzzle = Vector3(0, 0, 0.05)
-	kit.hip = Vector3(0.02, -0.17, 0.34)
-	kit.aim = kit.hip
-	kit.kick_back = -0.05
-	kit.kick_pitch = 0.0
-	kit.flash = false
-	shapes[WeaponTuning.Kind.MEDKIT] = kit
-	return shapes
+	_hold(shape, Vector3(0.004, -0.11, -0.05), Vector3(0.11, -0.3, -0.42), Vector3(-0.006, -0.08, 0.3), Vector3(-0.17, -0.3, 0.02))
+	shape.muzzle = Vector3(0, -0.035, 0.67)
+	shape.hip = Vector3(0.15, -0.16, 0.24)
+	shape.aim = Vector3(0, -0.006, 0.22)
+	shape.kick_back = 0.08
+	shape.kick_pitch = 0.2
+	return shape
+
+
+## The tube of the rocket launcher rests on the right shoulder; its sight
+## stands out to the left.
+static func _launcher() -> Shape:
+	var shape := Shape.new()
+	shape.gun = [
+		Piece.new(Vector3(0.07, -0.04, 0.05), Vector3(0.045, 0.045, 0.45), TUBE, Finish.POLYMER, true),
+		Piece.new(Vector3(0.07, -0.04, 0.58), Vector3(0.06, 0.06, 0.09), TUBE_DARK, Finish.STEEL, true),
+		Piece.new(Vector3(0.07, -0.04, 0.71), Vector3(0.035, 0.035, 0.05), TUBE_DARK, Finish.STEEL, true),
+		Piece.new(Vector3(0.07, -0.1, 0.02), Vector3(0.014, 0.04, 0.02), GUN_DARK, Finish.POLYMER, false, -0.2),
+		Piece.new(Vector3(0.07, -0.1, 0.2), Vector3(0.014, 0.035, 0.02), GUN_DARK, Finish.POLYMER, false, -0.1),
+		Piece.new(Vector3(0.02, -0.004, 0.18), Vector3(0.008, 0.016, 0.02), GUN_DARK),
+	]
+	_hold(shape, Vector3(0.07, -0.13, 0.02), Vector3(0.18, -0.3, -0.3), Vector3(0.06, -0.13, 0.2), Vector3(-0.1, -0.3, 0.0))
+	shape.muzzle = Vector3(0.07, -0.04, 0.76)
+	shape.hip = Vector3(0.16, -0.16, 0.34)
+	shape.aim = Vector3(-0.02, 0, 0.22)
+	shape.kick_back = 0.07
+	shape.kick_pitch = 0.1
+	return shape
+
+
+## A grenade sits in the right hand; a throw swings it forward.
+static func _grenade() -> Shape:
+	var shape := Shape.new()
+	shape.gun = [
+		Piece.new(Vector3(0, 0, 0), Vector3(0.03, 0.04, 0.03), GRENADE_BODY, Finish.STEEL, true),
+		Piece.new(Vector3(0, 0.046, 0), Vector3(0.012, 0.01, 0.012), GUN_METAL),
+		Piece.new(Vector3(0.016, 0.028, -0.008), Vector3(0.004, 0.026, 0.006), GUN_METAL, Finish.STEEL, false, 0.3),
+	]
+	_hold(shape, Vector3(0, -0.035, -0.02), Vector3(0.12, -0.25, -0.3), Vector3(-0.16, -0.14, 0.24), Vector3(-0.22, -0.32, 0.0))
+	shape.muzzle = Vector3(0, 0.05, 0.05)
+	shape.hip = Vector3(0.14, -0.13, 0.3)
+	shape.aim = Vector3(0.12, -0.11, 0.3)
+	shape.kick_back = -0.18
+	shape.kick_pitch = 0.5
+	shape.flash = false
+	return shape
+
+
+static func _medkit() -> Shape:
+	var shape := Shape.new()
+	shape.gun = [
+		Piece.new(Vector3(0, 0, 0), Vector3(0.1, 0.07, 0.04), KIT_WHITE, Finish.POLYMER),
+		Piece.new(Vector3(0, 0, -0.042), Vector3(0.05, 0.015, 0.002), KIT_RED, Finish.POLYMER),
+		Piece.new(Vector3(0, 0, -0.042), Vector3(0.015, 0.05, 0.002), KIT_RED, Finish.POLYMER),
+		Piece.new(Vector3(0, 0.078, 0), Vector3(0.04, 0.008, 0.012), GUN_DARK, Finish.POLYMER),
+	]
+	_hold(shape, Vector3(0.1, -0.03, 0), Vector3(0.2, -0.25, -0.25), Vector3(-0.1, -0.03, 0), Vector3(-0.2, -0.25, -0.25))
+	shape.muzzle = Vector3(0, 0, 0.05)
+	shape.hip = Vector3(0.02, -0.17, 0.34)
+	shape.aim = shape.hip
+	shape.kick_back = -0.05
+	shape.kick_pitch = 0.0
+	shape.flash = false
+	return shape

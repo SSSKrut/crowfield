@@ -3,7 +3,7 @@ extends RefCounted
 ## RemoteSoldier keeps the latest states of another soldier, so that it can be
 ## drawn smoothly in the recent past, between two states the client has
 ## (ARCHITECTURE.md, 6.7). evaluate() places it at a moment and leaves the
-## result in position, velocity, yaw, pitch and alive.
+## result in position, velocity, yaw, pitch, alive, grounded and crouched.
 
 const SAMPLES := 16
 ## Past the newest state a soldier keeps moving by its velocity for at most
@@ -26,13 +26,15 @@ var velocity := Vector3.ZERO
 var yaw := 0.0
 var pitch := 0.0
 var alive := true
+var grounded := false
+var crouched := false
 
 var _ticks := PackedInt64Array()
 var _positions := PackedVector3Array()
 var _velocities := PackedVector3Array()
 var _yaws := PackedFloat32Array()
 var _pitches := PackedFloat32Array()
-var _alive := PackedByteArray()
+var _flags := PackedByteArray()
 
 
 func _init() -> void:
@@ -41,7 +43,7 @@ func _init() -> void:
 	_velocities.resize(SAMPLES)
 	_yaws.resize(SAMPLES)
 	_pitches.resize(SAMPLES)
-	_alive.resize(SAMPLES)
+	_flags.resize(SAMPLES)
 
 
 ## add keeps the samples ordered by tick. A late datagram older than the
@@ -64,7 +66,8 @@ func add(tick: int, soldier: Soldier) -> void:
 	_velocities[at] = moving
 	_yaws[at] = soldier.yaw
 	_pitches[at] = soldier.pitch
-	_alive[at] = 1 if soldier.alive else 0
+	_flags[at] = (SoldierState.ALIVE if soldier.alive else 0) | (SoldierState.GROUNDED if soldier.grounded else 0) \
+		| (SoldierState.CROUCHED if soldier.crouched else 0)
 	if at == count % SAMPLES:
 		count += 1
 
@@ -87,7 +90,7 @@ func smooth(delta: float) -> void:
 ## soldier was alive, for the momentum it falls with: a dead one stands still.
 func last_alive_velocity() -> Vector3:
 	for i in range(count - 1, maxi(-1, count - SAMPLES - 1), -1):
-		if _alive[i % SAMPLES] == 1:
+		if _flags[i % SAMPLES] & SoldierState.ALIVE != 0:
 			return _velocities[i % SAMPLES]
 	return _velocities[(count - 1) % SAMPLES]
 
@@ -119,7 +122,9 @@ func _take(sample: int) -> void:
 	velocity = _velocities[sample]
 	yaw = _yaws[sample]
 	pitch = _pitches[sample]
-	alive = _alive[sample] == 1
+	alive = _flags[sample] & SoldierState.ALIVE != 0
+	grounded = _flags[sample] & SoldierState.GROUNDED != 0
+	crouched = _flags[sample] & SoldierState.CROUCHED != 0
 
 
 func _hermite(earlier: int, later: int, render_tick: float) -> void:
@@ -140,4 +145,6 @@ func _hermite(earlier: int, later: int, render_tick: float) -> void:
 	pitch = lerpf(_pitches[earlier], _pitches[later], u)
 	# A soldier dies at the tick of its first dead state, where the server left
 	# it, not halfway there: far soldiers come a second apart.
-	alive = _alive[earlier] == 1
+	alive = _flags[earlier] & SoldierState.ALIVE != 0
+	grounded = _flags[earlier] & SoldierState.GROUNDED != 0
+	crouched = _flags[earlier] & SoldierState.CROUCHED != 0

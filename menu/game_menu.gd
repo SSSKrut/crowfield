@@ -5,6 +5,7 @@ extends Control
 
 signal resumed
 signal left
+signal replayed
 
 ## about tells what game this is: solo, hosted, with the addresses friends
 ## join, or on someone else's server.
@@ -19,9 +20,17 @@ func _ready() -> void:
 	%About.text = about
 
 
-func open() -> void:
+func open(can_replay: bool = false) -> void:
 	visible = true
-	%Resume.grab_focus()
+	%Replay.visible = can_replay
+	if can_replay:
+		%Replay.grab_focus()
+	else:
+		%Resume.grab_focus()
+
+
+func _on_replay_pressed() -> void:
+	replayed.emit()
 
 
 func _on_resume_pressed() -> void:

@@ -12,6 +12,14 @@ const FALL_LIMIT := -10.0
 ## from each other, and the tracks of shots.
 const GRID_CELL_SIZE := 4.0
 const HELLO_TIMEOUT := 5.0
+## Reinforcement positions are on the home bank, behind the flag's capture
+## area. Search the approach before considering positions farther back.
+const REINFORCEMENT_OFFSETS := [Vector2(0, 15), Vector2(-5, 17), Vector2(5, 17),
+	Vector2(0, 20), Vector2(-10, 20), Vector2(10, 20), Vector2(0, 25)]
+const REINFORCEMENT_ENEMY_RADIUS := 16.0
+const REINFORCEMENT_SIGHT_RANGE := 65.0
+## Keep a group of simultaneous respawns from crowding a simulation tick.
+const REINFORCEMENT_RAY_BUDGET := 96
 ## Messages are limited per connection before they are decoded
 ## (ARCHITECTURE.md, 6.8), so that one client cannot crowd the simulation:
 ## input datagrams to twice the tick rate, of which an honest client sends one
@@ -36,6 +44,7 @@ var snapshot_interval := 3
 var match_seed := 0
 var navigation: Navigation
 var bots: Bots
+var flag_match: FlagMatch
 ## random places the soldiers of players in the zones of their teams.
 var random := RandomNumberGenerator.new()
 ## projectiles are the rockets and grenades in flight.
@@ -54,6 +63,8 @@ var _listeners: Array[Listener] = []
 var _collision: Array[RID] = []
 var _space_state: PhysicsDirectSpaceState3D
 var _ray := PhysicsRayQueryParameters3D.new()
+var _reinforcement_sites: Dictionary[Vector2i, PackedVector3Array] = {}
+var _reinforcement_rays := REINFORCEMENT_RAY_BUDGET
 ## _shots are the shots of the current tick, resolved after every soldier acted.
 var _shots: Array[PendingShot] = []
 var _snapshots := SnapshotSender.new()
@@ -90,6 +101,10 @@ static func create(server_settings: ServerSettings, server_rules: Rules) -> Vari
 		server.match_seed = Crypto.new().generate_random_bytes(8).decode_s64(0)
 	server.random.seed = server.match_seed ^ 7919
 	server.navigation = Navigation.create(server.scene)
+	if server.scene.flags.size() == MatchState.FLAG_COUNT:
+		server.flag_match = FlagMatch.new(server.scene.flags)
+		if server.scene.name == "valley":
+			server._build_reinforcement_sites()
 	server.bots = Bots.new(server)
 	server.bots.spawn_all(server_settings.bots)
 	return server
@@ -133,6 +148,8 @@ func add_listener(listener: Listener) -> void:
 func step() -> void:
 	var started := Time.get_ticks_usec()
 	profile.start()
+	_expire_reservations()
+	_reset_finished_round()
 	_handle_connections()
 	_drop_silent_sessions()
 	_respawn_dead()
@@ -148,6 +165,8 @@ func step() -> void:
 	bots.kill()
 	profile.lap(TickProfile.System.SHOTS)
 	grid.rebuild(soldiers)
+	if flag_match != null:
+		flag_match.step(soldiers, grid)
 	profile.lap(TickProfile.System.GRID)
 	history.record(tick, soldiers)
 	profile.lap(TickProfile.System.HISTORY)
@@ -223,12 +242,101 @@ func spawn_point(team: int, from: RandomNumberGenerator) -> Vector3:
 	return point
 
 
-## spawn gives a player a soldier at the spawn of its team, the team it
-## played for before.
-func _spawn(player: ServerPlayer) -> bool:
+## Precompute clear positions on the navigation mesh at server startup.
+## Ownership, enemy visibility and occupation are checked at the respawn tick.
+func _build_reinforcement_sites() -> void:
+	var capsule := CapsuleShape3D.new()
+	capsule.radius = rules.movement.capsule_radius
+	capsule.height = 2.0 * rules.movement.center_height()
+	var query := PhysicsShapeQueryParameters3D.new()
+	query.shape = capsule
+	query.collision_mask = Game.LAYER_STATIC | Game.LAYER_VEHICLE | Game.LAYER_DYNAMIC
+	for team: int in [Game.Team.BLUE, Game.Team.RED]:
+		var home := scene.spawn_of(team)
+		for index in scene.flags.size():
+			var zone := scene.flags[index]
+			var crossing := navigation.closest(zone.center)
+			var side := 1.0 if home.z > zone.center.z else -1.0
+			var sites := PackedVector3Array()
+			for offset: Vector2 in REINFORCEMENT_OFFSETS:
+				var point := zone.center + side * Vector3(offset.x, 0.0, offset.y)
+				point.y = scene.ground_at(point.x, point.z)
+				var walkable := navigation.closest(point)
+				if walkable.distance_squared_to(point) > 1.0:
+					continue
+				var down := cast_ray(walkable + Vector3.UP * 0.6, Vector3.DOWN, 1.6, Game.LAYER_STATIC)
+				if down < 0.0:
+					continue
+				walkable.y += 0.6 - down
+				query.transform = Transform3D(Basis.IDENTITY, walkable + Vector3.UP * (rules.movement.center_height() + 0.04))
+				if not _space_state.intersect_shape(query, 1).is_empty():
+					continue
+				var route := navigation.path(walkable, crossing)
+				if not route.is_empty() and route[-1].distance_squared_to(crossing) <= 1.0:
+					sites.append(walkable)
+			_reinforcement_sites[Vector2i(team, index)] = sites
+
+
+## Returns a safe site by a held crossing, optionally limited to the fight
+## the soldier was part of. All callers share the tick's ray budget.
+func reinforcement_point(team: int, from: Vector3, max_distance: float = INF) -> Vector3:
+	if _reinforcement_sites.is_empty() or not flag_match.started or flag_match.state.result != MatchState.Result.ACTIVE:
+		return Vector3.INF
+	var best := Vector3.INF
+	var best_distance := max_distance * max_distance
+	for order in scene.flags.size():
+		# Mirrored priority breaks equal-distance ties consistently for both sides.
+		var index := order if team == Game.Team.BLUE else scene.flags.size() - order - 1
+		var flag := flag_match.state.flags[index]
+		if flag.owner != team or flag.contested or flag.challenger != Game.Team.NONE:
+			continue
+		var distance := from.distance_squared_to(scene.flags[index].center)
+		if distance >= best_distance:
+			continue
+		for site in _reinforcement_sites[Vector2i(team, index)]:
+			if _reinforcement_is_safe(team, site):
+				best = site
+				best_distance = distance
+				break
+	return best
+
+
+func _reinforcement_is_safe(team: int, point: Vector3) -> bool:
+	var eye := Vector3.UP * rules.movement.eye_height
+	var occupancy := maxf(1.5, rules.movement.capsule_radius * 2.0)
+	for slot in soldiers.slots():
+		var soldier := soldiers.at(slot)
+		if soldier == null or not soldier.alive:
+			continue
+		var distance := Game.horizontal_length(point - soldier.position)
+		if soldier.team == team:
+			if distance < occupancy and absf(point.y - soldier.position.y) < 2.0 * rules.movement.center_height():
+				return false
+			continue
+		if distance < REINFORCEMENT_ENEMY_RADIUS:
+			return false
+		if distance > REINFORCEMENT_SIGHT_RANGE:
+			continue
+		var from := soldier.position + Vector3.UP * rules.movement.view_height(soldier.crouched)
+		for target in [point + eye, point + eye * 0.65]:
+			if _reinforcement_rays <= 0:
+				return false
+			_reinforcement_rays -= 1
+			var sight: Vector3 = target - from
+			var cover := cast_ray(from, sight.normalized(), sight.length(), Game.LAYER_STATIC | Game.LAYER_VEHICLE)
+			if cover < 0.0:
+				return false
+	return true
+
+
+## Fresh joins keep their base start. After a death, reinforce the nearest
+## friendly crossing with a safe position, or use that same base start.
+func _spawn(player: ServerPlayer, death_position: Vector3 = Vector3.INF) -> bool:
 	if player.team == Game.Team.NONE:
 		player.team = _smaller_team()
-	var at := spawn_point(player.team, random)
+	var at := Vector3.INF if not death_position.is_finite() else reinforcement_point(player.team, death_position)
+	if not at.is_finite():
+		at = spawn_point(player.team, random)
 	var soldier := Soldier.new()
 	soldier.team = player.team
 	soldier.controller = Game.Controller.PLAYER
@@ -393,6 +501,7 @@ func _returning(hello: Messages.Hello) -> ServerPlayer:
 			var player := ServerPlayer.new(reservation.id, reservation.name, soldiers.slots())
 			player.token = reservation.token
 			player.team = reservation.team
+			player.kills = reservation.kills
 			return player
 	return null
 
@@ -420,6 +529,8 @@ func _ready(session: Session) -> void:
 	if not _spawn(player):
 		print("player %d could not spawn" % player.id)
 		_drop(session, "could not spawn")
+	elif flag_match != null:
+		flag_match.started = true
 
 
 ## _respawn puts a living soldier back at its spawn with full health and
@@ -476,9 +587,11 @@ func _leave(session: Session, reason: String, by_peer: bool) -> void:
 		reservation.token = player.token
 		reservation.name = player.name
 		reservation.team = player.team
+		reservation.kills = player.kills
 		reservation.until = clock.call() + settings.reconnect_window
 		reservations.append(reservation)
 	print("player %d \"%s\" left: %s" % [player.id, player.name, reason])
+	_reset_finished_round()
 
 
 ## _reject tells the client why before closing. The reason also travels as the
@@ -508,10 +621,27 @@ func _drop_silent_sessions() -> void:
 			_drop(session, "no hello in time")
 		elif player != null and now - player.last_input > settings.input_timeout:
 			_drop(session, "no input in time")
+
+
+func _expire_reservations() -> void:
+	if reservations.is_empty():
+		return
+	var now: float = clock.call()
 	for reservation: Reservation in reservations.duplicate():
 		if now > reservation.until:
 			print("player %d \"%s\" did not return" % [reservation.id, reservation.name])
 			reservations.erase(reservation)
+
+
+## Retain the result for connected players and those who can reconnect.
+## A fresh round waits for the next player to spawn, like the first one did.
+func _reset_finished_round() -> void:
+	if flag_match == null or flag_match.state.result == MatchState.Result.ACTIVE:
+		return
+	if not reservations.is_empty() or player_count() != 0:
+		return
+	flag_match = FlagMatch.new(scene.flags)
+	bots.reset_for_round()
 
 
 # Combat.
@@ -535,6 +665,9 @@ func _view_time(command: InputCommand) -> float:
 ## of them struck. A soldier killed in a tick still fires its shot of that
 ## tick, so two soldiers can kill each other.
 func _resolve_shots() -> void:
+	if flag_match != null and flag_match.state.result != MatchState.Result.ACTIVE:
+		_shots.clear()
+		return
 	for pending in _shots:
 		var shot := pending.shot
 		var tuning := rules.weapons.get_tuning(shot.weapon)
@@ -599,7 +732,7 @@ func _hitscan(pending: PendingShot, direction: Vector3) -> Array:
 		var pose := history.at(id, pending.view)
 		if pose.is_empty() or not pose[2]:
 			continue
-		var hit := Hitboxes.ray(shot.origin, direction, reach, pose[0], pose[1])
+		var hit := Hitboxes.ray(shot.origin, direction, reach, pose[0], pose[1], pose[3])
 		if not hit.is_empty():
 			reach = hit[0]
 			struck = [id, hit[1], hit[0]]
@@ -645,6 +778,8 @@ func _tell_hit(by: int, team: int, weapon: int, direction: Vector3, victim: Sold
 		_send_event(victim_player, hurt)
 	if not killed:
 		return
+	if shooter_player != null and team != victim.team:
+		shooter_player.kills = mini(shooter_player.kills + 1, MatchState.MAX_KILLS)
 	var death := Messages.Death.new()
 	death.tick = tick
 	death.victim = victim.id
@@ -715,7 +850,7 @@ func _strike(projectile: Projectile, from: Vector3, to: Vector3) -> Vector3:
 		var target := soldiers.get_soldier(ids[i])
 		if target == null or not target.alive or target.id == projectile.owner:
 			continue
-		var hit := Hitboxes.ray(from, direction, nearest, target.position, target.yaw)
+		var hit := Hitboxes.ray(from, direction, nearest, target.position, target.yaw, target.crouched)
 		if not hit.is_empty():
 			nearest = hit[0]
 	return from + direction * nearest if nearest < length else Vector3.INF
@@ -729,13 +864,15 @@ func _blast(projectile: Projectile, tuning: WeaponTuning) -> void:
 	var at := projectile.position
 	var name: String = _launchers.get(projectile.id, "")
 	_launchers.erase(projectile.id)
-	var count := grid.near(at, tuning.blast_radius + Hitboxes.REACH)
+	# A blast after the end of a round only shows, like the shots then.
+	var over := flag_match != null and flag_match.state.result != MatchState.Result.ACTIVE
+	var count := 0 if over else grid.near(at, tuning.blast_radius + Hitboxes.REACH)
 	var ids := grid.ids.duplicate()
 	for i in count:
 		var victim := soldiers.get_soldier(ids[i])
 		if victim == null or not victim.alive or (victim.team == projectile.team and not settings.friendly_fire):
 			continue
-		var center := victim.position + Vector3(0, BODY_HEIGHT, 0)
+		var center := victim.position + Vector3(0, CROUCHED_BODY_HEIGHT if victim.crouched else BODY_HEIGHT, 0)
 		var distance := at.distance_to(center)
 		var share := tuning.blast_share(distance)
 		if share <= 0 or not _exposed(at, victim):
@@ -758,14 +895,20 @@ func _blast(projectile: Projectile, tuning: WeaponTuning) -> void:
 	_send_to_all(blast)
 
 
-## BODY_HEIGHT is the middle of the body, where a blast is measured to.
+## BODY_HEIGHT is the middle of the body, where a blast is measured to, and
+## CHEST_HEIGHT the point above it a blast reaches over low cover; both are
+## lower for a crouching soldier.
 const BODY_HEIGHT := 0.85
+const CHEST_HEIGHT := 1.45
+const CROUCHED_BODY_HEIGHT := 0.45
+const CROUCHED_CHEST_HEIGHT := 0.7
 
 
-## _exposed tells whether a blast at a point reaches the body or the head of
+## _exposed tells whether a blast at a point reaches the body or the chest of
 ## a soldier past the static world.
 func _exposed(at: Vector3, victim: Soldier) -> bool:
-	for height: float in [BODY_HEIGHT, 1.45]:
+	var heights := [CROUCHED_BODY_HEIGHT, CROUCHED_CHEST_HEIGHT] if victim.crouched else [BODY_HEIGHT, CHEST_HEIGHT]
+	for height: float in heights:
 		var point := victim.position + Vector3(0, height, 0)
 		var distance := at.distance_to(point)
 		if distance < 1e-3 or cast_ray(at, (point - at) / distance, distance, Game.LAYER_STATIC | Game.LAYER_VEHICLE) < 0:
@@ -832,6 +975,7 @@ func damage(victim: Soldier, amount: int) -> Array:
 ## _respawn_dead brings back the soldiers whose time has come: each as a new
 ## soldier, whom clients do not mistake for the one that died.
 func _respawn_dead() -> void:
+	_reinforcement_rays = REINFORCEMENT_RAY_BUDGET
 	for player in players:
 		if player == null or player.soldier == 0:
 			continue
@@ -840,7 +984,7 @@ func _respawn_dead() -> void:
 			continue
 		soldiers.remove(player.soldier)
 		player.soldier = 0
-		_spawn(player)
+		_spawn(player, soldier.position)
 	bots.respawn_dead()
 
 
@@ -866,6 +1010,7 @@ class Reservation:
 	var name := ""
 	var team := 0
 	var until := 0.0
+	var kills := 0
 
 
 ## PendingShot is a shot fired this tick, resolved once every soldier has

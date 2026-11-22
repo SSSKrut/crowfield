@@ -41,10 +41,13 @@ static func _steps(server: Server, ticks: int) -> void:
 		server.step()
 
 
-## _place stands bot i at a point looking at another, and keeps it there.
+## _place stands bot i at a point looking at another, and keeps it there,
+## armed with an assault rifle alone, whatever loadout it drew.
 func _place(server: Server, i: int, at: Vector3, look_at: Vector3) -> Soldier:
 	var bot := server.bots.bots[i]
 	var soldier := server.soldiers.get_soldier(bot.soldier)
+	soldier.arsenal = Arsenal.create(PackedInt32Array([WeaponTuning.Kind.ASSAULT_RIFLE]), server.rules.weapons)
+	bot.weapon = 0
 	soldier.position = at
 	soldier.yaw = Game.yaw_of(look_at - at)
 	bot.path = PackedVector3Array()
@@ -60,13 +63,14 @@ func test_bots_shoot_an_enemy_they_see() -> void:
 	var blue := _place(server, 0, Vector3(0, 0, 8), Vector3(0, 0, -8))
 	var red := _place(server, 1, Vector3(0, 0, -8), Vector3(0, 0, 8))
 	check(blue.team != red.team, "the two bots are on one team")
-	for i in 6 * Game.TICK_RATE:
+	# The slim infantry hitboxes make a duel at 16 m last from 3 to 12 s.
+	for i in 12 * Game.TICK_RATE:
 		server.step()
 		if not blue.alive or not red.alive:
 			server.step()
 			break
-	check(server.total_hits > 0, "no bot hit the other in 6 s")
-	check(not blue.alive or not red.alive, "both bots live after 6 s: health %d and %d" % [blue.health, red.health])
+	check(server.total_hits > 0, "no bot hit the other in 12 s")
+	check(not blue.alive or not red.alive, "both bots live after 12 s: health %d and %d" % [blue.health, red.health])
 	check_equal(server.bots.bots[0].state if blue.alive else server.bots.bots[1].state, Bots.State.ADVANCE, "the winner's state")
 
 
@@ -126,6 +130,7 @@ func test_bots_fight_a_battle_on_the_valley() -> void:
 	settings.seed = 9
 	var server: Server = Server.create(settings, Rules.new())
 	cleanup(func() -> void: server.close())
+	server.flag_match.started = true
 	var start := {}
 	var still := {}
 	var worst_still := 0

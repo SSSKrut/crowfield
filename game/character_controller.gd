@@ -21,6 +21,8 @@ const _MIN_STEP_FORWARD := 0.05
 var tuning: MovementTuning
 var _body: RID
 var _shape: RID
+var _crouch_shape: RID
+var _using_crouch_shape := false
 var _params := PhysicsTestMotionParameters3D.new()
 var _result := PhysicsTestMotionResult3D.new()
 var _min_floor_y: float
@@ -29,11 +31,12 @@ var _min_floor_y: float
 func _init(space: RID, movement: MovementTuning, mask: int = Game.LAYER_STATIC | Game.LAYER_VEHICLE | Game.LAYER_DYNAMIC) -> void:
 	tuning = movement
 	_min_floor_y = cos(deg_to_rad(movement.max_slope_degrees))
-	_shape = PhysicsServer3D.capsule_shape_create()
-	PhysicsServer3D.shape_set_data(_shape, {"radius": movement.capsule_radius, "height": 2.0 * movement.center_height()})
+	_shape = _capsule(false)
+	_crouch_shape = _capsule(true)
 	_body = PhysicsServer3D.body_create()
 	PhysicsServer3D.body_set_mode(_body, PhysicsServer3D.BODY_MODE_KINEMATIC)
 	PhysicsServer3D.body_add_shape(_body, _shape)
+	PhysicsServer3D.body_add_shape(_body, _crouch_shape, Transform3D.IDENTITY, true)
 	PhysicsServer3D.body_set_collision_layer(_body, Game.LAYER_CHARACTER)
 	PhysicsServer3D.body_set_collision_mask(_body, mask)
 	PhysicsServer3D.body_set_space(_body, space)
@@ -41,10 +44,17 @@ func _init(space: RID, movement: MovementTuning, mask: int = Game.LAYER_STATIC |
 	_params.recovery_as_collision = true
 
 
+func _capsule(crouched: bool) -> RID:
+	var shape := PhysicsServer3D.capsule_shape_create()
+	PhysicsServer3D.shape_set_data(shape, {"radius": tuning.capsule_radius, "height": 2.0 * tuning.center_height(crouched)})
+	return shape
+
+
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_PREDELETE and _body.is_valid():
 		PhysicsServer3D.free_rid(_body)
 		PhysicsServer3D.free_rid(_shape)
+		PhysicsServer3D.free_rid(_crouch_shape)
 
 
 ## close frees the capsule. The controller is useless afterwards.
@@ -52,6 +62,7 @@ func close() -> void:
 	if _body.is_valid():
 		PhysicsServer3D.free_rid(_body)
 		PhysicsServer3D.free_rid(_shape)
+		PhysicsServer3D.free_rid(_crouch_shape)
 	_body = RID()
 
 
@@ -59,7 +70,10 @@ func close() -> void:
 func step(soldier: Soldier, command: InputCommand) -> void:
 	soldier.yaw = command.yaw_radians()
 	soldier.pitch = command.pitch_radians()
+	_update_stance(soldier, command.has(InputCommand.CROUCH))
 	var speed := tuning.sprint_speed if command.has(InputCommand.SPRINT) else tuning.walk_speed
+	if soldier.crouched:
+		speed = tuning.walk_speed * MovementTuning.CROUCH_SPEED_SHARE
 	var forward_axis := command.forward_axis()
 	var right_axis := command.right_axis()
 	var forward := Vector3(sin(soldier.yaw), 0, -cos(soldier.yaw))
@@ -73,7 +87,7 @@ func step(soldier: Soldier, command: InputCommand) -> void:
 	velocity.z = horizontal.z * speed
 	if soldier.grounded and velocity.y <= 0:
 		velocity.y = -tuning.ground_stick_speed
-		if command.has(InputCommand.JUMP):
+		if command.has(InputCommand.JUMP) and not soldier.crouched:
 			velocity.y = tuning.jump_speed
 	else:
 		velocity.y -= tuning.gravity * Game.TICK_DELTA
@@ -89,7 +103,7 @@ func run_command(weapons: WeaponSet, soldier: Soldier, command: InputCommand, ma
 	var result := soldier.arsenal.step(weapons, command, speed_share(soldier), not soldier.grounded,
 		Arsenal.shot_seed(match_seed, soldier.id, command.tick), soldier.health < Game.MAX_HEALTH)
 	if result.has(Arsenal.EVENT_FIRED):
-		result.shot.origin = soldier.position + Vector3(0, tuning.eye_height, 0)
+		result.shot.origin = soldier.position + Vector3.UP * tuning.view_height(soldier.crouched)
 	return result
 
 
@@ -103,18 +117,46 @@ func speed_share(soldier: Soldier) -> float:
 func teleport(soldier: Soldier, feet: Vector3) -> void:
 	soldier.position = feet
 	soldier.velocity = Vector3.ZERO
+	soldier.crouched = false
 	place(soldier)
 
 
 ## place finds whether the soldier at its position stands on the ground, when
 ## no earlier tick tells: after a teleport or a correction from afar.
 func place(soldier: Soldier) -> void:
-	var center := soldier.position + Vector3(0, tuning.center_height(), 0)
+	_use_stance_shape(soldier.crouched)
+	var center := soldier.position + Vector3.UP * tuning.center_height(soldier.crouched)
 	soldier.grounded = _test(center, Vector3(0, -_GROUND_PROBE, 0)) and _is_floor(_result.get_collision_normal())
 
 
+func _update_stance(soldier: Soldier, holding_crouch: bool) -> void:
+	_use_stance_shape(soldier.crouched)
+	if holding_crouch:
+		if soldier.grounded:
+			soldier.crouched = true
+	elif soldier.crouched:
+		# Sweeping the short capsule upward covers exactly the extra volume
+		# above it. Initial contact with the floor isn't a ceiling.
+		var center := soldier.position + Vector3.UP * tuning.center_height(true)
+		var rise := 2.0 * (tuning.center_height() - tuning.center_height(true))
+		_params.recovery_as_collision = false
+		var blocked := _test(center, Vector3.UP * rise)
+		_params.recovery_as_collision = true
+		soldier.crouched = blocked
+	_use_stance_shape(soldier.crouched)
+
+
+func _use_stance_shape(crouched: bool) -> void:
+	if _using_crouch_shape == crouched:
+		return
+	PhysicsServer3D.body_set_shape_disabled(_body, 0, crouched)
+	PhysicsServer3D.body_set_shape_disabled(_body, 1, not crouched)
+	_using_crouch_shape = crouched
+
+
 func _move(soldier: Soldier, velocity: Vector3) -> void:
-	var center := soldier.position + Vector3(0, tuning.center_height(), 0)
+	var capsule_center := Vector3.UP * tuning.center_height(soldier.crouched)
+	var center := soldier.position + capsule_center
 	var was_grounded := soldier.grounded
 	var grounded := false
 	var moving := velocity.x != 0 or velocity.z != 0
@@ -164,7 +206,7 @@ func _move(soldier: Soldier, velocity: Vector3) -> void:
 			grounded = true
 	if not grounded and velocity.y <= 0:
 		grounded = _test(center, Vector3(0, -_GROUND_PROBE, 0)) and _is_floor(_result.get_collision_normal())
-	soldier.position = center - Vector3(0, tuning.center_height(), 0)
+	soldier.position = center - capsule_center
 	soldier.velocity = velocity
 	soldier.grounded = grounded
 

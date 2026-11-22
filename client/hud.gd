@@ -7,18 +7,22 @@ extends Control
 ## Sizes are those of a 720 pixels high screen, scaled to the viewport.
 
 const _Feedback := preload("res://client/feedback.gd")
+const _BODY := preload("res://assets/type/Barlow-Medium.ttf")
+const _DISPLAY := preload("res://assets/type/BarlowCondensed-Bold.ttf")
 
 const TEAM_COLORS := {Game.Team.BLUE: Color8(60, 110, 220), Game.Team.RED: Color8(210, 70, 60)}
-## NO_TEAM_COLOR is the accent of the robot, for a soldier of no team.
+## NO_TEAM_COLOR is the accent used before a soldier joins a team.
 const NO_TEAM_COLOR := Color8(202, 147, 55)
 
-const WHITE := Color(1, 1, 1)
+const WHITE := Color8(245, 244, 232)
 const LIGHT_GRAY := Color8(200, 200, 200)
-const GOLD := Color8(255, 203, 0)
+const GOLD := Color8(235, 198, 123)
 const ORANGE := Color8(255, 161, 0)
 const RED := Color8(230, 41, 55)
 const YELLOW := Color8(253, 249, 0)
-const PANEL := Color8(0, 0, 0, 110)
+const PANEL := Color8(14, 24, 29, 222)
+const PANEL_EDGE := Color8(121, 146, 149, 112)
+const INK := Color8(12, 17, 21, 235)
 ## BASELINE is where text sits below its top, as a share of its size.
 const BASELINE := 0.8
 
@@ -50,6 +54,11 @@ var net_graph: NetGraph
 var jumps := 0
 ## reconnect_lines tell of a lost connection; empty while there is none.
 var reconnect_lines: PackedStringArray = []
+var match_state: MatchState
+var replay_available := false
+var reinforcement := ""
+var map_scene: MapScene
+var feet := Vector3.ZERO
 
 var _font: Font
 var _scale := 1.0
@@ -59,7 +68,7 @@ func _init() -> void:
 	name = "Hud"
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	set_anchors_preset(Control.PRESET_FULL_RECT)
-	_font = ThemeDB.fallback_font
+	_font = _BODY
 
 
 func _draw() -> void:
@@ -84,6 +93,117 @@ func _draw() -> void:
 	if not reconnect_lines.is_empty():
 		for i in reconnect_lines.size():
 			_text(reconnect_lines[i], Vector2(18, 160 + 28 * i) * _scale, 22, ORANGE)
+	if match_state != null and map_scene != null:
+		_draw_match()
+
+
+func _draw_match() -> void:
+	var center := Vector2(size.x / 2.0, 16 * _scale)
+	var blue := team_color(Game.Team.BLUE).lightened(0.40)
+	var red := team_color(Game.Team.RED).lightened(0.40)
+	var show_bearings := has_soldier and not dead and match_state.result == MatchState.Result.ACTIVE
+	var clock := "%d:%02d" % [match_state.seconds / 60, match_state.seconds % 60]
+	_box(center, -93, -1, 186, 27, Color8(14, 24, 29, 170))
+	_centered(str(match_state.blue_score), center + Vector2(-61, -2) * _scale, 29, blue, _DISPLAY)
+	_centered(str(match_state.red_score), center + Vector2(61, -2) * _scale, 29, red, _DISPLAY)
+	_centered(clock, center + Vector2(0, 0) * _scale, 26, WHITE, _DISPLAY)
+	var kills := "%d %s" % [match_state.kills, "kill" if match_state.kills == 1 else "kills"]
+	_text(kills, center + Vector2(105, 5) * _scale, 17, WHITE, _DISPLAY)
+	for index in map_scene.flags.size():
+		var flag := match_state.flags[index]
+		var zone := map_scene.flags[index]
+		var x := (index - (map_scene.flags.size() - 1) * 0.5) * 108
+		var local_objective := show_bearings and zone.contains_flag_position(feet)
+		var tint: Color = team_colors.get(flag.owner, LIGHT_GRAY)
+		var status_tint := WHITE
+		var status := ""
+		if flag.contested:
+			status = "Contested"
+			status_tint = GOLD
+		elif flag.challenger != Game.Team.NONE and flag.progress > 0:
+			if flag.owner == team:
+				status = "Losing %d%%" % flag.progress
+				status_tint = GOLD
+			else:
+				status = "Capturing %d%%" % flag.progress if local_objective and flag.challenger == team \
+					else "%s +%d%%" % [Game.team_name(flag.challenger), flag.progress]
+				status_tint = team_color(flag.challenger).lightened(0.40)
+		elif local_objective:
+			status = "Holding" if flag.owner == team else "Capturing"
+			status_tint = team_color(team).lightened(0.40)
+		var name_width := _measure(zone.name, 19, _DISPLAY) / _scale
+		var name_x := x - (name_width + 10) / 2
+		_box(center, name_x - 1, 39, 7, 7, INK)
+		_box(center, name_x, 40, 5, 5, tint.lightened(0.20))
+		_text(zone.name, center + Vector2(name_x + 10, 28) * _scale, 19, WHITE, _DISPLAY)
+		var changing := not status.is_empty()
+		if not changing:
+			status = "Neutral" if flag.owner == Game.Team.NONE else Game.team_name(flag.owner).capitalize()
+		if show_bearings and not local_objective:
+			_draw_flag_bearing(zone, center + Vector2(x, 61) * _scale, status, status_tint, not changing)
+		else:
+			var text_size := 17 if local_objective else 15
+			_centered(status, center + Vector2(x, 52) * _scale, text_size, status_tint, _DISPLAY)
+		if local_objective and flag.progress > 0:
+			_box(center, x - 35, 70, 70, 2, INK)
+			var progress_tint := GOLD if flag.contested else team_color(flag.challenger).lightened(0.34)
+			_box(center, x - 35, 70, 70.0 * flag.progress / 100.0, 2, progress_tint)
+	if match_state.result != MatchState.Result.ACTIVE:
+		_draw_result()
+	elif show_bearings and not reinforcement.is_empty():
+		_centered(reinforcement, center + Vector2(0, 78) * _scale, 16, WHITE)
+
+
+## The arrow turns with the player, including when the flag is behind them.
+func _draw_flag_bearing(zone: MapScene.Zone, center: Vector2, label: String, tint: Color, show_distance: bool) -> void:
+	var offset := zone.center - feet
+	var angle := atan2(offset.x, -offset.z) - view_yaw
+	var forward := Vector2(sin(angle), -cos(angle))
+	var side := forward.orthogonal()
+	var label_width := _measure(label, 15, _DISPLAY)
+	var tail_width := 18 * _scale
+	var meters := ""
+	if show_distance:
+		meters = "%d m" % roundi(Vector2(offset.x, offset.z).length())
+		tail_width = _measure(meters, 15, _DISPLAY) + 22 * _scale
+	var x := center.x - (label_width + tail_width) / 2.0
+	_text(label, Vector2(x, center.y - 9 * _scale), 15, tint, _DISPLAY)
+	var origin := Vector2(x + label_width + 12 * _scale, center.y)
+	var arrow := PackedVector2Array([
+		origin + forward * (6 * _scale),
+		origin + (side * 4 - forward * 4) * _scale,
+		origin + (forward * -2) * _scale,
+		origin + (-side * 4 - forward * 4) * _scale,
+	])
+	draw_colored_polygon(arrow, WHITE)
+	arrow.append(arrow[0])
+	draw_polyline(arrow, INK, maxf(1.0, _scale), true)
+	if show_distance:
+		_text(meters, origin + Vector2(10, -9) * _scale, 15, WHITE, _DISPLAY)
+
+
+func _draw_result() -> void:
+	var center := size / 2.0
+	var title := "ROUND DRAWN"
+	var tint := WHITE
+	match match_state.result:
+		MatchState.Result.BLUE:
+			title = "BLUE WINS"
+			tint = team_color(Game.Team.BLUE).lightened(0.3)
+		MatchState.Result.RED:
+			title = "RED WINS"
+			tint = team_color(Game.Team.RED).lightened(0.3)
+	_box(center, -232, -100, 464, 200, PANEL)
+	_box(center, -232, -100, 464, 3, tint)
+	_centered(title, center + Vector2(0, -74) * _scale, 56, tint, _DISPLAY)
+	_centered("%d – %d   ·   %d kills" % [match_state.blue_score, match_state.red_score, match_state.kills],
+		center + Vector2(0, 0) * _scale, 22, WHITE)
+	var action := "Enter  Play again    ·    Esc  Match menu" if replay_available else "Esc  Match menu"
+	_centered(action, center + Vector2(0, 47) * _scale, 16, LIGHT_GRAY)
+
+
+func _centered(text: String, center: Vector2, font_size: int, color: Color, face: Font = _BODY) -> void:
+	_text(text, center - Vector2(_measure(text, font_size, face) / 2.0, 0), font_size, color, face)
 
 
 func team_color(of: int) -> Color:
@@ -93,14 +213,17 @@ func team_color(of: int) -> Color:
 ## _text draws text with its top left corner at position, at a size of the
 ## 720 pixel screen: capitals and digits fill the size from the top, as the
 ## layout expects.
-func _text(text: String, position: Vector2, font_size: int, color: Color) -> void:
+func _text(text: String, position: Vector2, font_size: int, color: Color, face: Font = _BODY) -> void:
 	var scaled := maxi(1, roundi(font_size * _scale))
-	draw_string(_font, position + Vector2(0, BASELINE * scaled), text, HORIZONTAL_ALIGNMENT_LEFT, -1, scaled, color)
+	var baseline := position + Vector2(0, BASELINE * scaled)
+	var outline := Color(INK, INK.a * color.a)
+	draw_string_outline(face, baseline, text, HORIZONTAL_ALIGNMENT_LEFT, -1, scaled, maxi(2, roundi(3 * _scale)), outline)
+	draw_string(face, baseline, text, HORIZONTAL_ALIGNMENT_LEFT, -1, scaled, color)
 
 
 ## _measure is the width of text in screen pixels.
-func _measure(text: String, font_size: int) -> float:
-	return _font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, maxi(1, roundi(font_size * _scale))).x
+func _measure(text: String, font_size: int, face: Font = _BODY) -> float:
+	return face.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, maxi(1, roundi(font_size * _scale))).x
 
 
 ## _box draws a rectangle given in pixels of the 720 pixel screen relative to
@@ -151,63 +274,46 @@ func _draw_arsenal() -> void:
 	var tuning := weapons.get_tuning(kind) if weapons != null else null
 	if tuning == null:
 		return
-	var corner := Vector2(size.x - 24 * _scale, size.y - 24 * _scale)
+	var corner := Vector2(size.x - 24 * _scale, size.y - 23 * _scale)
 	var magazine := arsenal.magazine[arsenal.current]
-	var reserve := "/ %d" % arsenal.reserve[arsenal.current]
 	var rounds := str(magazine)
-	var reserve_width := _measure(reserve, 24)
-	var rounds_width := _measure(rounds, 48)
+	var reserve := "/ %d" % arsenal.reserve[arsenal.current]
+	var reserve_width := _measure(reserve, 19, _DISPLAY)
+	var rounds_width := _measure(rounds, 34, _DISPLAY)
 	var tint := WHITE
 	if magazine == 0:
-		tint = RED
+		tint = RED.lightened(0.15)
 	elif magazine <= tuning.magazine / 4:
 		tint = ORANGE
-	_box(corner, -230, -112, 236, 118, PANEL)
-	_text(reserve, corner + Vector2(-reserve_width, -26 * _scale), 24, LIGHT_GRAY)
-	_text(rounds, corner + Vector2(-reserve_width - 10 * _scale - rounds_width, -48 * _scale), 48, tint)
-	var label: String = WeaponTuning.LABELS[kind].to_upper()
-	_text(label, corner + Vector2(-_measure(label, 20), -76 * _scale), 20, WHITE)
+	_text(reserve, corner + Vector2(-reserve_width, -19 * _scale), 19, LIGHT_GRAY, _DISPLAY)
+	_text(rounds, corner + Vector2(-reserve_width - rounds_width - 6 * _scale, -32 * _scale), 34, tint, _DISPLAY)
+
+	var label: String = WeaponTuning.LABELS[kind]
+	var label_color := LIGHT_GRAY
 	if arsenal.action != Arsenal.Action.READY:
 		var total := tuning.equip_ticks()
-		var text := "EQUIPPING"
+		label = "Equipping"
 		if arsenal.action == Arsenal.Action.RELOADING:
 			total = tuning.reload_ticks()
-			text = "RELOADING"
-		var done := 1.0 - float(arsenal.action_ticks) / maxi(1, total)
-		_box(corner, -220, -100, 220, 6, Color8(255, 255, 255, 60))
-		_box(corner, -220, -100, 220 * done, 6, GOLD)
-		# Left of the rounds, clear of the weapon's name.
-		_text(text, corner + Vector2(-220, -42) * _scale, 16, GOLD)
-	var x := corner.x - 230 * _scale
-	for slot in Arsenal.MAX_LOADOUT:
-		var held := arsenal.weapons[slot]
-		if held == WeaponTuning.Kind.NONE:
-			continue
-		var text := "%d %s" % [slot + 1, WeaponTuning.LABELS[held]]
-		var color := WHITE if slot == arsenal.current else Color8(200, 200, 200, 150)
-		x -= _measure(text, 16) + 18 * _scale
-		_text(text, Vector2(x, corner.y - 16 * _scale), 16, color)
+			label = "Reloading"
+		label_color = GOLD
+		var done := clampf(1.0 - float(arsenal.action_ticks) / maxi(1, total), 0.0, 1.0)
+		_box(corner, -112, 3, 112, 4, INK)
+		_box(corner, -111, 4, 110 * done, 2, GOLD)
+	_text(label, corner + Vector2(-_measure(label, 15), -50 * _scale), 15, label_color)
 
 
-## _draw_health shows the health of the own soldier in the bottom left corner,
-## and the team it fights for: the soldiers of the other colour are enemies.
+## _draw_health shows the player's health and team in the bottom left corner.
 func _draw_health() -> void:
-	var corner := Vector2(24 * _scale, size.y - 24 * _scale)
-	var label := Game.team_name(team).to_upper() + " TEAM"
-	_box(corner, -6, -92, _measure(label, 20) / _scale + 12, 26, PANEL)
-	_text(label, corner + Vector2(0, -88 * _scale), 20, team_color(team))
-	var share := float(health) / Game.MAX_HEALTH
-	var tint := Color8(110, 220, 120)
-	if share <= 0.25:
-		tint = RED
-	elif share <= 0.5:
-		tint = ORANGE
-	var points := str(health)
-	_box(corner, -6, -64, 232, 70, PANEL)
-	_text(points, corner + Vector2(0, -48 * _scale), 48, tint)
-	_text("HEALTH", corner + Vector2(_measure(points, 48) + 10 * _scale, -26 * _scale), 20, LIGHT_GRAY)
-	_box(corner, 0, -4, 220, 4, Color8(255, 255, 255, 50))
-	_box(corner, 0, -4, 220 * share, 4, tint)
+	var corner := Vector2(24 * _scale, size.y - 23 * _scale)
+	var share := clampf(float(health) / Game.MAX_HEALTH, 0.0, 1.0)
+	var tint := WHITE if share >= 0.35 else ORANGE
+	var team_tint := team_color(team).lightened(0.40)
+	var value := str(health)
+	_text(value, corner + Vector2(0, -32) * _scale, 34, tint, _DISPLAY)
+	_text("HP", corner + Vector2(_measure(value, 34, _DISPLAY) + 6 * _scale, -18 * _scale), 15, LIGHT_GRAY)
+	_box(corner, 0, 3, 78, 4, INK)
+	_box(corner, 1, 4, 76 * share, 2, team_tint if share >= 0.35 else ORANGE)
 
 
 ## _draw_death tells the dead player who killed it and when it comes back.
@@ -253,20 +359,46 @@ func _draw_feedback() -> void:
 		tint.a = minf(1.0, 2 * f.marker / _Feedback.MARKER_TIME)
 		for corner in [Vector2(-1, -1), Vector2(1, -1), Vector2(-1, 1), Vector2(1, 1)]:
 			draw_line(center + corner * 5 * _scale, center + corner * reach * _scale, tint, 2.5 * _scale, true)
+	_draw_kill_feed()
+
+
+func _draw_kill_feed() -> void:
+	const FONT_SIZE := 16
 	var right := size.x - 24 * _scale
-	var y := 140 * _scale
-	for line in f.feed:
-		var weapon := "[" + WeaponTuning.kind_name(line.weapon).to_upper() + "]"
-		if line.head:
-			weapon += " HEADSHOT"
-		var parts := [[line.killer, team_color(line.killer_team)], ["  " + weapon + "  ", LIGHT_GRAY], [line.victim, team_color(line.victim_team)]]
-		var total := 0.0
-		for part in parts:
-			total += _measure(part[0], 18)
-		var background := Color8(120, 100, 20, 140) if line.own else PANEL
-		draw_rect(Rect2(right - total - 8 * _scale, y - 4 * _scale, total + 16 * _scale, 26 * _scale), background)
-		var x := right - total
-		for part in parts:
-			_text(part[0], Vector2(x, y), 18, part[1])
-			x += _measure(part[0], 18)
-		y += 30 * _scale
+	var y := 104 * _scale
+	var name_width := minf(104 * _scale, size.x * 0.14)
+	for line in feedback.feed:
+		var fade := smoothstep(0.0, 0.7, line.lifetime() - line.age)
+		var opacity := fade if line.own else fade * lerpf(0.90, 0.60, aim)
+		var killer := _fit_feed_name(line.killer, FONT_SIZE, name_width)
+		var victim := _fit_feed_name(line.victim, FONT_SIZE, name_width)
+		var middle := "  ›  "
+		if line.own:
+			var weapon: String = WeaponTuning.LABELS[line.weapon]
+			if not weapon.is_empty():
+				middle = "  " + weapon + (" headshot  " if line.head else "  ")
+		var killer_width := _measure(killer, FONT_SIZE)
+		var middle_width := _measure(middle, FONT_SIZE)
+		var width := killer_width + middle_width + _measure(victim, FONT_SIZE)
+		var x := right - width
+		if line.own:
+			draw_rect(Rect2(x - 7 * _scale, y - 2 * _scale, width + 12 * _scale, 21 * _scale),
+				Color(0.08, 0.11, 0.12, 0.67 * opacity))
+			draw_rect(Rect2(right + 4 * _scale, y + 2 * _scale, 2 * _scale, 13 * _scale), Color(GOLD, opacity))
+		_text(killer, Vector2(x, y), FONT_SIZE, Color(team_color(line.killer_team).lightened(0.37), opacity))
+		_text(middle, Vector2(x + killer_width, y), FONT_SIZE, Color(LIGHT_GRAY, opacity))
+		_text(victim, Vector2(x + killer_width + middle_width, y), FONT_SIZE,
+			Color(team_color(line.victim_team).lightened(0.37), opacity))
+		y += 23 * _scale
+
+
+func _fit_feed_name(label: String, font_size: int, available: float) -> String:
+	if _measure(label, font_size) <= available:
+		return label
+	var length := label.length()
+	while length > 0:
+		length -= 1
+		var shortened := label.left(length) + "…"
+		if _measure(shortened, font_size) <= available:
+			return shortened
+	return "…"

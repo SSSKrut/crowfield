@@ -6,7 +6,7 @@ extends RefCounted
 ## own that nothing collides with: tree crowns, bushes and water.
 
 ## Kind tells the client how to draw a box; the simulation does not care.
-enum Kind { GROUND, CONCRETE, PLASTER, ROOF, WOOD, PLANKS, SANDBAG, ROCK, METAL, TRUNK, HAY, BLUE_CLOTH, RED_CLOTH, INVISIBLE }
+enum Kind { GROUND, CONCRETE, PLASTER, ROOF, WOOD, PLANKS, SANDBAG, ROCK, METAL, TRUNK, HAY, BLUE_CLOTH, RED_CLOTH, INVISIBLE, MASONRY, SLATE, COBBLES }
 
 const MAPS := ["valley", "prototype"]
 
@@ -33,6 +33,11 @@ class Zone:
 		center = at
 		radius = size
 
+
+	## The bridge flag can be captured from the deck, but not the water below.
+	func contains_flag_position(at: Vector3) -> bool:
+		return absf(at.y - center.y) <= 1.4 and Vector2(at.x - center.x, at.z - center.z).length_squared() <= radius * radius
+
 ## Plant is a tree or a bush the client draws. A tree has a trunk among the
 ## boxes; its crown and a bush stop nothing.
 class Plant:
@@ -55,6 +60,8 @@ var spheres: Array[Sphere] = []
 var zones: Array[Zone] = [null, null, null]
 ## objectives are the places of the map worth fighting for, where bots go.
 var objectives: Array[Zone] = []
+## Flags ordered by their positions from west to east. Empty on sandbox maps.
+var flags: Array[Zone] = []
 var trees: Array[Plant] = []
 var bushes: Array[Plant] = []
 var waters: Array[Water] = []
@@ -92,7 +99,7 @@ static func prototype() -> MapScene:
 	scene.set_zone(Game.Team.RED, Vector3(0, 0.2, -11), 0)
 	scene.play_area = 14.0
 	scene.add_box(Vector3(15, 0.25, 15), Vector3(0, -0.25, 0), Basis(), Kind.GROUND)
-	scene.add_box(Vector3(2.5, 0.2, 3), Vector3(4, 0.65, 0), Basis(Vector3.RIGHT, -0.22), Kind.WOOD)
+	scene.add_box(Vector3(2.5, 0.2, 3), Vector3(4, 0.65, 0), Basis(Vector3.RIGHT, 0.22), Kind.WOOD)
 	scene.add_box(Vector3(2.5, 0.75, 2.5), Vector3(4, 0.75, -5), Basis(), Kind.WOOD)
 	scene.add_box(Vector3(0.35, 0.6, 2), Vector3(-2, 0.6, -2), Basis(), Kind.WOOD)
 	scene.add_box(Vector3(1.5, 0.15, 0.5), Vector3(-5, 0.15, 3), Basis(), Kind.WOOD)
@@ -195,6 +202,15 @@ func hash_value() -> int:
 		digest.start(HashingContext.HASH_SHA256)
 		digest.update(terrain.bytes())
 		bytes.append_array(digest.finish())
+	for flag in flags:
+		bytes.append_array(flag.name.to_utf8_buffer())
+		bytes.append(0)
+		var at := bytes.size()
+		bytes.resize(at + 16)
+		bytes.encode_float(at, flag.center.x)
+		bytes.encode_float(at + 4, flag.center.y)
+		bytes.encode_float(at + 8, flag.center.z)
+		bytes.encode_float(at + 12, flag.radius)
 	_hash = Game.fnv64(bytes)
 	_hashed = true
 	return _hash

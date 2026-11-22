@@ -48,10 +48,9 @@ const SEARCH_TICKS := 6 * Game.TICK_RATE
 const ALERT_TICKS := 3 * Game.TICK_RATE
 const REACTION := Vector2(0.22, 0.45)
 const TURN_SPEED := deg_to_rad(400.0)
-## AIM_HEIGHT is the middle of the body, under the big head, that a bot aims
-## at; HEAD_HEIGHT where it looks for a head over cover.
-const AIM_HEIGHT := 0.8
-const HEAD_HEIGHT := 1.45
+## Aim at the infantry chest and check for a visible helmet over cover.
+const AIM_HEIGHT := 1.17
+const HEAD_HEIGHT := 1.64
 ## The aim error starts at ACQUIRE_ERROR on a new target and settles towards
 ## STEADY_ERROR in about SETTLE seconds, wandering by NOISE every tick. Each
 ## bot has a hand of its own: its errors are its skill times these.
@@ -105,6 +104,12 @@ const DROP_HEIGHT := 1.0
 ## every PUSH_TICKS ticks.
 const SPACING := 1.2
 const PUSH_TICKS := 3
+## Give the first advance a job before bots settle into opportunistic fights.
+const OPENING_TICKS := 20 * Game.TICK_RATE
+const OPENING_CONTACT_RANGE := 11.0
+## Casualties can reinforce their own crossing, but cannot jump from a
+## distant fight into a held lane.
+const REINFORCEMENT_RANGE := 30.0
 ## A bot that gets nowhere in STUCK_TICKS gives up its way.
 const STUCK_TICKS := 2 * Game.TICK_RATE
 ## OPEN_CELL is the size of the cells of the map of open ground.
@@ -178,6 +183,7 @@ var _open := PackedByteArray()
 var _cells := 0
 var _eye := 1.55
 var _aim_settle := 0.0
+var _opening_until := -1
 
 
 func _init(server: Server) -> void:
@@ -213,9 +219,17 @@ func spawn_all(how_many: int) -> void:
 		_spawn(bot, Game.Team.BLUE if i % 2 == 0 else Game.Team.RED)
 
 
-## _spawn puts a bot on the map as a new soldier of the team: in the zone of
-## its team, or anywhere on a map whose zones are points.
-func _spawn(bot: Bot, team: int) -> void:
+func reset_for_round() -> void:
+	_opening_until = -1
+	var count := bots.size()
+	for bot in bots:
+		_server.soldiers.remove(bot.soldier)
+	bots.clear()
+	spawn_all(count)
+
+
+## First deployment is at home. A casualty may return behind a safe crossing.
+func _spawn(bot: Bot, team: int, reinforcement: Vector3 = Vector3.INF) -> void:
 	var soldier := Soldier.new()
 	soldier.team = team
 	soldier.controller = Game.Controller.BOT
@@ -223,7 +237,10 @@ func _spawn(bot: Bot, team: int) -> void:
 	soldier.alive = true
 	soldier.grounded = true
 	var zone := _scene.zone_of(team)
-	if zone.radius > 0:
+	if reinforcement.is_finite():
+		soldier.position = reinforcement
+		soldier.yaw = Game.yaw_of(-reinforcement)
+	elif zone.radius > 0:
 		soldier.position = _server.spawn_point(team, _random)
 		soldier.yaw = Game.yaw_of(-zone.center)
 	else:
@@ -279,8 +296,9 @@ func respawn_dead() -> void:
 		if soldier.alive or _server.tick < bot.respawn_at:
 			continue
 		var team := soldier.team
+		var reinforcement := _server.reinforcement_point(team, soldier.position, REINFORCEMENT_RANGE)
 		_server.soldiers.remove(bot.soldier)
-		_spawn(bot, team)
+		_spawn(bot, team, reinforcement)
 
 
 ## hurt tells a bot it was hit by a shooter: it turns to look for it.
@@ -317,6 +335,12 @@ func kill() -> void:
 ## update runs the bots for a tick: the living ones think when their turn
 ## comes, then move, aim and fire.
 func update() -> void:
+	var round := _server.flag_match
+	if _ai and _scene.name == "valley" and round != null:
+		if not round.started:
+			return
+		if _opening_until < 0:
+			_opening_until = _server.tick + OPENING_TICKS
 	_rays = RAYS_PER_TICK
 	_paths = PATHS_PER_TICK
 	if _ai:
@@ -383,6 +407,11 @@ func _look(bot: Bot, soldier: Soldier) -> int:
 	var forward := Vector2(sin(soldier.yaw), -cos(soldier.yaw))
 	var alert := _server.tick - bot.hurt_at < ALERT_TICKS
 	var cos_view := cos(VIEW_ANGLE)
+	var view_range := VIEW_RANGE
+	if bot.state == State.ADVANCE and not alert and _opening_until > _server.tick:
+		var assigned := _opening_flag(bot, soldier.team)
+		if not assigned.contains_flag_position(soldier.position):
+			view_range = OPENING_CONTACT_RANGE
 	var near_ids: Array[int] = []
 	var near_distances: Array[float] = []
 	var from := soldier.position
@@ -390,7 +419,7 @@ func _look(bot: Bot, soldier: Soldier) -> int:
 		var to := positions[k] - from
 		var flat := Vector2(to.x, to.z)
 		var distance := flat.length()
-		if distance > VIEW_RANGE:
+		if distance > view_range:
 			continue
 		if distance > NOTICE_RANGE and not alert and flat.dot(forward) < cos_view * distance:
 			continue
@@ -411,20 +440,21 @@ func _look(bot: Bot, soldier: Soldier) -> int:
 			bot.think_at = _server.tick + 1
 			return 0
 		var enemy := _server.soldiers.get_soldier(id)
-		if _sees(soldier, enemy.position):
+		if _sees(soldier, enemy):
 			return id
 	return 0
 
 
 ## _sees tells whether a soldier's eye sees the body or the head of a soldier
 ## standing at a point, by rays through the static world.
-func _sees(soldier: Soldier, at: Vector3) -> bool:
+func _sees(soldier: Soldier, target: Soldier) -> bool:
 	var eye := soldier.position + Vector3(0, _eye, 0)
-	for height: float in [AIM_HEIGHT, HEAD_HEIGHT]:
+	for box in [1, 0]:
 		if _rays <= 0:
 			return false
 		_rays -= 1
-		var point: Vector3 = at + Vector3(0, height, 0)
+		var point := Hitboxes.center(box, target.position, target.yaw, true) if target.crouched \
+			else target.position + Vector3.UP * (AIM_HEIGHT if box == 1 else HEAD_HEIGHT)
 		var distance := eye.distance_to(point)
 		var hit := _server.cast_ray(eye, (point - eye) / distance, distance, Game.LAYER_STATIC | Game.LAYER_VEHICLE)
 		if hit < 0:
@@ -484,7 +514,7 @@ func _fight(bot: Bot, soldier: Soldier) -> void:
 		return
 	if tick >= bot.check_at and _rays > 0:
 		bot.check_at = tick + SIGHT_TICKS
-		if _sees(soldier, target.position):
+		if _sees(soldier, target):
 			bot.seen_at = tick
 			bot.last_seen = target.position
 	if tick - bot.seen_at > LOSE_TICKS:
@@ -493,22 +523,27 @@ func _fight(bot: Bot, soldier: Soldier) -> void:
 		return
 	# The bot sees its target as it was a reaction ago.
 	var seen := target.position
+	var seen_yaw := target.yaw
+	var seen_crouched := target.crouched
 	var pose := _server.history.at(target.id, tick - 1 - bot.reaction)
 	if not pose.is_empty():
 		seen = pose[0]
+		seen_yaw = pose[1]
+		seen_crouched = pose[3]
 	var eye := soldier.position + Vector3(0, _eye, 0)
-	var distance := eye.distance_to(seen + Vector3(0, AIM_HEIGHT, 0))
+	var point := Hitboxes.center(1, seen, seen_yaw, true) if seen_crouched else seen + Vector3.UP * AIM_HEIGHT
+	var distance := eye.distance_to(point)
 	_plan_special(bot, soldier, distance)
 	if bot.special < 0:
 		_choose_weapon(bot, soldier, distance)
 	var tuning := _rules.weapons.get_tuning(soldier.arsenal.weapons[bot.weapon])
-	var angles := _aim(eye, seen, target.velocity, tuning)
+	var angles := _aim(eye, seen, point, target.velocity, tuning)
 	if angles == Vector2.INF:
 		# A grenade cannot reach that far.
 		_end_special(bot)
 		_choose_weapon(bot, soldier, distance)
 		tuning = _rules.weapons.get_tuning(soldier.arsenal.weapons[bot.weapon])
-		angles = _aim(eye, seen, target.velocity, null)
+		angles = _aim(eye, seen, point, target.velocity, null)
 	bot.aim_error = bot.aim_error * _aim_settle + Vector2(_random.randf_range(-1, 1), _random.randf_range(-1, 1)) * NOISE
 	var steady := STEADY_ERROR * bot.skill * (1.0 + Game.horizontal_length(soldier.velocity) / _rules.movement.walk_speed)
 	if bot.aim_error.length() < steady:
@@ -539,13 +574,13 @@ func _fight(bot: Bot, soldier: Soldier) -> void:
 	_arm(bot, soldier, buttons)
 
 
-## _aim is the yaw and pitch from the eye to hit a target seen at a point,
-## moving at a velocity, with a weapon: at its body with a gun, at its feet
-## where a rocket will meet it, or the throw of a grenade that lands by it.
-## It is Vector2.INF where a throw cannot reach.
-static func _aim(eye: Vector3, seen: Vector3, velocity: Vector3, tuning: WeaponTuning) -> Vector2:
+## _aim is the yaw and pitch from the eye to hit a target seen standing at a
+## point, moving at a velocity, with a weapon: at the point of its body with a
+## gun, at its feet where a rocket will meet it, or the throw of a grenade that
+## lands by it. It is Vector2.INF where a throw cannot reach.
+static func _aim(eye: Vector3, seen: Vector3, body_point: Vector3, velocity: Vector3, tuning: WeaponTuning) -> Vector2:
 	if tuning == null or tuning.use != WeaponTuning.Use.PROJECTILE:
-		var body := seen + Vector3(0, AIM_HEIGHT, 0) - eye
+		var body := body_point - eye
 		return Vector2(Game.yaw_of(body), atan2(body.y, Vector2(body.x, body.z).length()))
 	var at := seen
 	if tuning.bounce <= 0:
@@ -789,8 +824,12 @@ func _walk(bot: Bot, soldier: Soldier) -> void:
 			return
 		_paths -= 1
 		if bot.state != State.SEARCH:
-			bot.goal = _pick_goal(soldier)
-			bot.sprint = _random.randf() < 0.75
+			if _opening_until > tick:
+				bot.goal = _flag_approach(_opening_flag(bot, soldier.team))
+				bot.sprint = true
+			else:
+				bot.goal = _pick_goal(soldier)
+				bot.sprint = _random.randf() < 0.75
 		bot.path = _server.navigation.path(soldier.position, bot.goal)
 		bot.corner = 1
 		bot.progress_at = tick
@@ -859,7 +898,10 @@ func _step_back(soldier: Soldier) -> void:
 func _linger() -> int:
 	if not _ai:
 		return 0
-	return _random.randi_range(2 * Game.TICK_RATE, 7 * Game.TICK_RATE)
+	var minimum := Game.TICK_RATE * 2
+	if _server.flag_match != null and _server.flag_match.started:
+		minimum = FlagMatch.CAPTURE_TICKS
+	return _random.randi_range(minimum, 7 * Game.TICK_RATE)
 
 
 ## _look_about turns a bot that waits now and then to another direction.
@@ -875,12 +917,41 @@ func _look_about(bot: Bot, soldier: Soldier) -> void:
 ## fighting for, now and then the enemy's base.
 func _pick_goal(soldier: Soldier) -> Vector3:
 	var zone: MapScene.Zone
+	var round := _server.flag_match
+	if _ai and round != null and round.started and round.state.result == MatchState.Result.ACTIVE:
+		return _flag_approach(_flag_goal(soldier.team, round))
 	if _scene.objectives.is_empty() or (_ai and _random.randf() < 0.12):
 		zone = _scene.zone_of(_enemy_of(soldier.team))
 	else:
 		zone = _scene.objectives[_random.randi_range(0, _scene.objectives.size() - 1)]
 	var offset := Vector2.from_angle(_random.randf() * TAU) * sqrt(_random.randf()) * zone.radius
 	return _server.navigation.closest(zone.center + Vector3(offset.x, 0.5, offset.y))
+
+
+func _flag_approach(zone: MapScene.Zone) -> Vector3:
+	var approach := Vector2.from_angle(_random.randf() * TAU) * zone.radius * _random.randf() * 0.4
+	return _server.navigation.closest(zone.center + Vector3(approach.x, 0.5, approach.y))
+
+
+## Each two-bot pair gets one lane. Rotate the lane order for Red as the
+## map is rotated, so the near bridge is the same job for either team.
+func _opening_flag(bot: Bot, team: int) -> MapScene.Zone:
+	var flags := _scene.flags
+	var lane := (bot.index / 2 + 1) % flags.size()
+	if team == Game.Team.RED:
+		lane = flags.size() - 1 - lane
+	return flags[lane]
+
+
+func _flag_goal(team: int, round: FlagMatch) -> MapScene.Zone:
+	# A mix of attack and defense keeps some bots spread across the crossings.
+	if _random.randf() < 0.75:
+		var start := _random.randi_range(0, round.zones.size() - 1)
+		for offset in round.zones.size():
+			var index := (start + offset) % round.zones.size()
+			if round.state.flags[index].owner != team:
+				return round.zones[index]
+	return round.zones[_random.randi_range(0, round.zones.size() - 1)]
 
 
 ## _away_from_others is the push that keeps a bot clear of the soldiers near it.

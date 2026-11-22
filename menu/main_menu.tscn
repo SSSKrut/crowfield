@@ -1,14 +1,19 @@
-[gd_scene load_steps=5 format=3]
+[gd_scene load_steps=7 format=3]
 
 [ext_resource type="Script" path="res://menu/main_menu.gd" id="1_menu"]
 [ext_resource type="Theme" path="res://menu/theme.tres" id="2_theme"]
 
+[ext_resource type="Texture2D" path="res://menu/valley.webp" id="3_valley"]
+
+[ext_resource type="FontFile" path="res://assets/type/BarlowCondensed-Bold.ttf" id="4_display"]
+
 [sub_resource type="Gradient" id="Gradient_sky"]
-colors = PackedColorArray(0.36, 0.5, 0.62, 1, 0.07, 0.08, 0.1, 1)
+offsets = PackedFloat32Array(0, 0.44, 1)
+colors = PackedColorArray(0.03, 0.046, 0.052, 0.98, 0.04, 0.06, 0.068, 0.86, 0.05, 0.09, 0.1, 0.08)
 
 [sub_resource type="GradientTexture2D" id="GradientTexture2D_sky"]
 gradient = SubResource("Gradient_sky")
-fill_to = Vector2(0, 1)
+fill_to = Vector2(1, 0.12)
 
 [node name="MainMenu" type="Control"]
 layout_mode = 3
@@ -27,10 +32,22 @@ anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
+mouse_filter = 2
+texture = ExtResource("3_valley")
+expand_mode = 1
+stretch_mode = 6
+
+[node name="Shade" type="TextureRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+mouse_filter = 2
 texture = SubResource("GradientTexture2D_sky")
 expand_mode = 1
 
 [node name="Center" type="CenterContainer" parent="."]
+unique_name_in_owner = true
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -39,34 +56,44 @@ grow_horizontal = 2
 grow_vertical = 2
 
 [node name="Panel" type="PanelContainer" parent="Center"]
-custom_minimum_size = Vector2(500, 0)
+custom_minimum_size = Vector2(418, 0)
 layout_mode = 2
 
 [node name="Rows" type="VBoxContainer" parent="Center/Panel"]
 layout_mode = 2
-theme_override_constants/separation = 12
+theme_override_constants/separation = 8
 
 [node name="Title" type="Label" parent="Center/Panel/Rows"]
 layout_mode = 2
-theme_override_font_sizes/font_size = 44
+theme_override_colors/font_color = Color(0.95, 0.92, 0.82, 1)
+theme_override_fonts/font = ExtResource("4_display")
+theme_override_font_sizes/font_size = 84
 text = "CROWFIELD"
-horizontal_alignment = 1
+
+[node name="Mode" type="Label" parent="Center/Panel/Rows"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.88, 0.74, 0.48, 1)
+theme_override_fonts/font = ExtResource("4_display")
+theme_override_font_sizes/font_size = 22
+text = "VALLEY  /  FLAG CONTROL"
 
 [node name="Subtitle" type="Label" parent="Center/Panel/Rows"]
 layout_mode = 2
-theme_override_colors/font_color = Color(0.62, 0.67, 0.74, 1)
-theme_override_font_sizes/font_size = 15
-text = "Multiplayer infantry shooter prototype"
-horizontal_alignment = 1
+theme_override_colors/font_color = Color(0.72, 0.78, 0.77, 1)
+theme_override_font_sizes/font_size = 17
+unique_name_in_owner = true
+text = "Hold crossings to score and open forward reinforcements."
+autowrap_mode = 3
 
 [node name="Gap" type="Control" parent="Center/Panel/Rows"]
-custom_minimum_size = Vector2(0, 4)
+custom_minimum_size = Vector2(0, 10)
 layout_mode = 2
 
 [node name="Fields" type="GridContainer" parent="Center/Panel/Rows"]
 layout_mode = 2
 theme_override_constants/h_separation = 14
-theme_override_constants/v_separation = 10
+theme_override_constants/v_separation = 7
 columns = 2
 
 [node name="NameLabel" type="Label" parent="Center/Panel/Rows/Fields"]
@@ -108,59 +135,16 @@ layout_mode = 2
 
 [node name="Solo" type="Button" parent="Center/Panel/Rows"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 42)
+custom_minimum_size = Vector2(0, 52)
 layout_mode = 2
+theme_type_variation = &"PrimaryButton"
+theme_override_fonts/font = ExtResource("4_display")
+theme_override_font_sizes/font_size = 24
 text = "Play solo"
 
-[node name="HostTitle" type="Label" parent="Center/Panel/Rows"]
+[node name="Multiplayer" type="Button" parent="Center/Panel/Rows"]
 layout_mode = 2
-theme_override_colors/font_color = Color(0.62, 0.67, 0.74, 1)
-theme_override_font_sizes/font_size = 15
-text = "Host a game: friends join your address and port"
-
-[node name="HostRow" type="HBoxContainer" parent="Center/Panel/Rows"]
-layout_mode = 2
-theme_override_constants/separation = 10
-
-[node name="PortLabel" type="Label" parent="Center/Panel/Rows/HostRow"]
-layout_mode = 2
-text = "UDP port"
-
-[node name="Port" type="SpinBox" parent="Center/Panel/Rows/HostRow"]
-unique_name_in_owner = true
-layout_mode = 2
-min_value = 1.0
-max_value = 65535.0
-value = 7777.0
-
-[node name="Host" type="Button" parent="Center/Panel/Rows/HostRow"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 42)
-layout_mode = 2
-size_flags_horizontal = 3
-text = "Host game"
-
-[node name="JoinTitle" type="Label" parent="Center/Panel/Rows"]
-layout_mode = 2
-theme_override_colors/font_color = Color(0.62, 0.67, 0.74, 1)
-theme_override_font_sizes/font_size = 15
-text = "Join a game: the port defaults to 7777"
-
-[node name="JoinRow" type="HBoxContainer" parent="Center/Panel/Rows"]
-layout_mode = 2
-theme_override_constants/separation = 10
-
-[node name="Address" type="LineEdit" parent="Center/Panel/Rows/JoinRow"]
-unique_name_in_owner = true
-layout_mode = 2
-size_flags_horizontal = 3
-placeholder_text = "192.168.1.20 or host:port"
-
-[node name="Join" type="Button" parent="Center/Panel/Rows/JoinRow"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(130, 42)
-layout_mode = 2
-text = "Join"
+text = "Multiplayer"
 
 [node name="Status" type="Label" parent="Center/Panel/Rows"]
 unique_name_in_owner = true
@@ -173,13 +157,210 @@ autowrap_mode = 3
 [node name="QuitSeparator" type="HSeparator" parent="Center/Panel/Rows"]
 layout_mode = 2
 
-[node name="Quit" type="Button" parent="Center/Panel/Rows"]
+[node name="Footer" type="HBoxContainer" parent="Center/Panel/Rows"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="SettingsButton" type="Button" parent="Center/Panel/Rows/Footer"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Settings"
+
+[node name="CreditsButton" type="Button" parent="Center/Panel/Rows/Footer"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Credits"
+
+[node name="Quit" type="Button" parent="Center/Panel/Rows/Footer"]
 custom_minimum_size = Vector2(0, 42)
 layout_mode = 2
+size_flags_horizontal = 3
 text = "Quit"
 
+[node name="NetworkDialog" type="AcceptDialog" parent="."]
+unique_name_in_owner = true
+theme = ExtResource("2_theme")
+title = "Multiplayer"
+exclusive = true
+visible = false
+ok_button_text = "Close"
+
+[node name="Network" type="VBoxContainer" parent="NetworkDialog"]
+custom_minimum_size = Vector2(440, 175)
+theme_override_constants/separation = 8
+
+[node name="HostTitle" type="Label" parent="NetworkDialog/Network"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.69, 0.75, 0.75, 1)
+theme_override_font_sizes/font_size = 15
+text = "Host a match"
+
+[node name="HostRow" type="HBoxContainer" parent="NetworkDialog/Network"]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="PortLabel" type="Label" parent="NetworkDialog/Network/HostRow"]
+layout_mode = 2
+text = "UDP port"
+
+[node name="Port" type="SpinBox" parent="NetworkDialog/Network/HostRow"]
+unique_name_in_owner = true
+layout_mode = 2
+min_value = 1.0
+max_value = 65535.0
+value = 7777.0
+
+[node name="Host" type="Button" parent="NetworkDialog/Network/HostRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 42)
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Host game"
+
+[node name="JoinTitle" type="Label" parent="NetworkDialog/Network"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.69, 0.75, 0.75, 1)
+theme_override_font_sizes/font_size = 15
+text = "Join a server"
+
+[node name="JoinRow" type="HBoxContainer" parent="NetworkDialog/Network"]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="Address" type="LineEdit" parent="NetworkDialog/Network/JoinRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+placeholder_text = "192.168.1.20 or host:port"
+
+[node name="Join" type="Button" parent="NetworkDialog/Network/JoinRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(130, 42)
+layout_mode = 2
+text = "Join"
+
+[node name="NetworkStatus" type="Label" parent="NetworkDialog/Network"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 0.55, 0.45, 1)
+autowrap_mode = 3
+
+[node name="Settings" type="AcceptDialog" parent="."]
+unique_name_in_owner = true
+theme = ExtResource("2_theme")
+title = "Settings"
+exclusive = true
+visible = false
+ok_button_text = "Apply"
+
+[node name="Rows" type="GridContainer" parent="Settings"]
+custom_minimum_size = Vector2(466, 192)
+theme_override_constants/h_separation = 18
+theme_override_constants/v_separation = 14
+columns = 3
+
+[node name="VolumeLabel" type="Label" parent="Settings/Rows"]
+layout_mode = 2
+text = "Master volume"
+
+[node name="Volume" type="HSlider" parent="Settings/Rows"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+min_value = 0
+max_value = 100
+step = 1
+value = 50
+
+[node name="VolumeValue" type="Label" parent="Settings/Rows"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(55, 0)
+layout_mode = 2
+horizontal_alignment = 2
+
+[node name="SensitivityLabel" type="Label" parent="Settings/Rows"]
+layout_mode = 2
+text = "Mouse sensitivity"
+
+[node name="Sensitivity" type="HSlider" parent="Settings/Rows"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+min_value = 0.25
+max_value = 3
+step = 0.05
+value = 1
+
+[node name="SensitivityValue" type="Label" parent="Settings/Rows"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(55, 0)
+layout_mode = 2
+horizontal_alignment = 2
+
+[node name="FovLabel" type="Label" parent="Settings/Rows"]
+layout_mode = 2
+text = "Vertical field of view"
+
+[node name="Fov" type="HSlider" parent="Settings/Rows"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+min_value = 55
+max_value = 100
+step = 1
+value = 75
+
+[node name="FovValue" type="Label" parent="Settings/Rows"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(55, 0)
+layout_mode = 2
+horizontal_alignment = 2
+
+[node name="GraphicsLabel" type="Label" parent="Settings/Rows"]
+layout_mode = 2
+text = "Graphics"
+
+[node name="Graphics" type="OptionButton" parent="Settings/Rows"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+item_count = 3
+selected = 0
+popup/item_0/text = "Automatic"
+popup/item_0/id = 0
+popup/item_1/text = "Performance"
+popup/item_1/id = 1
+popup/item_2/text = "Quality"
+popup/item_2/id = 2
+
+[node name="Credits" type="AcceptDialog" parent="."]
+unique_name_in_owner = true
+title = "Asset credits"
+exclusive = true
+visible = false
+
+[node name="CreditsText" type="RichTextLabel" parent="Credits"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(440, 196)
+bbcode_enabled = true
+text = "[b]Gunshot Sounds[/b] — Vincent Sevedge (Tabasco), © 2009. Edited for Crowfield.
+[url=https://opengameart.org/content/gunshot-sounds]Source[/url] · [url=https://creativecommons.org/licenses/by/3.0/]CC BY 3.0[/url]
+
+[b]Gun Reload Sound Effects[/b] — Brian MacIntosh (BMacZero). Edited for Crowfield.
+[url=https://opengameart.org/content/gun-reload-sound-effects]Source[/url] · [url=https://creativecommons.org/publicdomain/zero/1.0/]CC0 1.0[/url]"
+
 [connection signal="pressed" from="Center/Panel/Rows/Solo" to="." method="_on_solo_pressed"]
-[connection signal="pressed" from="Center/Panel/Rows/HostRow/Host" to="." method="_on_host_pressed"]
-[connection signal="text_submitted" from="Center/Panel/Rows/JoinRow/Address" to="." method="_on_address_submitted"]
-[connection signal="pressed" from="Center/Panel/Rows/JoinRow/Join" to="." method="_on_join_pressed"]
-[connection signal="pressed" from="Center/Panel/Rows/Quit" to="." method="_on_quit_pressed"]
+[connection signal="pressed" from="NetworkDialog/Network/HostRow/Host" to="." method="_on_host_pressed"]
+[connection signal="text_submitted" from="NetworkDialog/Network/JoinRow/Address" to="." method="_on_address_submitted"]
+[connection signal="pressed" from="NetworkDialog/Network/JoinRow/Join" to="." method="_on_join_pressed"]
+[connection signal="pressed" from="Center/Panel/Rows/Footer/Quit" to="." method="_on_quit_pressed"]
+[connection signal="item_selected" from="Center/Panel/Rows/Fields/Map" to="." method="_on_map_selected"]
+[connection signal="pressed" from="Center/Panel/Rows/Multiplayer" to="." method="_on_multiplayer_pressed"]
+[connection signal="pressed" from="Center/Panel/Rows/Footer/CreditsButton" to="." method="_on_credits_pressed"]
+[connection signal="meta_clicked" from="Credits/CreditsText" to="." method="_on_credit_link_clicked"]
+[connection signal="pressed" from="Center/Panel/Rows/Footer/SettingsButton" to="." method="_on_settings_pressed"]
+[connection signal="confirmed" from="Settings" to="." method="_on_settings_confirmed"]
+[connection signal="value_changed" from="Settings/Rows/Volume" to="." method="_display_settings"]
+[connection signal="value_changed" from="Settings/Rows/Sensitivity" to="." method="_display_settings"]
+[connection signal="value_changed" from="Settings/Rows/Fov" to="." method="_display_settings"]

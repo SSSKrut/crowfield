@@ -99,6 +99,7 @@ func _build(index: int) -> void:
 	if own != null:
 		private.position = own.position
 		private.velocity = own.velocity
+		private.crouched = own.crouched
 		private.arsenal = own.arsenal
 		private.health = own.health
 		if not own.alive:
@@ -112,6 +113,11 @@ func _build(index: int) -> void:
 	var per_snapshot := float(server.settings.client_bandwidth) / server.settings.snapshot_rate
 	player.allowance = minf(player.allowance + per_snapshot, 2 * per_snapshot)
 	var snapshot := player.snapshot
+	if server.flag_match != null:
+		if snapshot.match_state == null:
+			snapshot.match_state = MatchState.new()
+		snapshot.match_state.set_round(server.flag_match.state)
+		snapshot.match_state.kills = player.kills
 	var packer := player.packer
 	var candidates := player.candidates
 	var next := 0
@@ -176,7 +182,7 @@ func _prioritize(server: Server, player: ServerPlayer) -> void:
 	var forward := Vector3.ZERO
 	var center := Vector3(0, server.rules.movement.center_height(), 0)
 	if viewer != null:
-		eye = viewer.position + Vector3(0, server.rules.movement.eye_height, 0)
+		eye = viewer.position + Vector3.UP * server.rules.movement.view_height(viewer.crouched)
 		forward = Game.view_direction(player.last.yaw_radians(), player.last.pitch_radians())
 	var candidates := player.candidates
 	candidates.resize(0)

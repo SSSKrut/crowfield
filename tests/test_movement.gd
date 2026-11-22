@@ -80,13 +80,18 @@ func test_jumps() -> void:
 	var controller: CharacterController = made[0]
 	var soldier: Soldier = made[1]
 	var tick := _settle(controller, soldier)
+	var floor_height := soldier.position.y
 	var peak := 0.0
+	var airtime_ticks := 0
 	for i in Game.TICK_RATE * 2:
-		controller.step(soldier, InputCommand.create(tick, 0, 0, 0, 0, InputCommand.JUMP if i == 0 else 0))
-		peak = maxf(peak, soldier.position.y)
-		tick += 1
-	var tuning := MovementTuning.new()
-	check_near(peak, tuning.jump_speed * tuning.jump_speed / (2 * tuning.gravity), 0.1, "jump peak")
+		controller.step(soldier, InputCommand.create(tick + i, 0, 0, 0, 0, InputCommand.JUMP if i == 0 else 0))
+		peak = maxf(peak, soldier.position.y - floor_height)
+		if soldier.grounded:
+			break
+		airtime_ticks += 1
+	check(peak >= 0.55 and peak <= 0.8, "jump should clear low cover without floating upward: %f m" % peak)
+	var airtime := airtime_ticks * Game.TICK_DELTA
+	check(airtime >= 0.45 and airtime <= 0.65, "jump should land promptly: %f s" % airtime)
 	check(soldier.grounded and absf(soldier.position.y) < 0.05, "soldier did not land: %s" % soldier.position)
 
 
@@ -137,3 +142,54 @@ func test_climbs_the_stairs() -> void:
 		tick += 1
 	check(soldier.grounded and absf(soldier.position.y - 1.5) < 0.02 and tick < 300,
 		"the stairs end at %s, grounded %s; want on top at Y=1.5" % [soldier.position, soldier.grounded])
+
+
+func test_crouch_slows_sprint_and_cannot_jump_until_clear_to_stand() -> void:
+	var scene := MapScene.new()
+	scene.add_box(Vector3(10, 0.25, 10), Vector3(0, -0.25, 0))
+	scene.add_box(Vector3(1.5, 0.15, 0.65), Vector3(0, 1.20, -2.0))
+	var made := _soldier(_world(scene), Vector3(0, 0.05, 0))
+	var controller: CharacterController = made[0]
+	var soldier: Soldier = made[1]
+	var tick := _settle(controller, soldier)
+	var wanted := InputCommand.CROUCH | InputCommand.SPRINT | InputCommand.JUMP
+	for i in 44:
+		controller.step(soldier, InputCommand.create(tick + i, 1, 0, 0, 0, wanted))
+	tick += 44
+	check(soldier.crouched and soldier.grounded, "crouch remains grounded when jump is held")
+	check_near(soldier.position.z, -44 * controller.tuning.walk_speed * MovementTuning.CROUCH_SPEED_SHARE * Game.TICK_DELTA,
+		0.04, "short capsule enters the overhang at crouch speed")
+	controller.step(soldier, InputCommand.create(tick, 0, 0, 0, 0, 0))
+	tick += 1
+	check(soldier.crouched and soldier.grounded, "releasing C cannot stand under the overhang")
+	for i in 35:
+		controller.step(soldier, InputCommand.create(tick + i, 1, 0, 0, 0, 0))
+	check(not soldier.crouched and soldier.grounded and soldier.position.z < -3.2, "stand once clear")
+
+
+func test_valley_parapet_intercepts_crouched_eye_and_helmet_level() -> void:
+	var map := MapScene.named("valley")
+	var state := PhysicsServer3D.space_get_direct_state(_world(map))
+	var x := -ValleyMap.BRIDGE_X
+	var z := ValleyMap.river_z(x) + 6.0
+	var movement := MovementTuning.new()
+	var deck := ValleyMap.BRIDGE_DECK
+	var crouched_head: Vector3 = Hitboxes.CROUCH_B[0]
+	for height in [movement.view_height(true), crouched_head.y + Hitboxes.CROUCH_RADII[0], movement.view_height()]:
+		var eye := Vector3(x + 1.39, deck + height, z)
+		var ray := PhysicsRayQueryParameters3D.create(eye, eye + Vector3.RIGHT * 5.0, Game.LAYER_STATIC)
+		check_equal(not state.intersect_ray(ray).is_empty(), height < 0.90, "west bridge cover at local height %.3f" % height)
+
+
+func test_authoritative_shot_comes_from_crouched_eye() -> void:
+	var made := _soldier(_world(), Vector3.ZERO)
+	var controller: CharacterController = made[0]
+	var soldier: Soldier = made[1]
+	var tick := _settle(controller, soldier)
+	var weapons := WeaponSet.create_default()
+	soldier.arsenal = Arsenal.create(Arsenal.default_loadout(), weapons)
+	var command := InputCommand.create(tick, 0, 0, 0, 0, InputCommand.CROUCH | InputCommand.FIRE)
+	var step := controller.run_command(weapons, soldier, command, 1)
+	if not check(step.has(Arsenal.EVENT_FIRED), "crouched player can fire"):
+		return
+	check_near(step.shot.origin.y - soldier.position.y, controller.tuning.view_height(true), 0.001, "the authoritative ray uses the crouched eye")

@@ -8,10 +8,15 @@ const FIELDS := [
 	"capsule_half_height", "capsule_radius", "max_slope_degrees", "eye_height", "step_height",
 ]
 
+const CROUCH_SPEED_SHARE := 0.52
+const CROUCH_HEIGHT_SHARE := 0.49
+const CROUCH_EYE_SHARE := 0.51
+
 var walk_speed := 5.0
 var sprint_speed := 8.0
-var jump_speed := 6.0
-var gravity := 9.81
+# Use a short jump that clears low cover and lands quickly.
+var jump_speed := 4.8
+var gravity := 17.5
 var ground_stick_speed := 0.5
 var capsule_half_height := 0.55
 var capsule_radius := 0.35
@@ -49,8 +54,16 @@ func validate() -> String:
 
 
 ## center_height is the distance from the feet to the capsule center.
-func center_height() -> float:
-	return capsule_half_height + capsule_radius
+func center_height(crouched := false) -> float:
+	var height := capsule_half_height + capsule_radius
+	return maxf(capsule_radius, height * CROUCH_HEIGHT_SHARE) if crouched else height
+
+
+## view_height is shared by the camera, the authoritative muzzle ray and bots.
+func view_height(crouched := false) -> float:
+	if not crouched:
+		return eye_height
+	return minf(eye_height * CROUCH_EYE_SHARE, 2.0 * center_height(true) - capsule_radius * 0.20)
 
 
 ## hash identifies the tuning. The server sends it in Welcome, and a client

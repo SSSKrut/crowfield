@@ -1,253 +1,261 @@
 class_name CharacterAsset
 extends RefCounted
-## CharacterAsset is the soldier model, loaded once and shared by every soldier
-## drawn with it (ARCHITECTURE.md, 10.1): the robot of the prototype with all
-## its parts merged into one mesh skinned on the GPU, so that a soldier is one
-## draw call. The parts take their colours from their materials as vertex
-## colours; the accent colour, the most saturated one, is painted in the team
-## colour by an instance parameter of the shared material.
+## Shared infantry geometry and animation resources. Each soldier owns its pose,
+## and marks take their team's colour without adding a material or draw call.
 
-const MODEL_PATH := "res://assets/prototype/RobotExpressive.glb"
-## MODEL_HEIGHT is the height of the soldier capsule of the default tuning,
-## from the soles to the top of the head.
-const MODEL_HEIGHT := 1.8
-const CLIPS := ["Idle", "Walking", "Running"]
-enum Clip { IDLE, WALKING, RUNNING }
+const CLIPS := [&"Idle", &"Walking", &"Running", &"CrouchIdle", &"CrouchWalking"]
+enum Clip { IDLE, WALKING, RUNNING, CROUCH_IDLE, CROUCH_WALKING }
+const _PERIODS := [2.6, 0.46, 0.43, 2.0, 0.42]
+const _STEP_LENGTH := [0.0, 0.98, 1.10, 0.0, 0.42]
+const _STANCE_PORTION := [0.0, 0.52, 0.40, 0.0, 0.60]
+const _CROUCH_HIP_SHIFT := 0.26
+const _CROUCH_ANKLE_DROP := 0.163
 
 const _SHADER := """
 shader_type spatial;
-// The accent parts of the robot, marked by a zero alpha in their vertex
-// colour, take the team colour of the soldier.
 instance uniform vec4 team_color : source_color = vec4(0.79, 0.58, 0.22, 1.0);
+
+// The garment's UVs are skinned with the mesh. Grain stays on the fabric
+// as the limbs bend, and fades away before it aliases at a distance.
 void fragment() {
-	ALBEDO = mix(team_color.rgb, COLOR.rgb, COLOR.a);
-	ROUGHNESS = 0.75;
+	float footprint = max(length(dFdx(UV)), length(dFdy(UV)));
+	float grain_mask = 1.0 - smoothstep(0.002, 0.014, footprint);
+	float fabric = 1.0 - smoothstep(0.35, 0.66, UV2.x);
+	vec2 thread = sin(UV * vec2(749.0, 771.0));
+	float weave = 1.0 + thread.x * thread.y * 0.11 * fabric * grain_mask;
+	float panels = sin(UV.x * 13.0 + sin(UV.y * 12.0)) * sin(UV.y * 17.0);
+	float wear = 1.0 + panels * mix(0.045, 0.085, fabric);
+	float mottling = sin(UV.x * 12.0 + sin(UV.y * 8.7))
+		+ sin(UV.y * 14.2 - cos(UV.x * 9.0))
+		+ 0.5 * sin(UV.x * 19.0 + UV.y * 19.0);
+	float uniform_area = 1.0 - step(0.16, UV2.x);
+	float pattern = 1.0 - 0.11 * smoothstep(0.35, 1.05, mottling) * uniform_area;
+	ALBEDO = mix(team_color.rgb * 0.9, COLOR.rgb * pattern, COLOR.a) * weave * wear;
+	ROUGHNESS = mix(0.92, 0.58, UV2.x);
+	METALLIC = smoothstep(0.52, 1.0, UV2.x) * 0.42;
 }
 """
 
-## accent is the colour the accent parts have in the model.
 var accent := Color(0.79, 0.58, 0.22)
-var material: ShaderMaterial
-var mesh: ArrayMesh
-var skin: Skin
-## bones maps a bone name to its index in every soldier's skeleton.
 var bones := {}
-## scale and offset place the model, whose root is the imported scene, so
-## that it is MODEL_HEIGHT tall with its soles at zero.
-var scale := 1.0
-var offset := Vector3.ZERO
-## periods are the lengths of the clips in seconds.
-var periods := PackedFloat32Array()
-## rig is how the skeleton falls, built on first use.
+var periods := PackedFloat32Array(_PERIODS)
 var rig: RagdollRig
-var _template: PackedScene
+var _template := PackedScene.new()
 
 
-## load_asset loads the model, or returns the error as a String.
-static func load_asset() -> Variant:
-	var scene: PackedScene = load(MODEL_PATH)
-	if scene == null:
-		return "cannot load %s" % MODEL_PATH
+static func load_asset() -> CharacterAsset:
 	var asset := CharacterAsset.new()
-	var error := asset._build(scene.instantiate())
-	if error != "":
-		return "model %s: %s" % [MODEL_PATH, error]
+	asset._build()
 	return asset
 
 
-func _build(root: Node3D) -> String:
-	var skeleton: Skeleton3D = root.find_child("Skeleton3D", true, false)
-	var player: AnimationPlayer = root.find_child("AnimationPlayer", true, false)
-	if skeleton == null or player == null:
-		root.free()
-		return "no skeleton or animations"
-	for i in skeleton.get_bone_count():
-		bones[skeleton.get_bone_name(i)] = i
-	# A soldier plays only the clips it needs, with only the tracks of bones:
-	# the faces of the robot went with its parts.
-	var library := AnimationLibrary.new()
-	for clip in CLIPS:
-		if not player.has_animation(clip):
-			root.free()
-			return "no clip %s" % clip
-		var animation: Animation = player.get_animation(clip).duplicate()
-		for track in range(animation.get_track_count() - 1, -1, -1):
-			var path := animation.track_get_path(track)
-			if not str(path).begins_with("RootNode/RobotArmature/Skeleton3D:"):
-				animation.remove_track(track)
-		animation.loop_mode = Animation.LOOP_LINEAR
-		library.add_animation(clip, animation)
-		periods.append(animation.length)
-	for name in player.get_animation_library_list():
-		player.remove_animation_library(name)
-	player.add_animation_library("", library)
-	_merge(skeleton)
-	# The template keeps the imported hierarchy, which the animation tracks
-	# name, with the merged mesh in place of the parts.
-	for child in skeleton.get_children():
-		skeleton.remove_child(child)
-		child.free()
+func _build() -> void:
+	var root := Node3D.new()
+	var skeleton := Skeleton3D.new()
+	skeleton.name = "Skeleton3D"
+	root.add_child(skeleton)
+	skeleton.owner = root
+
+	_bone(skeleton, "Hips", "", Vector3(0, 0.94, 0))
+	_bone(skeleton, "Abdomen", "Hips", Vector3(0, 1.04, 0))
+	_bone(skeleton, "Torso_2", "Abdomen", Vector3(0, 1.16, 0))
+	_bone(skeleton, "Neck", "Torso_2", Vector3(0, 1.48, 0))
+	_bone(skeleton, "Head_2", "Neck", Vector3(0, 1.55, 0))
+	for side in ["L", "R"]:
+		var sign_x := 1.0 if side == "L" else -1.0
+		_bone(skeleton, "UpperLeg." + side, "Hips", Vector3(0.118 * sign_x, 0.92, 0))
+		_bone(skeleton, "LowerLeg." + side, "UpperLeg." + side, Vector3(0.118 * sign_x, 0.52, 0.028))
+		_bone(skeleton, "Foot." + side, "LowerLeg." + side, Vector3(0.118 * sign_x, 0.12, 0))
+		_bone(skeleton, "UpperArm." + side, "Torso_2", Vector3(0.23 * sign_x, 1.415, 0))
+		var elbow := Vector3(0.20, 1.22, 0.22) if side == "L" else Vector3(-0.255, 1.155, 0.105)
+		_bone(skeleton, "LowerArm." + side, "UpperArm." + side, elbow)
+		var palm := Vector3(-0.075, 1.215, 0.515) if side == "L" else Vector3(-0.085, 1.205, 0.26)
+		_bone(skeleton, "Palm1." + side, "LowerArm." + side, palm)
+
 	var body := MeshInstance3D.new()
 	body.name = "Body"
-	body.mesh = mesh
-	body.skin = skin
+	body.mesh = InfantryMesh.new().build(skeleton)
+	body.skin = skeleton.create_skin_from_rest_transforms()
+	var shader := Shader.new()
+	shader.code = _SHADER
+	var material := ShaderMaterial.new()
+	material.shader = shader
 	body.material_override = material
 	skeleton.add_child(body)
 	body.owner = root
 	body.skeleton = NodePath("..")
-	_template = PackedScene.new()
+
+	var player := AnimationPlayer.new()
+	player.name = "AnimationPlayer"
+	root.add_child(player)
+	player.owner = root
+	var library := AnimationLibrary.new()
+	for clip in CLIPS.size():
+		library.add_animation(CLIPS[clip], _clip(skeleton, clip))
+	player.add_animation_library("", library)
 	_template.pack(root)
-	_measure(root, skeleton, player)
 	root.free()
-	return ""
 
 
-## _merge makes one mesh of every part in the space of the skeleton at rest:
-## the rigid parts under bone attachments are bound to their bone, the
-## skinned hands keep their weights.
-func _merge(skeleton: Skeleton3D) -> void:
-	var vertices := PackedVector3Array()
-	var normals := PackedVector3Array()
-	var colors := PackedColorArray()
-	var bone_indices := PackedInt32Array()
-	var weights := PackedFloat32Array()
-	var indices := PackedInt32Array()
-	var rests: Array[Transform3D] = []
-	for i in skeleton.get_bone_count():
-		rests.append(skeleton.get_bone_global_rest(i))
-	var saturation := -1.0
-	for node in skeleton.find_children("*", "MeshInstance3D", true, false):
-		var part: MeshInstance3D = node
-		var attachment := part.get_parent() as BoneAttachment3D
-		var to_skeleton := Transform3D()
-		var bone := -1
-		if attachment != null:
-			bone = skeleton.find_bone(attachment.bone_name)
-			to_skeleton = rests[bone] * part.transform
-		for surface in part.mesh.get_surface_count():
-			var arrays := part.mesh.surface_get_arrays(surface)
-			var surface_material := part.mesh.surface_get_material(surface) as StandardMaterial3D
-			var color := Color.WHITE if surface_material == null else surface_material.albedo_color
-			var hsv := color.s * color.v
-			if hsv > saturation:
-				saturation = hsv
-				accent = color
-			var base := vertices.size()
-			var positions: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
-			var surface_normals: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
-			var surface_bones: PackedInt32Array = arrays[Mesh.ARRAY_BONES] if arrays[Mesh.ARRAY_BONES] != null else PackedInt32Array()
-			var surface_weights: PackedFloat32Array = arrays[Mesh.ARRAY_WEIGHTS] if arrays[Mesh.ARRAY_WEIGHTS] != null else PackedFloat32Array()
-			var per_vertex := surface_bones.size() / maxi(1, positions.size())
-			for v in positions.size():
-				if bone >= 0:
-					vertices.append(to_skeleton * positions[v])
-					normals.append((to_skeleton.basis.inverse().transposed() * surface_normals[v]).normalized())
-					bone_indices.append_array([bone, 0, 0, 0])
-					weights.append_array([1.0, 0.0, 0.0, 0.0])
-				else:
-					# A skinned part: its rest position through its own binds,
-					# then the same weights on the bones of the skeleton.
-					var at := Vector3.ZERO
-					var turned := Vector3.ZERO
-					var kept := PackedInt32Array([0, 0, 0, 0])
-					var kept_weights := PackedFloat32Array([0.0, 0.0, 0.0, 0.0])
-					for k in mini(per_vertex, 4):
-						var weight := surface_weights[v * per_vertex + k]
-						var bind := surface_bones[v * per_vertex + k]
-						var bone_of_bind := skeleton.find_bone(part.skin.get_bind_name(bind))
-						var pose := rests[bone_of_bind] * part.skin.get_bind_pose(bind)
-						at += pose * positions[v] * weight
-						turned += pose.basis * surface_normals[v] * weight
-						kept[k] = bone_of_bind
-						kept_weights[k] = weight
-					vertices.append(at)
-					normals.append(turned.normalized())
-					bone_indices.append_array(kept)
-					weights.append_array(kept_weights)
-				colors.append(color)
-			var surface_indices: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
-			for index in surface_indices:
-				indices.append(base + index)
-	# The shader reads sRGB in Compatibility and linear colours in Forward+.
-	# Mark the accent parts by a zero alpha in either renderer.
-	var linear_colors := RenderingServer.get_current_rendering_method() != "gl_compatibility"
-	for i in colors.size():
-		var source := colors[i]
-		var color := source.srgb_to_linear() if linear_colors else source
-		color.a = 0.0 if source.is_equal_approx(accent) else 1.0
-		colors[i] = color
-	var arrays := []
-	arrays.resize(Mesh.ARRAY_MAX)
-	arrays[Mesh.ARRAY_VERTEX] = vertices
-	arrays[Mesh.ARRAY_NORMAL] = normals
-	arrays[Mesh.ARRAY_COLOR] = colors
-	arrays[Mesh.ARRAY_BONES] = bone_indices
-	arrays[Mesh.ARRAY_WEIGHTS] = weights
-	arrays[Mesh.ARRAY_INDEX] = indices
-	mesh = ArrayMesh.new()
-	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-	skin = Skin.new()
-	for i in skeleton.get_bone_count():
-		skin.add_named_bind(skeleton.get_bone_name(i), rests[i].affine_inverse())
-	var shader := Shader.new()
-	shader.code = _SHADER
-	material = ShaderMaterial.new()
-	material.shader = shader
+func _bone(skeleton: Skeleton3D, name: String, parent: String, position: Vector3) -> void:
+	var index := skeleton.get_bone_count()
+	var parent_index := bones.get(parent, -1) as int
+	skeleton.add_bone(name)
+	skeleton.set_bone_parent(index, parent_index)
+	var local := position if parent_index < 0 else position - skeleton.get_bone_global_rest(parent_index).origin
+	skeleton.set_bone_rest(index, Transform3D(Basis.IDENTITY, local))
+	skeleton.set_bone_pose_position(index, local)
+	bones[name] = index
 
 
-## _measure finds how tall the robot stands in the first frame of the idle
-## clip, by skinning the vertices on the processor once.
-func _measure(root: Node3D, skeleton: Skeleton3D, player: AnimationPlayer) -> void:
-	var animation := player.get_animation("Idle")
-	var poses: Array[Transform3D] = []
-	for i in skeleton.get_bone_count():
-		poses.append(skeleton.get_bone_rest(i))
-	for track in animation.get_track_count():
-		var path := animation.track_get_path(track)
-		var bone := skeleton.find_bone(path.get_concatenated_subnames())
-		if bone < 0:
-			continue
-		var pose := poses[bone]
-		match animation.track_get_type(track):
-			Animation.TYPE_POSITION_3D:
-				pose.origin = animation.position_track_interpolate(track, 0.0)
-			Animation.TYPE_ROTATION_3D:
-				pose.basis = Basis(animation.rotation_track_interpolate(track, 0.0)).scaled(pose.basis.get_scale())
-			Animation.TYPE_SCALE_3D:
-				pose.basis = Basis(pose.basis.get_rotation_quaternion()).scaled(animation.scale_track_interpolate(track, 0.0))
-		poses[bone] = pose
-	var globals: Array[Transform3D] = []
-	for i in skeleton.get_bone_count():
-		var parent := skeleton.get_bone_parent(i)
-		globals.append(poses[i] if parent < 0 else globals[parent] * poses[i])
-	# The chain of local transforms from the skeleton up to the root: the model
-	# is not in a scene tree here.
-	var to_root := Transform3D()
-	var node: Node = skeleton
-	while node != root:
-		to_root = (node as Node3D).transform * to_root
-		node = node.get_parent()
-	var arrays := mesh.surface_get_arrays(0)
-	var positions: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
-	var bone_indices: PackedInt32Array = arrays[Mesh.ARRAY_BONES]
-	var bone_weights: PackedFloat32Array = arrays[Mesh.ARRAY_WEIGHTS]
-	var low := Vector3.INF
-	var high := -Vector3.INF
-	for v in positions.size():
-		var at := Vector3.ZERO
-		for k in 4:
-			var weight := bone_weights[v * 4 + k]
-			if weight > 0:
-				var bone := bone_indices[v * 4 + k]
-				at += globals[bone] * (skin.get_bind_pose(bone) * positions[v]) * weight
-		at = to_root * at
-		low = low.min(at)
-		high = high.max(at)
-	scale = MODEL_HEIGHT / (high.y - low.y)
-	offset = Vector3(0, -low.y * scale, 0)
+## In-place clips share the same leg phase, so switching pace preserves the
+## stride. The shoulders stay close to the ready position as the torso turns.
+func _clip(skeleton: Skeleton3D, clip: int) -> Animation:
+	const STEPS := 24
+	var animation := Animation.new()
+	animation.length = periods[clip]
+	animation.loop_mode = Animation.LOOP_LINEAR
+	var position := animation.add_track(Animation.TYPE_POSITION_3D)
+	animation.track_set_path(position, NodePath("Skeleton3D:Hips"))
+	var hips := skeleton.get_bone_rest(bones["Hips"]).origin
+	var tracked := ["Hips", "Abdomen", "Torso_2", "Head_2", "UpperLeg.L", "UpperLeg.R",
+		"LowerLeg.L", "LowerLeg.R", "Foot.L", "Foot.R", "UpperArm.L", "UpperArm.R",
+		"LowerArm.L", "LowerArm.R", "Palm1.L", "Palm1.R"]
+	for name in tracked:
+		var track := animation.add_track(Animation.TYPE_ROTATION_3D)
+		animation.track_set_path(track, NodePath("Skeleton3D:" + name))
+
+	for sample in STEPS + 1:
+		var phase := TAU * sample / STEPS
+		var time := animation.length * sample / STEPS
+		var bounce := 0.0
+		var pelvis := hips
+		var poses := {}
+		if clip == Clip.IDLE:
+			_ready_pose(poses, phase)
+			bounce = -_sole_height(skeleton, poses)
+		elif clip == Clip.CROUCH_IDLE or clip == Clip.CROUCH_WALKING:
+			_crouch_pose(poses, clip, float(sample) / STEPS)
+			pelvis.z -= _CROUCH_HIP_SHIFT
+			bounce = -_sole_height(skeleton, poses)
+		else:
+			var running := clip == Clip.RUNNING
+			var strength := 1.0 if running else 0.7
+			poses["Hips"] = Vector3(0.035, -0.08 * strength * sin(phase), 0.04 * strength * cos(phase))
+			poses["Torso_2"] = Vector3(0.24 * strength, -0.05 + 0.13 * strength * sin(phase), -0.035)
+			poses["Head_2"] = Vector3(-0.24 * strength, 0.05 - 0.05 * strength * sin(phase), 0.025)
+			for side in ["L", "R"]:
+				var foot_phase := fposmod(float(sample) / STEPS + (0.0 if side == "L" else 0.5), 1.0)
+				var leg := _stride(foot_phase, clip)
+				poses["UpperLeg." + side] = Vector3(leg.x, 0, 0)
+				poses["LowerLeg." + side] = Vector3(leg.y, 0, 0)
+				poses["Foot." + side] = Vector3(leg.z, 0, 0)
+				poses["UpperArm." + side] = Vector3(0.028 * sin(TAU * foot_phase), 0, 0)
+			bounce = -_sole_height(skeleton, poses)
+			if running:
+				var half_step := fposmod(float(sample) / STEPS, 0.5)
+				var flight := smoothstep(_STANCE_PORTION[clip], 0.45, half_step) * (1.0 - smoothstep(0.45, 0.5, half_step))
+				bounce += 0.06 * flight
+		animation.position_track_insert_key(position, time, pelvis + Vector3.UP * bounce)
+		for i in tracked.size():
+			var angles: Vector3 = poses.get(tracked[i], Vector3.ZERO)
+			animation.rotation_track_insert_key(i + 1, time, Quaternion.from_euler(angles))
+	return animation
 
 
-## instantiate makes the visual of one soldier.
+## The leading boot takes weight under the rifle, with the rear boot
+## staggered and both knees unlocked.
+func _ready_pose(poses: Dictionary, phase: float) -> void:
+	var breath := sin(phase)
+	poses["Hips"] = Vector3(0, 0, 0)
+	poses["Torso_2"] = Vector3(0.095 + 0.017 * breath, -0.14 + 0.014 * breath, -0.035)
+	poses["Head_2"] = Vector3(-0.075 - 0.011 * breath, 0.13, 0.025)
+	for side in ["L", "R"]:
+		var forward := 0.115 if side == "L" else -0.14
+		var leg := _leg_angles(0.769, forward, 0.0)
+		poses["UpperLeg." + side] = Vector3(leg.x, 0, 0)
+		poses["LowerLeg." + side] = Vector3(leg.y, 0, 0)
+		poses["Foot." + side] = Vector3(leg.z, 0, 0)
+
+
+## Fold the knees beneath a lowered pelvis and lean the upper body forward.
+## Both ankles retain their full leg lengths and use the grounded sole solve.
+func _crouch_pose(poses: Dictionary, clip: int, cycle: float) -> void:
+	var moving := clip == Clip.CROUCH_WALKING
+	var sway := sin(TAU * cycle)
+	poses["Hips"] = Vector3(0, -0.04 * sway if moving else 0, 0)
+	poses["Abdomen"] = Vector3(0.90 + 0.01 * sway, 0, 0)
+	poses["Torso_2"] = Vector3(0.27, 0.04 * sway if moving else 0, 0)
+	poses["Head_2"] = Vector3(-1.10, 0, 0)
+	for side in ["L", "R"]:
+		var offset := 0.0 if side == "L" else 0.5
+		var phase := fposmod(cycle + offset, 1.0)
+		var leg := _stride(phase, clip) if moving else _leg_angles(_CROUCH_ANKLE_DROP, _CROUCH_HIP_SHIFT + lerpf(-0.038, 0.038, offset * 2), 0.0)
+		poses["UpperLeg." + side] = Vector3(leg.x, 0, 0)
+		poses["LowerLeg." + side] = Vector3(leg.y, 0, 0)
+		poses["Foot." + side] = Vector3(leg.z, 0, 0)
+		poses["UpperArm." + side] = Vector3(-1.05, 0, 0)
+
+
+## The stance foot moves back along a level path at constant speed; the
+## swing foot returns in a higher curved arc. Solve both joints against the
+## desired ankle position to avoid the old simultaneous knee swivel.
+func _stride(phase: float, clip: int) -> Vector3:
+	var stance: float = _STANCE_PORTION[clip]
+	var reach: float = _STEP_LENGTH[clip] * 0.5
+	var running := clip == Clip.RUNNING
+	var crouched := clip == Clip.CROUCH_WALKING
+	# The standing pelvis rises as the supporting leg comes beneath the body.
+	var other_phase := fposmod(phase + 0.5, 1.0)
+	var reach_under_load := 0.0
+	for support_phase in [phase, other_phase]:
+		if support_phase < stance:
+			reach_under_load = maxf(reach_under_load, absf(lerpf(reach, -reach, support_phase / stance)))
+	var extension := 0.789 if running else 0.783
+	var down := _CROUCH_ANKLE_DROP if crouched else sqrt(extension * extension - reach_under_load * reach_under_load)
+	var forward := 0.0
+	var foot_roll := 0.0
+	if phase < stance:
+		var progress := phase / stance
+		forward = lerpf(reach, -reach, progress)
+		foot_roll = 0.16 * smoothstep(0.76, 1.0, progress)
+	else:
+		var progress := (phase - stance) / (1.0 - stance)
+		forward = lerpf(-reach, reach, smoothstep(0.0, 1.0, progress))
+		down -= sin(PI * progress) * (0.046 if crouched else 0.175 if running else 0.102)
+		foot_roll = lerpf(0.16, 0.0, smoothstep(0.0, 1.0, progress))
+	if crouched:
+		forward += _CROUCH_HIP_SHIFT
+	return _leg_angles(down, forward, foot_roll)
+
+
+static func _leg_angles(down: float, forward: float, foot_roll: float) -> Vector3:
+	const LENGTH := 0.401
+	const REST_PITCH := 0.070
+	var distance := minf(Vector2(forward, down).length(), 2.0 * LENGTH - 0.001)
+	var opposite := acos(distance / (2.0 * LENGTH))
+	var thigh := REST_PITCH - atan2(forward, down) - opposite
+	var knee := 2.0 * (opposite - REST_PITCH)
+	return Vector3(thigh, knee, -thigh - knee + foot_roll)
+
+
+## Shift the pelvis so the lower boot sole reaches the ground at each key.
+func _sole_height(skeleton: Skeleton3D, poses: Dictionary) -> float:
+	var lowest := INF
+	for side in ["L", "R"]:
+		var pose := Transform3D.IDENTITY
+		for name in ["Hips", "UpperLeg." + side, "LowerLeg." + side, "Foot." + side]:
+			pose *= Transform3D(Basis.from_euler(poses[name]), skeleton.get_bone_rest(bones[name]).origin)
+		var y_axis := Vector3(pose.basis.x.y, pose.basis.y.y, pose.basis.z.y) * InfantryMesh.SOLE_RADII
+		lowest = minf(lowest, (pose * InfantryMesh.SOLE_CENTER).y - y_axis.length())
+	return lowest
+
+
+## Ground speed of the clip's stance foot at its authored playback rate.
+func stride_speed(clip: int) -> float:
+	return _STEP_LENGTH[clip] / (periods[clip] * _STANCE_PORTION[clip])
+
+
 func instantiate() -> CharacterView:
 	var view := CharacterView.new()
 	view.setup(self, _template.instantiate())
