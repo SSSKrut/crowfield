@@ -262,7 +262,7 @@ func _build_reinforcement_sites() -> void:
 
 ## Returns a safe site by a held crossing, optionally limited to the fight
 ## the soldier was part of. All callers share the tick's ray budget.
-func reinforcement_point(team: int, from: Vector3, max_distance: float = INF) -> Vector3:
+func reinforcement_point(team: int, from: Vector3, max_distance: float = INF, lane := -1) -> Vector3:
 	if _reinforcement_sites.is_empty() or not flag_match.started or flag_match.state.result != MatchState.Result.ACTIVE:
 		return Vector3.INF
 	var best := Vector3.INF
@@ -270,6 +270,8 @@ func reinforcement_point(team: int, from: Vector3, max_distance: float = INF) ->
 	for order in scene.flags.size():
 		# Mirrored priority breaks equal-distance ties consistently for both sides.
 		var index := order if team == Game.Team.BLUE else scene.flags.size() - order - 1
+		if lane >= 0 and index != lane:
+			continue
 		var flag := flag_match.state.flags[index]
 		if flag.owner != team or flag.contested or flag.challenger != Game.Team.NONE:
 			continue
