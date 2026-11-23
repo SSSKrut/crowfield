@@ -81,7 +81,7 @@ func _init() -> void:
 ## Leave room around the match header for the width of the projected world label.
 func flag_label_exclusion() -> Rect2:
 	var layout_scale := clampf(size.y / 720.0, 0.75, 4.0)
-	var width := minf(size.x, 460 * layout_scale)
+	var width := minf(size.x, 254 * layout_scale)
 	return Rect2(Vector2((size.x - width) / 2.0, 0), Vector2(width, 84 * layout_scale))
 
 
@@ -120,48 +120,46 @@ func _draw() -> void:
 
 
 func _draw_match() -> void:
-	var center := Vector2(size.x / 2.0, 11 * _scale)
-	var blue := team_color(Game.Team.BLUE).lightened(0.40)
-	var red := team_color(Game.Team.RED).lightened(0.40)
+	var center := Vector2(size.x / 2.0, 10 * _scale)
+	var blue := team_color(Game.Team.BLUE).lightened(0.46)
+	var red := team_color(Game.Team.RED).lightened(0.46)
 	var show_bearings := has_soldier and not dead and match_state.result == MatchState.Result.ACTIVE
-	_box(center, -78, 0, 156, 26, PANEL)
-	_centered(str(match_state.blue_score), center + Vector2(-53, 1) * _scale, 23, blue, _DISPLAY)
-	_centered(_match_clock(), center + Vector2(0, 3) * _scale, 20, WHITE, _DISPLAY)
-	_centered(str(match_state.red_score), center + Vector2(53, 1) * _scale, 23, red, _DISPLAY)
-	var spacing := minf(116, (size.x / _scale - 20) / maxi(1, map_scene.flags.size()))
+	_centered(str(match_state.blue_score), center + Vector2(-45, 0) * _scale, 28, blue, _DISPLAY)
+	_centered(_match_clock(), center + Vector2(0, 4) * _scale, 20, WHITE, _DISPLAY)
+	_centered(str(match_state.red_score), center + Vector2(45, 0) * _scale, 28, red, _DISPLAY)
+	_box(center, -57, 26, 24, 2, blue)
+	_box(center, 33, 26, 24, 2, red)
+	var status := ""
+	var status_tint := GOLD
 	for index in map_scene.flags.size():
 		var flag := match_state.flags[index]
 		var zone := map_scene.flags[index]
-		var x := (index - (map_scene.flags.size() - 1) * 0.5) * spacing
+		var x := (index - (map_scene.flags.size() - 1) * 0.5) * 65
 		var local := show_bearings and zone.contains_flag_position(feet)
-		var destination := center + Vector2(x, 32) * _scale
+		var destination := center + Vector2(x, 34) * _scale
 		var tint: Color = team_colors.get(flag.owner, LIGHT_GRAY)
-		_draw_flag_label(zone, destination, tint.lightened(0.20), show_bearings and not local)
-		var status := ""
-		var status_tint := GOLD
-		if flag.contested:
-			status = "Contested"
-		elif flag.challenger != Game.Team.NONE and flag.progress > 0 and flag.owner == team:
-			status = "Losing"
-		elif local:
-			status = "Holding" if flag.owner == team else "Capturing"
-			status_tint = team_color(team).lightened(0.40)
-		if not status.is_empty():
-			_centered(status, destination + Vector2(0, 17) * _scale, 14, status_tint, _DISPLAY)
+		_draw_flag_label(zone, destination, tint.lightened(0.26), show_bearings and not local)
+		if local:
+			var state := "Contested" if flag.contested else ("Holding" if flag.owner == team else "Capturing")
+			status = "%s  ·  %s" % [zone.name, state]
+			status_tint = GOLD if flag.contested else team_color(team).lightened(0.45)
 	if match_state.result != MatchState.Result.ACTIVE:
 		_draw_result()
+	elif not status.is_empty():
+		_centered(status, center + Vector2(0, 54) * _scale, 15, status_tint, _DISPLAY)
 	elif show_bearings and not reinforcement.is_empty():
-		_centered(reinforcement, center + Vector2(0, 67) * _scale, 16, WHITE)
+		_centered(reinforcement, center + Vector2(0, 54) * _scale, 16, WHITE)
 
 
 ## The arrow turns with the player, including when the flag is behind them.
 func _draw_flag_label(zone: MapScene.Zone, center: Vector2, tint: Color, bearing: bool) -> void:
-	var name_width := _measure(zone.name, 16, _DISPLAY)
+	var label := zone.name.get_slice(" ", 0)
+	var name_width := _measure(label, 15, _DISPLAY)
 	var tail_width := 16 if bearing else 0
 	var x := center.x - (name_width + (12 + tail_width) * _scale) / 2.0
 	_box(Vector2(x, center.y), 0, 4, 7, 7, INK)
 	_box(Vector2(x, center.y), 1, 5, 5, 5, tint)
-	_text(zone.name, Vector2(x + 11 * _scale, center.y), 16, WHITE, _DISPLAY)
+	_text(label, Vector2(x + 11 * _scale, center.y), 15, WHITE, _DISPLAY)
 	if not bearing:
 		return
 	var offset := zone.center - feet
@@ -185,59 +183,67 @@ func _match_clock() -> String:
 
 
 func _draw_scoreboard() -> void:
-	draw_rect(Rect2(Vector2.ZERO, size), Color8(7, 12, 16, 116))
-	var width := minf(548, size.x / _scale - 24)
-	var height := 224 + 25 * map_scene.flags.size()
-	var panel := size / 2.0 - Vector2(width, height) * _scale / 2.0
-	_box(panel, 0, 0, width, height, Color8(17, 26, 32, 251))
-	_box(panel, 0, 0, width, 1, PANEL_EDGE)
-	_text("Scoreboard", panel + Vector2(23, 16) * _scale, 32, WHITE, _DISPLAY)
+	draw_rect(Rect2(Vector2.ZERO, size), Color8(8, 13, 16, 105))
+	var width := minf(504, size.x / _scale - 32)
+	var height := 159 + 24 * map_scene.flags.size()
+	var panel := (size - Vector2(width, height) * _scale) * 0.5
+	_draw_scoreboard_shade(panel.y, panel.y + height * _scale)
+	var left := panel.x
+	var right := panel.x + width * _scale
+	var center := size.x * 0.5
+	_text("Scoreboard", panel, 27, WHITE, _DISPLAY)
 	var clock := _match_clock()
-	_text(clock, panel + Vector2(width - 23 - _measure(clock, 24, _DISPLAY) / _scale, 22) * _scale,
-		24, LIGHT_GRAY, _DISPLAY)
+	_text(clock, Vector2(right - _measure(clock, 20, _DISPLAY), panel.y + 4 * _scale), 20, LIGHT_GRAY, _DISPLAY)
+	var blue := team_color(Game.Team.BLUE).lightened(0.48)
+	var red := team_color(Game.Team.RED).lightened(0.48)
+	var score_row := panel.y + 36 * _scale
+	_text("Blue", Vector2(left, score_row + 10 * _scale), 22, blue)
+	_centered(str(match_state.blue_score), Vector2(center - 44 * _scale, score_row), 37, blue, _DISPLAY)
+	_centered(str(match_state.red_score), Vector2(center + 44 * _scale, score_row), 37, red, _DISPLAY)
+	_text("Red", Vector2(right - _measure("Red", 22), score_row + 10 * _scale), 22, red)
+	_box(panel, 0, 82, width, 1, PANEL_EDGE)
 
-	var team_width := (width - 56) / 2
-	_draw_scoreboard_team(panel + Vector2(23, 61) * _scale, team_width, Game.Team.BLUE, match_state.blue_score)
-	_draw_scoreboard_team(panel + Vector2(33 + team_width, 61) * _scale, team_width, Game.Team.RED, match_state.red_score)
-	_text("Objective", panel + Vector2(23, 129) * _scale, 15, LIGHT_GRAY)
 	var show_distance := has_soldier and not dead and match_state.result == MatchState.Result.ACTIVE
+	var head_y := panel.y + 92 * _scale
+	var distance_x := panel.x + width * _scale * 0.51
+	_text("Objective", Vector2(left, head_y), 15, LIGHT_GRAY)
 	if show_distance:
-		_centered("Distance", panel + Vector2(width * 0.53, 129) * _scale, 15, LIGHT_GRAY)
-	var control := "Control"
-	_text(control, panel + Vector2(width - 23 - _measure(control, 15) / _scale, 129) * _scale, 15, LIGHT_GRAY)
+		_centered("Distance", Vector2(distance_x, head_y), 15, LIGHT_GRAY)
+	_text("Control", Vector2(right - _measure("Control", 15), head_y), 15, LIGHT_GRAY)
 	for index in map_scene.flags.size():
 		var flag := match_state.flags[index]
-		var y := 150 + index * 25
-		_box(panel, 23, y, width - 46, 1, PANEL_EDGE)
 		var zone := map_scene.flags[index]
-		_text(zone.name, panel + Vector2(23, y + 5) * _scale, 18, WHITE)
+		var y := panel.y + (113 + index * 24) * _scale
+		_text(zone.name, Vector2(left, y), 18, WHITE)
 		if show_distance:
 			var distance := roundi(Game.horizontal_length(zone.center - feet))
-			_centered("%d m" % distance, panel + Vector2(width * 0.53, y + 5) * _scale, 17, LIGHT_GRAY)
+			_centered("%d m" % distance, Vector2(distance_x, y), 17, LIGHT_GRAY)
 		var owner := "Neutral" if flag.owner == Game.Team.NONE else Game.team_name(flag.owner).capitalize()
 		var status := owner
-		var tint := team_color(flag.owner).lightened(0.40) if flag.owner != Game.Team.NONE else LIGHT_GRAY
+		var tint := team_color(flag.owner).lightened(0.45) if flag.owner != Game.Team.NONE else LIGHT_GRAY
 		if flag.contested:
 			status = "%s  ·  Contested" % owner
 			tint = GOLD
 		elif flag.challenger != Game.Team.NONE and flag.progress > 0:
 			status = "%s  ·  %s %d%%" % [owner, Game.team_name(flag.challenger).capitalize(), flag.progress]
-			tint = team_color(flag.challenger).lightened(0.40)
-		_text(status, panel + Vector2(width - 23 - _measure(status, 17) / _scale, y + 5) * _scale, 17, tint)
-	_box(panel, 23, height - 59, width - 46, 1, PANEL_EDGE)
-	_text("Your kills  %d" % match_state.kills, panel + Vector2(23, height - 45) * _scale, 19, WHITE, _DISPLAY)
-	var close_hint := "Release Tab to close"
-	_text(close_hint, panel + Vector2(width - 23 - _measure(close_hint, 15) / _scale, height - 43) * _scale,
-		15, LIGHT_GRAY)
+			tint = team_color(flag.challenger).lightened(0.45)
+		_text(status, Vector2(right - _measure(status, 17), y), 17, tint)
+	var footer_y := panel.y + (height - 23) * _scale
+	_text("Your kills  %d" % match_state.kills, Vector2(left, footer_y), 18, WHITE, _DISPLAY)
+	var close_hint := "Release Tab"
+	_text(close_hint, Vector2(right - _measure(close_hint, 15), footer_y + 2 * _scale), 15, LIGHT_GRAY)
 
 
-func _draw_scoreboard_team(anchor: Vector2, width: float, side: int, score: int) -> void:
-	var tint := team_color(side).lightened(0.30)
-	_box(anchor, 0, 0, width, 52, Color8(27, 39, 46))
-	_box(anchor, 0, 0, 2, 52, tint)
-	_text(Game.team_name(side).capitalize(), anchor + Vector2(13, 16) * _scale, 22, WHITE, _DISPLAY)
-	var value := str(score)
-	_text(value, anchor + Vector2(width - 13 - _measure(value, 33, _DISPLAY) / _scale, 9) * _scale, 33, tint, _DISPLAY)
+## Fade the score rows into the live scene above and below.
+func _draw_scoreboard_shade(top: float, bottom: float) -> void:
+	var fade := 68 * _scale
+	var tint := Color8(8, 13, 16, 119)
+	var clear := Color(tint, 0)
+	draw_rect(Rect2(0, top, size.x, bottom - top), tint)
+	draw_polygon(PackedVector2Array([Vector2(0, top - fade), Vector2(size.x, top - fade), Vector2(size.x, top), Vector2(0, top)]),
+		PackedColorArray([clear, clear, tint, tint]))
+	draw_polygon(PackedVector2Array([Vector2(0, bottom), Vector2(size.x, bottom), Vector2(size.x, bottom + fade), Vector2(0, bottom + fade)]),
+		PackedColorArray([tint, tint, clear, clear]))
 
 
 func _draw_result() -> void:

@@ -35,6 +35,7 @@ func _ready() -> void:
 	for map_name in MapScene.MAPS:
 		_map.add_item("Practice range" if map_name == "prototype" else map_name.capitalize())
 	_load()
+	_update_match_summary()
 	_show_status(message)
 	%Solo.grab_focus()
 
@@ -46,6 +47,21 @@ func _position_panel() -> void:
 	layout.pivot_offset = Vector2(size.x * layout.anchor_right, size.y) * 0.5
 	var factor := minf(size.x / 440.0, size.y / 550.0)
 	layout.scale = Vector2.ONE * clampf(factor, 0.25, 1.0)
+
+
+func _update_match_summary(_value: float = 0.0) -> void:
+	%Summary.text = "%s  ·  %d %s" % [_map.get_item_text(_map.selected), int(_bots.value),
+		"bot" if int(_bots.value) == 1 else "bots"]
+
+
+func _on_setup_pressed() -> void:
+	_show_setup()
+
+
+func _show_setup(error: String = "") -> void:
+	%SetupDialog.dialog_text = error
+	%SetupDialog.popup_centered()
+	_map.grab_focus()
 
 
 func _on_multiplayer_pressed() -> void:
@@ -130,8 +146,8 @@ func _start(arguments: Array) -> void:
 	if player_name == "":
 		player_name = "Player"
 	if player_name.to_utf8_buffer().size() > Protocol.MAX_NAME_BYTES:
-		_show_status("The name is too long: at most %d bytes." % Protocol.MAX_NAME_BYTES)
 		%NetworkDialog.hide()
+		_show_setup("The name is too long: at most %d bytes." % Protocol.MAX_NAME_BYTES)
 		_name.grab_focus()
 		return
 	%NetworkDialog.hide()
