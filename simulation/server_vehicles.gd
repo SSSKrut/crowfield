@@ -2,9 +2,9 @@ class_name ServerVehicles
 extends RefCounted
 ## ServerVehicles are the vehicles of the server's map: the tanks it places,
 ## their bodies, drivers getting in and out, the soldiers they run over, the
-## damage blasts do to them, and their coming back after they burn
-## (ARCHITECTURE.md, 9.2). The driver alone steers and fires a tank; bullets
-## do not hurt it or the driver inside, rockets and shells do.
+## damage blasts do to them, and their respawn after destruction.
+## The driver alone steers and fires a tank. Bullets spare both. Rockets and
+## shells damage the tank, and its destruction kills the driver.
 
 ## A tank faster than ROADKILL_SPEED kills whoever it drives into.
 const ROADKILL_SPEED := 1.5

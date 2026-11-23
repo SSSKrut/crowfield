@@ -1,6 +1,6 @@
 class_name LoadTest
 extends Node
-## LoadTest runs headless clients against a server (ARCHITECTURE.md, 6.13):
+## LoadTest runs headless clients against a server:
 ## they play with random input through the whole path of a real client —
 ## ENet with DTLS, the protocol, the clock, prediction and snapshot deltas —
 ## but draw nothing. They run in processes of their own, as real clients do,

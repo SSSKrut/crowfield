@@ -20,11 +20,10 @@ const REINFORCEMENT_ENEMY_RADIUS := 16.0
 const REINFORCEMENT_SIGHT_RANGE := 65.0
 ## Keep a group of simultaneous respawns from crowding a simulation tick.
 const REINFORCEMENT_RAY_BUDGET := 96
-## Messages are limited per connection before they are decoded
-## (ARCHITECTURE.md, 6.8), so that one client cannot crowd the simulation:
-## input datagrams to twice the tick rate, of which an honest client sends one
-## a tick, and reliable messages to a few a second, of which it sends two in
-## all. Excess datagrams are dropped; excess reliable messages close the
+## Limit messages before decoding so one client cannot crowd the simulation.
+## Input datagrams are limited to twice the tick rate. An honest client sends one
+## a tick. Reliable messages are limited to a few a second. A client sends two
+## in all. Excess datagrams are dropped. Excess reliable messages close the
 ## connection.
 const INPUT_RATE := 2.0 * Game.TICK_RATE
 const INPUT_BURST := Game.TICK_RATE / 2.0
@@ -679,10 +678,9 @@ func _reset_finished_round() -> void:
 # Combat.
 
 
-## _view_time is the moment a human's shot is tested at (ARCHITECTURE.md,
-## 6.9): what the player saw when it fired, no further back than the rewind
-## limit, and the latest recorded tick for a player that says it saw now. The
-## shooter itself is not moved back.
+## _view_time is when a human player's shot is tested. Use what the player
+## saw when firing, within the rewind limit. A shot aimed at the current state
+## uses the latest recorded tick. The shooter itself is not moved back.
 func _view_time(command: InputCommand) -> float:
 	var latest := float(tick - 1)
 	if not command.has_view_time():
@@ -737,7 +735,7 @@ func _resolve_shots() -> void:
 
 
 ## _hitscan finds the soldier a shot along direction strikes first, as
-## [soldier, hitbox, distance], or [] (ARCHITECTURE.md, 6.9): a ray through the
+## [soldier, hitbox, distance], or []: a ray through the
 ## static world limits its reach, the grid gives the soldiers near its track,
 ## with a margin for how far they can have moved since the moment of the
 ## shot, and their hitboxes are tested where the pose history has them at that

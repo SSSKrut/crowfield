@@ -11,8 +11,7 @@ const _CLOSE_CHANNEL := Conn.CHANNELS + 1
 const _CHANNEL_COUNT := Conn.CHANNELS + 2
 const _MAX_PEERS := 64
 ## ENet gives up on a silent peer, or one that stops acknowledging reliable
-## messages, after its timeout; the game notices silence sooner by itself
-## (ARCHITECTURE.md, 6.11).
+## messages, after its timeout. The game detects silence sooner.
 const _TIMEOUT_MIN_MSEC := 5000
 const _TIMEOUT_MAX_MSEC := 10000
 

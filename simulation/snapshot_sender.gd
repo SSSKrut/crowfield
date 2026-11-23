@@ -1,7 +1,7 @@
 class_name SnapshotSender
 extends RefCounted
-## SnapshotSender sends every ready player its snapshot of the tick
-## (ARCHITECTURE.md, 6.6). The soldiers are quantized once, then every player's
+## SnapshotSender sends every ready player its snapshot of the tick.
+## The soldiers are quantized once, then every player's
 ## datagrams are built. The building makes no objects in its loops: in GDScript
 ## that and the number of calls is what costs.
 ##

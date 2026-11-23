@@ -1,5 +1,5 @@
 extends TestCase
-## The client's store of server certificates (ARCHITECTURE.md, 6.11): trust on
+## The client's store of server certificates: trust on
 ## first use, like the known hosts of SSH, and fingerprints given by hand.
 
 ## A certificate takes a while to make; the tests of this file share theirs.

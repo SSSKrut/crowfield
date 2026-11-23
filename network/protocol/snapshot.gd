@@ -7,7 +7,7 @@ extends RefCounted
 const MAX_SOLDIERS := 1023
 const MAX_REMOVED := 255
 ## BUDGET is the size of the largest snapshot datagram; it leaves room below
-## the transport limit (ARCHITECTURE.md, 6.6).
+## the transport limit.
 const BUDGET := 1100
 const _SOLDIER_COUNT_BITS := 10
 const _REMOVED_COUNT_BITS := 8

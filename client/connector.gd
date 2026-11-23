@@ -1,8 +1,8 @@
 class_name Connector
 extends RefCounted
 ## Connector opens a connection to a remote server and makes sure it is the
-## server the player means (ARCHITECTURE.md, 6.11). The connection itself only
-## accepts the pinned certificate. A certificate the client does not know yet
+## server the player means. The connection accepts only the pinned certificate.
+## A certificate the client does not know yet
 ## it learns first over a probe: a connection that asks the server for its
 ## certificate and nothing else. Poll it every frame until done() or failed().
 

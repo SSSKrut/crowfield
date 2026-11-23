@@ -2,7 +2,7 @@ class_name Predictor
 extends RefCounted
 ## Predictor moves the player's own soldier and works its weapons as soon as a
 ## command is made, with the code of the server, and corrects them when a
-## snapshot disagrees (ARCHITECTURE.md, 6.5).
+## snapshot disagrees.
 
 ## HISTORY covers two seconds, more than any round trip the game is played
 ## with. A confirmation older than that cannot be replayed and is snapped to.

@@ -1,6 +1,6 @@
 class_name Bots
 extends RefCounted
-## Bots are the soldiers the server drives itself (ARCHITECTURE.md, 8). A bot
+## Bots are the soldiers the server drives itself. A bot
 ## has no capsule and no commands from a connection: it walks the paths of the
 ## navigation mesh and stands on the ground the map gives under it. It obeys
 ## the rules of combat of a human: it sees through nothing, aims by turning

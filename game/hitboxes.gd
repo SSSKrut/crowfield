@@ -1,5 +1,5 @@
 class_name Hitboxes
-## The hitboxes of every soldier, human or bot (ARCHITECTURE.md, 6.9), in a
+## The hitboxes of every soldier, human or bot, in a
 ## space at its feet where X points to its right, Y up and Z forward. They are
 ## procedural, using the infantry soldier's ready pose. Animation runs on the
 ## client; the same capsules are used for server hits and visible impacts.
