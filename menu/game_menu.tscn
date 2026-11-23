@@ -1,8 +1,16 @@
-[gd_scene load_steps=4 format=3]
+[gd_scene load_steps=6 format=3]
 
 [ext_resource type="Script" path="res://menu/game_menu.gd" id="1_menu"]
 [ext_resource type="Theme" path="res://menu/theme.tres" id="2_theme"]
 [ext_resource type="FontFile" path="res://assets/type/BarlowCondensed-Bold.ttf" id="3_display"]
+
+[sub_resource type="Gradient" id="Gradient_shade"]
+offsets = PackedFloat32Array(0, 0.45, 1)
+colors = PackedColorArray(0.034, 0.045, 0.048, 0.95, 0.042, 0.053, 0.055, 0.56, 0.05, 0.06, 0.065, 0.16)
+
+[sub_resource type="GradientTexture2D" id="GradientTexture2D_shade"]
+gradient = SubResource("Gradient_shade")
+fill_to = Vector2(1, 0)
 
 [node name="GameMenu" type="Control"]
 process_mode = 3
@@ -15,16 +23,19 @@ grow_vertical = 2
 theme = ExtResource("2_theme")
 script = ExtResource("1_menu")
 
-[node name="Shade" type="ColorRect" parent="."]
+[node name="Shade" type="TextureRect" parent="."]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
-color = Color(0.025, 0.04, 0.045, 0.52)
+mouse_filter = 2
+texture = SubResource("GradientTexture2D_shade")
+expand_mode = 1
 
 [node name="Center" type="CenterContainer" parent="."]
+unique_name_in_owner = true
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -32,8 +43,8 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 
-[node name="Panel" type="PanelContainer" parent="Center"]
-custom_minimum_size = Vector2(292, 0)
+[node name="Panel" type="MarginContainer" parent="Center"]
+custom_minimum_size = Vector2(250, 0)
 layout_mode = 2
 
 [node name="Rows" type="VBoxContainer" parent="Center/Panel"]
@@ -44,7 +55,7 @@ theme_override_constants/separation = 5
 unique_name_in_owner = true
 layout_mode = 2
 theme_override_fonts/font = ExtResource("3_display")
-theme_override_font_sizes/font_size = 38
+theme_override_font_sizes/font_size = 58
 text = "Paused"
 
 [node name="About" type="Label" parent="Center/Panel/Rows"]
@@ -64,6 +75,8 @@ unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 38)
 layout_mode = 2
 theme_type_variation = &"PrimaryButton"
+theme_override_fonts/font = ExtResource("3_display")
+theme_override_font_sizes/font_size = 29
 text = "Resume"
 alignment = 0
 
@@ -72,6 +85,9 @@ unique_name_in_owner = true
 visible = false
 custom_minimum_size = Vector2(0, 34)
 layout_mode = 2
+theme_type_variation = &"PrimaryButton"
+theme_override_fonts/font = ExtResource("3_display")
+theme_override_font_sizes/font_size = 29
 text = "Play again"
 alignment = 0
 
@@ -80,7 +96,6 @@ unique_name_in_owner = true
 layout_mode = 2
 toggle_mode = true
 text = "Controls"
-flat = true
 alignment = 0
 
 [node name="Controls" type="Label" parent="Center/Panel/Rows"]
@@ -99,13 +114,11 @@ autowrap_mode = 3
 [node name="Leave" type="Button" parent="Center/Panel/Rows"]
 layout_mode = 2
 text = "Main menu"
-flat = true
 alignment = 0
 
 [node name="Quit" type="Button" parent="Center/Panel/Rows"]
 layout_mode = 2
 text = "Quit game"
-flat = true
 alignment = 0
 
 [connection signal="pressed" from="Center/Panel/Rows/Resume" to="." method="_on_resume_pressed"]

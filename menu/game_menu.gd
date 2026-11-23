@@ -17,6 +17,15 @@ var about := "":
 
 func _ready() -> void:
 	%About.text = about
+	resized.connect(_position_actions)
+	_position_actions()
+
+
+func _position_actions() -> void:
+	var center := %Center as CenterContainer
+	center.anchor_right = clampf(480.0 / maxf(size.x, 1.0), 0.43, 1.0)
+	center.pivot_offset = Vector2(size.x * center.anchor_right, size.y) * 0.5
+	center.scale = Vector2.ONE * clampf(minf(size.x / 400.0, size.y / 450.0), 0.25, 1.0)
 
 
 func open(can_replay: bool, paused: bool) -> void:
