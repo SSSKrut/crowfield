@@ -90,9 +90,10 @@ func update_flags(state: MatchState) -> void:
 
 
 ## Keep the objective names out of the first-person weapon sights.
-func set_flag_labels_visible(shown: bool) -> void:
+func set_flag_labels_visible(shown: bool, camera: Camera3D, excluded: Rect2) -> void:
 	for label in _flag_labels:
-		label.visible = shown
+		label.visible = shown and not camera.is_position_behind(label.global_position) \
+			and not excluded.has_point(camera.unproject_position(label.global_position))
 
 
 static func _flag_color(team: int, contested: bool) -> Color:

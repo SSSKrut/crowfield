@@ -78,6 +78,13 @@ func _init() -> void:
 	_font = _BODY
 
 
+## Leave room around the match header for the width of the projected world label.
+func flag_label_exclusion() -> Rect2:
+	var layout_scale := clampf(size.y / 720.0, 0.75, 4.0)
+	var width := minf(size.x, 460 * layout_scale)
+	return Rect2(Vector2((size.x - width) / 2.0, 0), Vector2(width, 84 * layout_scale))
+
+
 func _draw() -> void:
 	_scale = clampf(size.y / 720.0, 0.75, 4.0)
 	if scoreboard_open and match_state != null and map_scene != null:
