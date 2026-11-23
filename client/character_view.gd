@@ -2,7 +2,7 @@ class_name CharacterView
 extends Node3D
 ## CharacterView is one soldier drawn with the shared CharacterAsset. It holds
 ## only its own state: the clip, the flinch of a hit, and once it falls, its
-## ragdoll and then its frozen pose (ARCHITECTURE.md, 10.1–10.2).
+## ragdoll and then its frozen pose.
 
 ## A soldier walks from WALK_SPEED and runs from RUN_SPEED, in m/s.
 const WALK_SPEED := 0.15

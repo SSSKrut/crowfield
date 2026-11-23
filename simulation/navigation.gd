@@ -1,7 +1,7 @@
 class_name Navigation
 extends RefCounted
 ## Navigation is the navigation mesh of a map on the server, where bots find
-## their way (ARCHITECTURE.md, 8.6). It is baked by the NavigationServer3D of
+## their way. It is baked by the NavigationServer3D of
 ## the engine from the terrain and the boxes of the map, for a soldier 0.4 m
 ## in radius and 1.8 m tall that climbs steps of 0.4 m and slopes of 40
 ## degrees. Bots take their height from the map rather than from the mesh, so

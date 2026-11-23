@@ -1,5 +1,5 @@
 extends TestCase
-## The sessions of the server (ARCHITECTURE.md, 6.11): refusals, leaving, and
+## The sessions of the server: refusals, leaving, and
 ## coming back after a lost connection.
 
 const Harness := preload("res://tests/harness.gd")

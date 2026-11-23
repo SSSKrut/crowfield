@@ -1,7 +1,7 @@
 class_name Certificates
 ## Certificates of servers. Servers use self-signed certificates, so clients
 ## pin the certificate itself, identified by its fingerprint: the SHA-256 of
-## its DER form in hex, as SSH pins host keys (ARCHITECTURE.md, 6.11).
+## its DER form in hex, as SSH pins host keys.
 
 const COMMON_NAME := "crowfield server"
 

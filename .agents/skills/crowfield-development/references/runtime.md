@@ -27,3 +27,5 @@ Choose **Multiplayer → Host game**. Escape shows the address and certificate f
 ```
 
 Validate a changed server certificate with the host before passing `-fingerprint`. Use matching builds and matching `-tuning` and `-weapons` rules across clients and server.
+
+For changes to multiplayer or shared simulation, check two independent clients against a headless dedicated server. Check that capture, damage, death and respawn agree on both clients. Use `-netsim=delay=50ms,jitter=10ms,loss=2%` on a client to exercise prediction under impaired delivery. Verify that disconnecting and rejoining leaves only one player.

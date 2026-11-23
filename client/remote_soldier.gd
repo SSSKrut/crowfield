@@ -1,9 +1,8 @@
 class_name RemoteSoldier
 extends RefCounted
-## RemoteSoldier keeps the latest states of another soldier, so that it can be
-## drawn smoothly in the recent past, between two states the client has
-## (ARCHITECTURE.md, 6.7). evaluate() places it at a moment and leaves the
-## result in position, velocity, yaw, pitch, alive, grounded and crouched.
+## RemoteSoldier keeps the latest states of another soldier for interpolation.
+## evaluate() places it at a moment and leaves the result in position, velocity,
+## yaw, pitch, alive, grounded and crouched.
 
 const SAMPLES := 16
 ## Past the newest state a soldier keeps moving by its velocity for at most
