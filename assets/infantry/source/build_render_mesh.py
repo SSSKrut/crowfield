@@ -4,15 +4,20 @@
 import json
 from pathlib import Path
 import struct
+from io import BytesIO
+
+from PIL import Image
+from outfit_atlas import PARTS, atlas_uv, build_atlas
 
 
-# Both the first-person preview and the tests refer to parts by node name.
-# Keep the marked cap, vest, and jacket separate, along with the rigid eyes.
-MERGES = {
-    "Object_97": ("Object_99",),  # Face and hood.
-    "Object_101": ("Object_117",),  # Elbow and knee pads.
-    "Object_103": ("Object_119", "Object_121"),  # Pouches.
-    "Object_123": ("Object_113", "Object_115"),  # Boots, trousers and gloves.
+# Each normalized texture tile used by a source mesh. Object_123 is the
+# skinned result; the independently transformed eye mesh stays separate.
+OUTFIT = {
+    "Object_97": "Object_97", "Object_99": "Object_97",
+    "Object_101": "Object_101", "Object_117": "Object_101",
+    "Object_103": "Object_103", "Object_119": "Object_103", "Object_121": "Object_103",
+    "Object_105": "Object_105", "Object_107": "Object_107", "Object_109": "Object_109",
+    "Object_123": "Object_123", "Object_113": "Object_123", "Object_115": "Object_123",
 }
 COMPONENT_BYTES = {5123: 2, 5126: 4}
 COMPONENTS = {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4, "MAT4": 16}
@@ -31,7 +36,8 @@ def merge_glb(data: bytes) -> bytes:
         raise ValueError("Expected a single-buffer rig with no animation channels")
 
     old_views, old_accessors, old_meshes = (model[key] for key in ("bufferViews", "accessors", "meshes"))
-    model.update(bufferViews=[], accessors=[], meshes=[])
+    old_materials, old_textures, old_images = (model[key] for key in ("materials", "textures", "images"))
+    model.update(bufferViews=[], accessors=[], meshes=[], materials=[], textures=[], images=[])
     binary = bytearray()
 
     def append_view(payload: bytes, target: int | None = None) -> int:
@@ -78,18 +84,47 @@ def merge_glb(data: bytes) -> bytes:
     nodes = model["nodes"]
     by_name = {node.get("name"): i for i, node in enumerate(nodes) if "mesh" in node}
     parents = {child: i for i, node in enumerate(nodes) for child in node.get("children", [])}
-    removed = set()
-    for name, joins in MERGES.items():
-        first = by_name[name]
-        for other_name in joins:
-            other = by_name[other_name]
-            if ("skin" not in nodes[first] or nodes[first]["skin"] != nodes[other].get("skin")
-                    or parents[first] != parents[other]
-                    or any(nodes[first].get(key) != nodes[other].get(key)
-                           for key in ("matrix", "rotation", "scale", "translation"))
-                    or nodes[other].get("children")):
-                raise ValueError(f"{other_name} cannot share the same skinned mesh as {name}")
-            removed.add(other)
+    outfit = by_name["Object_123"]
+    for name in OUTFIT:
+        other = by_name[name]
+        if (nodes[outfit]["skin"] != nodes[other].get("skin")
+                or parents[outfit] != parents[other]
+                or any(nodes[outfit].get(key) != nodes[other].get(key)
+                       for key in ("matrix", "rotation", "scale", "translation"))
+                or nodes[other].get("children")):
+            raise ValueError(f"{name} cannot share the same skinned mesh as Object_123")
+    removed = {by_name[name] for name in OUTFIT if name != "Object_123"}
+    removed.add(by_name["Object_111"])  # The source headset floats above the cap.
+
+    def get_texture(index: int) -> bytes:
+        source_image = old_textures[index]["extensions"]["EXT_texture_webp"]["source"]
+        return view_data(old_images[source_image]["bufferView"])
+
+    def load_texture(index: int) -> Image.Image:
+        return Image.open(BytesIO(get_texture(index))).convert("RGB")
+
+    def append_texture(payload: bytes) -> int:
+        image = len(model["images"])
+        model["images"].append({"bufferView": append_view(payload), "mimeType": "image/webp"})
+        model["textures"].append({"sampler": 0, "extensions": {"EXT_texture_webp": {"source": image}}})
+        return len(model["textures"]) - 1
+
+    # Keep the rigid eyes on their original material and original texels.
+    eye = json.loads(json.dumps(old_materials[0]))
+    for texture_slot in (eye["normalTexture"], eye["pbrMetallicRoughness"]["baseColorTexture"],
+                         eye["pbrMetallicRoughness"]["metallicRoughnessTexture"]):
+        texture_slot["index"] = append_texture(get_texture(texture_slot["index"]))
+    model["materials"].append(eye)
+
+    tile_materials = [old_materials[old_meshes[nodes[by_name[part]]["mesh"]]["primitives"][0]["material"]]
+                      for part in PARTS]
+    color, normal, orm = (append_texture(payload) for payload in build_atlas(tile_materials, load_texture))
+    model["materials"].append({
+        "name": "OutfitAtlas", "doubleSided": True,
+        "pbrMetallicRoughness": {"baseColorTexture": {"index": color},
+                                "metallicRoughnessTexture": {"index": orm}},
+        "normalTexture": {"index": normal}, "occlusionTexture": {"index": orm},
+    })
 
     for i, node in enumerate(nodes):
         if "children" in node:
@@ -97,19 +132,29 @@ def merge_glb(data: bytes) -> bytes:
         if "mesh" not in node or i in removed:
             continue
         mesh = old_meshes[node["mesh"]]
-        group = [mesh] + [old_meshes[nodes[by_name[name]]["mesh"]] for name in MERGES.get(node["name"], ())]
+        names = list(OUTFIT) if i == outfit else [node["name"]]
+        group = [old_meshes[nodes[by_name[name]]["mesh"]] for name in names]
         if any(len(part["primitives"]) != 1 for part in group):
             raise ValueError("Expected one primitive per source node")
         primitives = [part["primitives"][0] for part in group]
         first = primitives[0]
-        if any(part.get("material") != first.get("material")
-               or part.get("mode", 4) != 4 or part["attributes"].keys() != first["attributes"].keys()
+        if any(part.get("mode", 4) != 4 or part["attributes"].keys() != first["attributes"].keys()
                for part in primitives):
             raise ValueError(f"Incompatible surfaces on {node['name']}")
         attributes = {}
         for semantic in first["attributes"]:
             indices = [part["attributes"][semantic] for part in primitives]
-            attributes[semantic] = append_accessor(indices, b"".join(map(accessor_data, indices)), 34962)
+            payloads = list(map(accessor_data, indices))
+            if i == outfit and semantic == "TEXCOORD_0":
+                mapped = [atlas_uv(OUTFIT[name], u, v) for name, payload in zip(names, payloads)
+                          for u, v in struct.iter_unpack("<ff", payload)]
+                data = b"".join(struct.pack("<ff", *uv) for uv in mapped)
+                accessor = append_accessor(indices, data, 34962)
+                model["accessors"][accessor].update(min=list(map(min, zip(*mapped))),
+                                                   max=list(map(max, zip(*mapped))))
+            else:
+                accessor = append_accessor(indices, b"".join(payloads), 34962)
+            attributes[semantic] = accessor
 
         merged_indices = []
         vertex_offset = 0
@@ -122,18 +167,16 @@ def merge_glb(data: bytes) -> bytes:
         indices = [part["indices"] for part in primitives]
         index = append_accessor(indices, struct.pack(f"<{len(merged_indices)}H", *merged_indices), 34963)
         model["accessors"][index].update(min=[min(merged_indices)], max=[max(merged_indices)])
-        primitive = dict(first, attributes=attributes, indices=index)
+        primitive = dict(first, attributes=attributes, indices=index, material=int(i == outfit))
         node["mesh"] = len(model["meshes"])
         model["meshes"].append(dict(mesh, primitives=[primitive]))
 
     for i in removed:
         nodes[i].pop("mesh")
-        nodes[i].pop("skin")
+        nodes[i].pop("skin", None)
     for skin in model["skins"]:
         index = skin["inverseBindMatrices"]
         skin["inverseBindMatrices"] = append_accessor([index], accessor_data(index), None)
-    for image in model["images"]:
-        image["bufferView"] = append_view(view_data(image["bufferView"]))
 
     binary.extend(bytes(-len(binary) % 4))
     model["buffers"] = [{"byteLength": len(binary)}]

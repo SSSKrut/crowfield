@@ -7,13 +7,13 @@ and [author profile](https://sketchfab.com/1799danly).
 
 Crowfield scales and recenters the model, hides the floating headset, tints
 the helmet cover, sleeve and vest markings, and retargets the original skeleton to its
-gameplay animations and held weapons. The imported copy joins meshes that
-share a material and skin while preserving their geometry, UVs, and bone
-weights.
+gameplay animations and held weapons. The imported copy packs the original material textures into a shared atlas.
+The skinned outfit uses one mesh with remapped UVs and the original geometry
+and bone weights.
 
 The GLB under `source/` is the unchanged [glTF-Transform repack](https://github.com/cktang88/3d-fps/blob/a5b4da6c87f54278755fc31b372934a1b3e56b00/public/assets/models/characters/soldier_tac.glb)
 with the original attribution and license metadata. Its SHA-256 is
 `fe02bc307077d7a5a74069d085893988d93751495871c84082256e60bf9bfc9e`.
 
-Regenerate the imported copy with `python3 assets/infantry/source/merge_surfaces.py`
-from the repository root.
+Regenerate the imported copy from the repository root with Python 3 and
+Pillow 12.3.0. Run `python3 -B assets/infantry/source/build_render_mesh.py`.

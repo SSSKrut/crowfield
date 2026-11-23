@@ -8,7 +8,6 @@ const MODEL := preload("res://assets/infantry/danly-soldier.glb")
 const TEAM_MARKS := preload("res://assets/infantry/team_marks.gdshader")
 const SCALE := 0.96
 const PREFIX := "mixamorig_"
-const MARK_LAYOUTS := {&"Object_107": 0, &"Object_105": 1, &"Object_109": 2}
 # Center of the grip enclosed by the original glove bones, in hand space.
 const PALM_CONTACT := Vector3(0.002, 0.151, 0.032)
 # Bottom vertices of each boot in driver ankle space. These support points
@@ -46,12 +45,11 @@ const ARMS := [
 var skeleton: Skeleton3D
 var _actor_from_skin: Transform3D
 var _skin_from_actor: Transform3D
-var _marked_meshes: Array[MeshInstance3D] = []
+var outfit: MeshInstance3D
 var _bones: Dictionary[String, int] = {}
 var _rest_poses: Array[Transform3D] = []
-# Share each layout and tint globally, including fallen bodies.
-# Compatibility renderers have a finite buffer for instance uniforms.
-static var _team_materials: Dictionary[StringName, Dictionary] = {}
+# Each team shares a material across live and fallen bodies.
+static var _team_materials: Dictionary[Color, ShaderMaterial] = {}
 
 
 func setup() -> void:
@@ -65,40 +63,23 @@ func setup() -> void:
 	for index in skeleton.get_bone_count():
 		_bones[skeleton.get_bone_name(index).trim_prefix(PREFIX)] = index
 		_rest_poses.append(_actor_from_skin * skeleton.get_bone_global_rest(index))
-	for child in model.find_children("*", "MeshInstance3D", true, false):
-		var mesh := child as MeshInstance3D
-		if mesh.name == &"Object_111": # Floating headset in the source scene.
-			mesh.hide()
-		if mesh.skin != null:
-			# The GLB inverse binds cancel its authored unit conversion.
-			# Bound the resulting skinned geometry in native mesh space.
-			mesh.custom_aabb = AABB(Vector3(-1.0, -1.0, -1.0), Vector3(2.0, 3.0, 3.2))
-
-		if MARK_LAYOUTS.has(mesh.name):
-			_marked_meshes.append(mesh)
+	outfit = model.find_child("Object_123", true, false) as MeshInstance3D
+	# The GLB inverse binds cancel its authored unit conversion.
+	# Bound the resulting skinned geometry in native mesh space.
+	outfit.custom_aabb = AABB(Vector3(-1.0, -1.0, -1.0), Vector3(2.0, 3.0, 3.2))
 
 
 func set_tint(color: Color) -> void:
-	for mesh in _marked_meshes:
-		mesh.material_override = _team_material(mesh, color)
-
-
-static func _team_material(mesh: MeshInstance3D, color: Color) -> ShaderMaterial:
-	var variants: Dictionary = _team_materials.get_or_add(mesh.name, {})
-	if not variants.has(color):
+	if not _team_materials.has(color):
 		var material := ShaderMaterial.new()
-		var source := mesh.mesh.surface_get_material(0) as StandardMaterial3D
+		var source := outfit.mesh.surface_get_material(0) as StandardMaterial3D
 		material.shader = TEAM_MARKS
 		material.set_shader_parameter("color_map", source.albedo_texture)
 		material.set_shader_parameter("normal_map", source.normal_texture)
 		material.set_shader_parameter("orm_map", source.ao_texture)
-		material.set_shader_parameter("normal_scale", source.normal_scale)
-		material.set_shader_parameter("roughness_scale", source.roughness)
-		material.set_shader_parameter("specular_scale", source.metallic_specular)
-		material.set_shader_parameter("layout_kind", MARK_LAYOUTS[mesh.name])
 		material.set_shader_parameter("team_color", color)
-		variants[color] = material
-	return variants[color]
+		_team_materials[color] = material
+	outfit.material_override = _team_materials[color]
 
 
 func retarget(driver: CharacterView) -> void:
