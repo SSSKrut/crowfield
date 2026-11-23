@@ -20,6 +20,7 @@ var _rules: Rules
 var _maps: Callable
 var _token: PackedByteArray
 var _started := 0.0
+var _started_tick := -1
 var _sent := -1.0
 
 
@@ -51,7 +52,7 @@ func poll(local_tick: int = -1) -> void:
 	if not conn.is_open():
 		_fail("server refused: %s" % conn.close_reason)
 		return
-	if ClientSession._now() - _started > TIMEOUT:
+	if _timed_out(local_tick):
 		_fail("the server did not answer in %d s" % int(TIMEOUT))
 		conn.close("handshake failed")
 		return
@@ -110,6 +111,15 @@ func poll(local_tick: int = -1) -> void:
 		# A remote server keeps ticking while this client builds the map.
 		welcome.server_tick += floori((ClientSession._now() - _sent - rtt) * Game.TICK_RATE)
 	session = ClientSession.new(conn, _name, welcome, rtt)
+
+
+func _timed_out(local_tick: int) -> bool:
+	if local_tick < 0:
+		return ClientSession._now() - _started > TIMEOUT
+	# A frame stall blocks the loopback server as well as the client.
+	if _started_tick < 0:
+		_started_tick = local_tick
+	return local_tick - _started_tick > TIMEOUT * Game.TICK_RATE
 
 
 func _fail(reason: String) -> void:

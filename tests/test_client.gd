@@ -333,14 +333,35 @@ func test_embedded_clock_ignores_frame_stall_during_hello_round_trip() -> void:
 	check_equal(client.session.resyncs, 0, "startup clock jumps after stalled hello")
 
 
+func test_handshake_expires_on_the_servers_clock() -> void:
+	var ends := Memory.pair()
+	var remote := Handshake.new(ends[0], "Remote", Rules.new(), Callable())
+	remote._started -= Handshake.TIMEOUT + 0.1
+	remote.poll()
+	check(remote.failed() and not ends[1].is_open(), "remote deadline still uses wall time")
+
+	ends = Memory.pair()
+	var embedded := Handshake.new(ends[0], "Embedded", Rules.new(), Callable())
+	var start_tick := 15
+	embedded.poll(start_tick)
+	embedded._started -= Handshake.TIMEOUT + 0.1
+	var deadline := start_tick + roundi(Handshake.TIMEOUT * Game.TICK_RATE)
+	embedded.poll(deadline)
+	check(not embedded.failed() and ends[1].is_open(), "local handshake survives until the tick deadline")
+	embedded.poll(deadline + 1)
+	check(embedded.failed() and not ends[1].is_open(), "unanswered local handshake still times out")
+
+
 class SlowHelloClient extends ClientApp:
 	var stalled := false
 
 	func _process(delta: float) -> void:
-		super._process(delta)
-		if not stalled and _handshake != null and _handshake._sent >= 0:
+		if not stalled and _handshake != null and _local.server.player_count() > 0:
+			# The server has sent Welcome, but the renderer blocks the client
+			# before it can read the message on the next frame.
 			stalled = true
-			OS.delay_msec(425)
+			OS.delay_msec(ceili(Handshake.TIMEOUT * 1000) + 100)
+		super._process(delta)
 
 
 class SlowMapClient extends ClientApp:
