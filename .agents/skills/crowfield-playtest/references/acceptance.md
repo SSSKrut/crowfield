@@ -10,6 +10,8 @@ Use these comparisons during internal review of the affected scenario. For a bro
 
 ## Quality rubric
 
+Crowfield should meet or exceed Ravenfield in gameplay, visuals, and sound, with Arma Reforger as a reference.
+
 | Area | What to look for |
 | --- | --- |
 | Gameplay | An uncoached player can identify a route in roughly 10 seconds and reach a useful fight in roughly 30 seconds. Compare input response during sprint, stop, jump, landing, and aim. Note how bots or teammates help a push, what taking an objective changes, and why a player picks a route after respawn. Record time to first exchange and time from death to the next useful fight. Check for blockers in deployment, combat, capture, respawn, match completion, and replay. Separate missed input from stalls. |
