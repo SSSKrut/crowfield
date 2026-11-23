@@ -17,21 +17,22 @@ func test_authored_infantry_follows_the_live_weapon_and_team() -> void:
 	view.face(Vector3(5.0, 2.0, 10.0), 0.71)
 	var authored := view.authored
 	check(not view.body.visible, "the original skinned body is hidden on the live view")
-	var helmet := authored.find_child("Object_109", true, false) as MeshInstance3D
-	var blue_helmet := helmet.material_override as ShaderMaterial
-	check_equal(blue_helmet.get_shader_parameter("team_color"), blue, "team before entering the tree")
+	var outfit := authored.outfit
+	check_equal(outfit.mesh.get_surface_count(), 1, "the skinned outfit uses a single material surface")
+	var blue_outfit := outfit.material_override as ShaderMaterial
+	check_equal(blue_outfit.get_shader_parameter("team_color"), blue, "team before entering the tree")
 	view.set_tint(red)
-	var red_helmet := helmet.material_override as ShaderMaterial
-	check_equal(red_helmet.get_shader_parameter("team_color"), red, "team changes reach the imported equipment")
+	var red_outfit := outfit.material_override as ShaderMaterial
+	check_equal(red_outfit.get_shader_parameter("team_color"), red, "team changes reach the imported equipment")
 	var teammate := view.asset.instantiate()
 	teammate.set_tint(blue)
 	tree.root.add_child(teammate)
 	cleanup(teammate.free)
-	var teammate_helmet := teammate.authored.find_child("Object_109", true, false) as MeshInstance3D
-	check_equal(teammate_helmet.material_override, blue_helmet, "the same layout and team share a material")
-	check_equal(blue_helmet.get_shader_parameter("team_color"), blue, "changing one soldier leaves its teammate blue")
+	var teammate_outfit := teammate.authored.outfit
+	check_equal(teammate_outfit.material_override, blue_outfit, "the the same team shares the outfit material")
+	check_equal(blue_outfit.get_shader_parameter("team_color"), blue, "changing one soldier leaves its teammate blue")
 	teammate.set_tint(red)
-	check_equal(teammate_helmet.material_override, red_helmet, "switching teams uses the cached red material")
+	check_equal(teammate_outfit.material_override, red_outfit, "switching teams uses the cached red material")
 
 	var stances := [
 		Vector3.ZERO, Vector3(4.25, 0, 0), Vector3(6.65, 0, 0), Vector3(0, 1, 0),
@@ -77,8 +78,7 @@ func test_authored_infantry_contacts_the_slope_and_follows_a_frozen_body() -> vo
 	view.set_foot_terrain(slope)
 	await tree.process_frame
 	await tree.process_frame
-	var boots := view.authored.find_child("Object_123", true, false) as MeshInstance3D
-	var sole := _lowest_vertices(boots, view.authored.skeleton, slope)
+	var sole := _lowest_vertices(view.authored.outfit, view.authored.skeleton, slope)
 	for clearance: float in sole:
 		check(absf(clearance) < 0.015, "authored boot touches the slope within 15 mm (%.4f m)" % clearance)
 
