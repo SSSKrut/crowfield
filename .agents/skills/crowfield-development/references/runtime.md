@@ -13,7 +13,7 @@ godot="$HOME/.cache/crowfield/godot/4.7.2/Godot_v4.7.2-stable_linux.x86_64"
 
 Run `./tools/build-macos.sh` from the exact Linux revision being exported. The script installs the pinned editor and export template on demand and writes `export/macos/Crowfield.zip` with the app and credits. Use the export presets for Linux, Windows, and dedicated Linux server builds. For a main build, use a clean worktree at the fetched `origin/main`.
 
-Transfer the ZIP from the same worktree. Verify its digest, extract with `ditto -x -k`, and run `codesign --verify --deep --strict Crowfield.app`. Keep the app and credits together. Stage a preview separately from any build the user may have in use. Get approval before starting a foreground Mac diagnostic. A headless smoke check can verify that the prebuilt app joins and advances a solo match.
+Transfer the ZIP from the same worktree. Verify its digest, extract with `ditto -x -k`, and run `codesign --verify --deep --strict Crowfield.app`. Keep the app, credits and launcher together. On Apple Silicon, `Play Crowfield with Metal.command` opens the included app fullscreen with Mobile/Metal. Open `Crowfield.app` directly to use its usual renderer. Stage a preview separately from any build the user may have in use. Get approval before starting a foreground Mac diagnostic. A headless smoke check can verify that the prebuilt app joins and advances a solo match.
 
 Use `client -help`, `server -help`, or `loadtest -help` after `--` for the current flags. The `-movement`, `-shoot`, and `-demo` scenarios run on the prototype map by default. For a bounded movement screenshot, pass `-movement -max-fps=60 -frames=400 -screenshot=movement.png`.
 

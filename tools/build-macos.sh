@@ -72,9 +72,10 @@ cp -- assets/desert/LICENSE.md "$stage/Credits/Desert.md"
 cp -- assets/vehicles/LICENSE.md "$stage/Credits/Vehicles.md"
 cp -- assets/type/SOURCE.md "$stage/Credits/Barlow/Source.md"
 cp -- assets/type/OFL.txt "$stage/Credits/Barlow/OFL.txt"
+install -m 755 tools/launch-macos-metal.command "$stage/Play Crowfield with Metal.command"
 (
     cd "$stage"
-    zip -qr Crowfield.zip Credits
+    zip -qr Crowfield.zip Credits "Play Crowfield with Metal.command"
 )
 
 unzip -tq "$stage/Crowfield.zip"
