@@ -188,12 +188,52 @@ func test_dev_capture_marker_tracks_play_menu_and_focus() -> void:
 	check(not FileAccess.file_exists(marker), "quitting left capture registered")
 
 
-func _start_client(frame_cap: int = 144) -> bool:
+func test_scoreboard_follows_tab_and_releases_at_the_menu_and_focus_loss() -> void:
+	if not await _start_client(60, "valley"):
+		return
+	cleanup(func() -> void: _key(KEY_TAB, false))
+	_key(KEY_TAB, true)
+	await _tree.process_frame
+	await _tree.process_frame
+	check(_client.hud.scoreboard_open and _client.hud.match_state == _client.session.match_state,
+		"holding Tab opens the HUD with the live match state")
+	_key(KEY_TAB, false)
+	await _tree.process_frame
+	await _tree.process_frame
+	check(not _client.hud.scoreboard_open, "releasing Tab closes the scoreboard")
+
+	_key(KEY_TAB, true)
+	_tap(KEY_ESCAPE)
+	await _tree.process_frame
+	await _tree.process_frame
+	check(_client.menu.visible and not _client.hud.scoreboard_open, "Escape opens the menu above regular play")
+	_tap(KEY_ESCAPE)
+	_key(KEY_TAB, true, true)
+	await _tree.process_frame
+	await _tree.process_frame
+	check(not _client.hud.scoreboard_open, "Tab held through the menu cannot reopen the scoreboard")
+	_key(KEY_TAB, false)
+	_key(KEY_TAB, true)
+	await _tree.process_frame
+	await _tree.process_frame
+	check(_client.hud.scoreboard_open, "fresh Tab opens the scoreboard after resuming")
+	_tree.root.focus_exited.emit()
+	await _tree.process_frame
+	await _tree.process_frame
+	check(not _client.hud.scoreboard_open, "focus loss closes the scoreboard")
+	_tree.root.focus_entered.emit()
+	_key(KEY_TAB, true, true)
+	await _tree.process_frame
+	await _tree.process_frame
+	check(not _client.hud.scoreboard_open, "Tab held through a focus change cannot reopen the scoreboard")
+
+
+func _start_client(frame_cap: int = 144, map: String = "prototype") -> bool:
 	_tree = Engine.get_main_loop() as SceneTree
 	await _tree.process_frame
 	var max_fps := Engine.max_fps
 	var mouse_mode := Input.mouse_mode
-	_client = ClientApp.create(["-map=prototype", "-volume=0", "-config-dir=", "-max-fps=%d" % frame_cap])
+	_client = ClientApp.create(["-map=" + map, "-volume=0", "-config-dir=", "-max-fps=%d" % frame_cap])
 	_client.left.connect(fail)
 	cleanup(func() -> void:
 		_client.free()
