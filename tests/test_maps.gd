@@ -173,3 +173,36 @@ func test_valley_ford_has_two_walkable_covered_entries_per_team() -> void:
 			check(flag.contains_flag_position(soldier.position), "entry from %s ended outside capture" % staging)
 	check(not flag.contains_flag_position(Vector3(0, scene.ground_at(0, 0), 0)),
 		"the channel below the court can capture the Ford")
+
+
+func test_valley_benchmark_camera_clears_static_geometry() -> void:
+	var scene := _valley()
+	var space := PhysicsServer3D.space_create()
+	var collision := scene.build_collision(space)
+	cleanup(func() -> void:
+		MapScene.free_collision(collision)
+		PhysicsServer3D.free_rid(space))
+	var physics := PhysicsServer3D.space_get_direct_state(space)
+	var eye_height := MovementTuning.new().eye_height
+	var camera_space := SphereShape3D.new()
+	camera_space.radius = 0.3
+	var query := PhysicsShapeQueryParameters3D.new()
+	query.shape = camera_space
+	query.collision_mask = Game.LAYER_STATIC
+	var from := ClientApp._benchmark_valley_position(scene, eye_height, 0.0)
+	var endpoint := ClientApp._benchmark_valley_position(scene, eye_height, 1.0)
+	check_near(from.z, 70.0, 0.001, "camera starts behind the camp gate")
+	check_near(endpoint.z, 14.0, 0.001, "camera finishes at the ford approach")
+	check_near(endpoint.x, ValleyMap.FORD_PASSAGE_X, 0.001, "camera finishes in the east entrance lane")
+	const SAMPLES := 240
+	for sample in range(1, SAMPLES + 1):
+		var to := ClientApp._benchmark_valley_position(scene, eye_height, float(sample) / SAMPLES)
+		query.transform = Transform3D(Basis.IDENTITY, from)
+		if not check(physics.intersect_shape(query, 1).is_empty(), "camera overlaps static geometry at %s" % from):
+			return
+		query.motion = to - from
+		if not query.motion.is_zero_approx():
+			var sweep := physics.cast_motion(query)
+			if not check(not sweep.is_empty() and sweep[0] >= 0.999, "camera hits static geometry between %s and %s" % [from, to]):
+				return
+		from = to
