@@ -1,8 +1,8 @@
 class_name RagdollPool
 extends RefCounted
 ## RagdollPool lends ragdolls of a rig in a physics space, at most LIMIT at
-## once (ARCHITECTURE.md, 10.2). They are made while loading and kept: a fall
-## makes no bodies, shapes or joints. A ragdoll of the pool lies outside the
+## once. Loading creates all bodies, shapes and joints, so a fall allocates
+## none of them. A ragdoll of the pool lies outside the
 ## space until it is lent.
 
 ## LIMIT is how many ragdolls are simulated at once.

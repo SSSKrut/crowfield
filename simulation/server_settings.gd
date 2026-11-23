@@ -3,7 +3,7 @@ extends RefCounted
 ## ServerSettings configure a server, dedicated or embedded in a client. Times
 ## are in seconds.
 
-## DEFAULT_CLIENT_BANDWIDTH is 32 KB/s (ARCHITECTURE.md, 6.6).
+## Default outbound bandwidth budget per client, in bytes per second.
 const DEFAULT_CLIENT_BANDWIDTH := 32 * 1024
 
 var stats_interval := 5.0

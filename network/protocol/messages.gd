@@ -1,7 +1,7 @@
 class_name Messages
 ## Messages are the small messages of the protocol: the handshake on the
 ## control channel, and the events of combat, which go on the reliable events
-## channel only to the players they concern (ARCHITECTURE.md, 6.3): every
+## channel only to the players they concern: every
 ## client sees hits and deaths of all soldiers from the snapshots, and the
 ## events add what only the people involved need, and what a kill feed needs.
 
@@ -152,8 +152,7 @@ class Respawn:
 
 ## CertificateRequest asks a server for its certificate before anything else;
 ## the server answers with Certificate and closes the connection. A client
-## that has not met the server learns the certificate it then pins
-## (ARCHITECTURE.md, 6.11).
+## that has not met the server learns the certificate it then pins.
 class CertificateRequest:
 	func type() -> int:
 		return Protocol.Type.CERTIFICATE_REQUEST

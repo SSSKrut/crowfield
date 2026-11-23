@@ -2,7 +2,7 @@ class_name Vehicle
 extends RefCounted
 ## Vehicle is a tank on the map: its hull on the ground, its turret and gun,
 ## its health and its driver, who steers it and fires its gun alone, as in
-## Battlefield (ARCHITECTURE.md, 9.2). TankController moves it; the server
+## Battlefield. TankController moves it; the server
 ## owns it and every client draws it from the snapshots.
 ##
 ## Vehicle space has X to the right, Y up and Z backward, so the hull looks

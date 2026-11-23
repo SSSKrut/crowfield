@@ -1,7 +1,7 @@
 class_name Bodies
 extends RefCounted
 ## Bodies are fallen soldiers that no longer belong to anyone: they fall as
-## ragdolls, freeze, and go after a while (ARCHITECTURE.md, 10.2).
+## ragdolls, freeze, and go after a while.
 
 ## At most MAX_BODIES fallen bodies stay, each for LIFETIME seconds; beyond
 ## that the oldest goes first.

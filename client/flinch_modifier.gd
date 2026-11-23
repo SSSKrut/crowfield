@@ -1,8 +1,7 @@
 class_name FlinchModifier
 extends SkeletonModifier3D
-## FlinchModifier makes a soldier hit by a shot that does not kill flinch
-## (ARCHITECTURE.md, 10.2): a few bones of the struck part turn away from the
-## shot and spring back, on top of the animation, with no physics. The spring
+## FlinchModifier responds to a nonlethal hit. A few bones of the struck part
+## turn away from the shot and spring back over the animation. The spring
 ## rings at FREQUENCY, damped by DAMPING; a hit gives it KICK radians per
 ## second, and the turn never exceeds MAX_ANGLE.
 

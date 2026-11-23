@@ -1,6 +1,6 @@
 class_name RagdollRig
 extends RefCounted
-## RagdollRig is how the infantry skeleton falls (ARCHITECTURE.md, 10.2):
+## RagdollRig is how the infantry skeleton falls:
 ## thirteen parts in the reference pose, the first frame of the idle clip,
 ## standing at the origin; the bone each part follows and where the part sits
 ## on that bone; and the joints between the parts. It is built once and every

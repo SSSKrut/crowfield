@@ -5,8 +5,7 @@ extends Node3D
 ## soldiers, plus smoke from the local weapon; the smoke behind a rocket, and
 ## blasts: a fireball, a flash of light, flying sparks and a cloud of smoke.
 ## These effects are cosmetic. The server decides what was hit. The client
-## estimates where to draw marks. Pools have limits
-## (ARCHITECTURE.md, 10.3): past a limit the oldest gives way.
+## estimates where to draw marks. A full pool replaces its oldest effect.
 ##
 ## The app calls update once a frame; every pool is drawn by one multimesh.
 

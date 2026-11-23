@@ -1,7 +1,7 @@
 class_name NetGraph
 extends RefCounted
-## NetGraph is the client's network record (ARCHITECTURE.md, 6.13), shown with
-## F2: the last few seconds by bucket, and averages of the last second.
+## NetGraph records client network stats. F2 shows the last few seconds
+## by bucket and averages for the last second.
 
 ## The graph keeps BUCKETS buckets of BUCKET seconds each.
 const BUCKETS := 60
