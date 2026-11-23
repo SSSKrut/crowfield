@@ -55,26 +55,27 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 
-[node name="Panel" type="MarginContainer" parent="Center"]
+[node name="Home" type="MarginContainer" parent="Center"]
+unique_name_in_owner = true
 custom_minimum_size = Vector2(342, 0)
 layout_mode = 2
 
-[node name="Rows" type="VBoxContainer" parent="Center/Panel"]
+[node name="Rows" type="VBoxContainer" parent="Center/Home"]
 layout_mode = 2
 theme_override_constants/separation = 7
 
-[node name="Title" type="Label" parent="Center/Panel/Rows"]
+[node name="Title" type="Label" parent="Center/Home/Rows"]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.95, 0.92, 0.82, 1)
 theme_override_fonts/font = ExtResource("4_display")
 theme_override_font_sizes/font_size = 78
 text = "CROWFIELD"
 
-[node name="Gap" type="Control" parent="Center/Panel/Rows"]
+[node name="Gap" type="Control" parent="Center/Home/Rows"]
 custom_minimum_size = Vector2(0, 11)
 layout_mode = 2
 
-[node name="Solo" type="Button" parent="Center/Panel/Rows"]
+[node name="Solo" type="Button" parent="Center/Home/Rows"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 46)
 layout_mode = 2
@@ -84,30 +85,31 @@ theme_override_font_sizes/font_size = 32
 text = "Play solo"
 alignment = 0
 
-[node name="SoloSetup" type="HBoxContainer" parent="Center/Panel/Rows"]
+[node name="SoloSetup" type="HBoxContainer" parent="Center/Home/Rows"]
 layout_mode = 2
 theme_override_constants/separation = 7
 
-[node name="Summary" type="Label" parent="Center/Panel/Rows/SoloSetup"]
+[node name="Summary" type="Label" parent="Center/Home/Rows/SoloSetup"]
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_colors/font_color = Color(0.74, 0.77, 0.75, 1)
 theme_override_font_sizes/font_size = 17
 
-[node name="Setup" type="Button" parent="Center/Panel/Rows/SoloSetup"]
+[node name="Setup" type="Button" parent="Center/Home/Rows/SoloSetup"]
+unique_name_in_owner = true
 layout_mode = 2
 theme_override_font_sizes/font_size = 17
 text = "Match setup"
 
-[node name="Multiplayer" type="Button" parent="Center/Panel/Rows"]
+[node name="Multiplayer" type="Button" parent="Center/Home/Rows"]
 layout_mode = 2
 theme_override_fonts/font = ExtResource("4_display")
 theme_override_font_sizes/font_size = 26
 text = "Multiplayer"
 alignment = 0
 
-[node name="Status" type="Label" parent="Center/Panel/Rows"]
+[node name="Status" type="Label" parent="Center/Home/Rows"]
 unique_name_in_owner = true
 visible = false
 layout_mode = 2
@@ -115,75 +117,108 @@ theme_override_colors/font_color = Color(1, 0.48, 0.42, 1)
 theme_override_font_sizes/font_size = 15
 autowrap_mode = 3
 
-[node name="Footer" type="HBoxContainer" parent="Center/Panel/Rows"]
+[node name="Footer" type="HBoxContainer" parent="Center/Home/Rows"]
 layout_mode = 2
 theme_override_constants/separation = 8
 
-[node name="SettingsButton" type="Button" parent="Center/Panel/Rows/Footer"]
+[node name="SettingsButton" type="Button" parent="Center/Home/Rows/Footer"]
 layout_mode = 2
 size_flags_horizontal = 3
 text = "Settings"
 flat = true
 
-[node name="CreditsButton" type="Button" parent="Center/Panel/Rows/Footer"]
+[node name="CreditsButton" type="Button" parent="Center/Home/Rows/Footer"]
 layout_mode = 2
 size_flags_horizontal = 3
 text = "Credits"
 flat = true
 
-[node name="Quit" type="Button" parent="Center/Panel/Rows/Footer"]
+[node name="Quit" type="Button" parent="Center/Home/Rows/Footer"]
 layout_mode = 2
 size_flags_horizontal = 3
 text = "Quit"
 flat = true
 
-[node name="SetupDialog" type="AcceptDialog" parent="."]
+[node name="SetupPage" type="VBoxContainer" parent="Center"]
 unique_name_in_owner = true
-theme = ExtResource("2_theme")
-title = "Match setup"
-exclusive = true
 visible = false
-ok_button_text = "Done"
+custom_minimum_size = Vector2(404, 0)
+layout_mode = 2
+theme_override_constants/separation = 9
 
-[node name="Fields" type="GridContainer" parent="SetupDialog"]
-custom_minimum_size = Vector2(334, 0)
+[node name="Title" type="Label" parent="Center/SetupPage"]
+layout_mode = 2
+theme_override_fonts/font = ExtResource("4_display")
+theme_override_font_sizes/font_size = 54
+text = "Match setup"
+
+[node name="MapLabel" type="Label" parent="Center/SetupPage"]
+layout_mode = 2
+text = "Map"
+
+[node name="MapChoices" type="HBoxContainer" parent="Center/SetupPage"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="MapDetails" type="Label" parent="Center/SetupPage"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.74, 0.77, 0.75, 1)
+theme_override_font_sizes/font_size = 16
+
+[node name="Fields" type="GridContainer" parent="Center/SetupPage"]
+layout_mode = 2
 theme_override_constants/h_separation = 14
 theme_override_constants/v_separation = 7
 columns = 2
 
-[node name="MapLabel" type="Label" parent="SetupDialog/Fields"]
-layout_mode = 2
-text = "Map"
-
-[node name="Map" type="OptionButton" parent="SetupDialog/Fields"]
-unique_name_in_owner = true
-layout_mode = 2
-size_flags_horizontal = 3
-tooltip_text = "The map of your own server. Joining a server, you play its map."
-
-[node name="BotsLabel" type="Label" parent="SetupDialog/Fields"]
+[node name="BotsLabel" type="Label" parent="Center/SetupPage/Fields"]
 layout_mode = 2
 text = "Bots"
 
-[node name="Bots" type="SpinBox" parent="SetupDialog/Fields"]
+[node name="Bots" type="SpinBox" parent="Center/SetupPage/Fields"]
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
-tooltip_text = "Bots on your own server, in solo play and when you host: they look for enemies and fight. Half of them are on your team."
+tooltip_text = "Half the bots join your team. This count also applies when you host."
 max_value = 240.0
 value = 24.0
 
-[node name="NameLabel" type="Label" parent="SetupDialog/Fields"]
+[node name="NameLabel" type="Label" parent="Center/SetupPage/Fields"]
 layout_mode = 2
 text = "Name"
 
-[node name="Name" type="LineEdit" parent="SetupDialog/Fields"]
+[node name="Name" type="LineEdit" parent="Center/SetupPage/Fields"]
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
 text = "Player"
 placeholder_text = "Player"
 max_length = 32
+
+[node name="SetupStatus" type="Label" parent="Center/SetupPage"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 0.48, 0.42, 1)
+theme_override_font_sizes/font_size = 15
+autowrap_mode = 3
+
+[node name="Start" type="Button" parent="Center/SetupPage"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 46)
+layout_mode = 2
+theme_type_variation = &"PrimaryButton"
+theme_override_fonts/font = ExtResource("4_display")
+theme_override_font_sizes/font_size = 29
+text = "Start match"
+alignment = 0
+
+[node name="Back" type="Button" parent="Center/SetupPage"]
+layout_mode = 2
+text = "Back"
+alignment = 0
 
 [node name="NetworkDialog" type="AcceptDialog" parent="."]
 unique_name_in_owner = true
@@ -359,18 +394,19 @@ text = "[b]Gunshot Sounds[/b] — Vincent Sevedge (Tabasco), © 2009. Edited for
 [b]Gun Reload Sound Effects[/b] — Brian MacIntosh (BMacZero). Edited for Crowfield.
 [url=https://opengameart.org/content/gun-reload-sound-effects]Source[/url] · [url=https://creativecommons.org/publicdomain/zero/1.0/]CC0 1.0[/url]"
 
-[connection signal="pressed" from="Center/Panel/Rows/Solo" to="." method="_on_solo_pressed"]
-[connection signal="pressed" from="Center/Panel/Rows/SoloSetup/Setup" to="." method="_on_setup_pressed"]
-[connection signal="item_selected" from="SetupDialog/Fields/Map" to="." method="_update_match_summary"]
-[connection signal="value_changed" from="SetupDialog/Fields/Bots" to="." method="_update_match_summary"]
+[connection signal="pressed" from="Center/Home/Rows/Solo" to="." method="_on_solo_pressed"]
+[connection signal="pressed" from="Center/Home/Rows/SoloSetup/Setup" to="." method="_on_setup_pressed"]
+[connection signal="value_changed" from="Center/SetupPage/Fields/Bots" to="." method="_update_match_summary"]
+[connection signal="pressed" from="Center/SetupPage/Start" to="." method="_on_solo_pressed"]
+[connection signal="pressed" from="Center/SetupPage/Back" to="." method="_on_setup_back_pressed"]
 [connection signal="pressed" from="NetworkDialog/Network/HostRow/Host" to="." method="_on_host_pressed"]
 [connection signal="text_submitted" from="NetworkDialog/Network/JoinRow/Address" to="." method="_on_address_submitted"]
 [connection signal="pressed" from="NetworkDialog/Network/JoinRow/Join" to="." method="_on_join_pressed"]
-[connection signal="pressed" from="Center/Panel/Rows/Footer/Quit" to="." method="_on_quit_pressed"]
-[connection signal="pressed" from="Center/Panel/Rows/Multiplayer" to="." method="_on_multiplayer_pressed"]
-[connection signal="pressed" from="Center/Panel/Rows/Footer/CreditsButton" to="." method="_on_credits_pressed"]
+[connection signal="pressed" from="Center/Home/Rows/Footer/Quit" to="." method="_on_quit_pressed"]
+[connection signal="pressed" from="Center/Home/Rows/Multiplayer" to="." method="_on_multiplayer_pressed"]
+[connection signal="pressed" from="Center/Home/Rows/Footer/CreditsButton" to="." method="_on_credits_pressed"]
 [connection signal="meta_clicked" from="Credits/CreditsText" to="." method="_on_credit_link_clicked"]
-[connection signal="pressed" from="Center/Panel/Rows/Footer/SettingsButton" to="." method="_on_settings_pressed"]
+[connection signal="pressed" from="Center/Home/Rows/Footer/SettingsButton" to="." method="_on_settings_pressed"]
 [connection signal="confirmed" from="Settings" to="." method="_on_settings_confirmed"]
 [connection signal="value_changed" from="Settings/Rows/Volume" to="." method="_display_settings"]
 [connection signal="value_changed" from="Settings/Rows/Sensitivity" to="." method="_display_settings"]
