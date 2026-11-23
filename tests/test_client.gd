@@ -22,14 +22,14 @@ func test_grounded_boots_lift_only_leg_pose_on_a_slope() -> void:
 	var hand_pose := skeleton.get_bone_global_pose(hand)
 	var rig := RagdollRig.build(asset, skeleton)
 	var initial := skeleton.global_transform * skeleton.get_bone_global_pose(highest_foot)
-	var before := GroundedFeet.sole_contact(initial, ground)
+	var before := AuthoredSoldier.sole_contact(initial, ground, false)
 	check(before.y < ground.height_at(before.x, before.z) - 0.055, "the uphill boot begins below the test slope")
 
 	view.set_foot_terrain(ground)
 	check(view.grounded_feet.active, "the visual modifier follows grounded detail")
 	view.grounded_feet.place_boots()
 	var applied := skeleton.global_transform * skeleton.get_bone_global_pose(highest_foot)
-	var after := GroundedFeet.sole_contact(applied, ground)
+	var after := AuthoredSoldier.sole_contact(applied, ground, false)
 	check(after.y > ground.height_at(after.x, after.z) - 0.015, "the boot clears the slope to the sole tolerance")
 	check(before.distance_squared_to(Vector3(after.x, before.y, after.z)) < 0.000004, "boot retains its horizontal contact")
 	check(initial.basis.is_equal_approx(applied.basis), "boot keeps its pitch and roll")
@@ -116,6 +116,12 @@ func test_armed_pose_tracks_both_grips_and_keeps_the_stance_height() -> void:
 		var bore := -shouldered.basis.z.normalized()
 		var eye_offset := eye - rear_sight
 		check((eye_offset - eye_offset.dot(bore) * bore).length() < 0.09, "aim brings the sight to the eyeline")
+		if crouched:
+			var lead := skeleton.get_bone_global_pose(asset.bones["Foot.L"]).origin
+			var rear := skeleton.get_bone_global_pose(asset.bones["Foot.R"]).origin
+			var hips := skeleton.get_bone_global_pose(asset.bones["Hips"]).origin
+			check(lead.z - rear.z > 0.4, "crouched aim plants the lead boot and staggers the rear boot")
+			check(hips.y > 0.4, "crouched aim holds the pelvis above the deep squat")
 
 	view.animate(0.3, 0.0)
 	view.player.seek(0, true)
@@ -340,14 +346,35 @@ func test_embedded_clock_ignores_frame_stall_during_hello_round_trip() -> void:
 	check_equal(client.session.resyncs, 0, "startup clock jumps after stalled hello")
 
 
+func test_handshake_expires_on_the_servers_clock() -> void:
+	var ends := Memory.pair()
+	var remote := Handshake.new(ends[0], "Remote", Rules.new(), Callable())
+	remote._started -= Handshake.TIMEOUT + 0.1
+	remote.poll()
+	check(remote.failed() and not ends[1].is_open(), "remote deadline still uses wall time")
+
+	ends = Memory.pair()
+	var embedded := Handshake.new(ends[0], "Embedded", Rules.new(), Callable())
+	var start_tick := 15
+	embedded.poll(start_tick)
+	embedded._started -= Handshake.TIMEOUT + 0.1
+	var deadline := start_tick + roundi(Handshake.TIMEOUT * Game.TICK_RATE)
+	embedded.poll(deadline)
+	check(not embedded.failed() and ends[1].is_open(), "local handshake survives until the tick deadline")
+	embedded.poll(deadline + 1)
+	check(embedded.failed() and not ends[1].is_open(), "unanswered local handshake still times out")
+
+
 class SlowHelloClient extends ClientApp:
 	var stalled := false
 
 	func _process(delta: float) -> void:
-		super._process(delta)
-		if not stalled and _handshake != null and _handshake._sent >= 0:
+		if not stalled and _handshake != null and _local.server.player_count() > 0:
+			# The server has sent Welcome, but the renderer blocks the client
+			# before it can read the message on the next frame.
 			stalled = true
-			OS.delay_msec(425)
+			OS.delay_msec(ceili(Handshake.TIMEOUT * 1000) + 100)
+		super._process(delta)
 
 
 class SlowMapClient extends ClientApp:
