@@ -120,6 +120,7 @@ const NAMES := ["Rook", "Jackdaw", "Magpie", "Raven", "Jay", "Chough", "Crow", "
 ## Bot is what a bot keeps between ticks.
 class Bot:
 	var index := 0
+	var score: ScoreboardUpdate.Row
 	var soldier := 0
 	var state: int = State.ADVANCE
 	var think_at := 0
@@ -202,7 +203,7 @@ func count() -> int:
 	return bots.size()
 
 
-## name_of is how the kill feed calls bot number index.
+## name_of returns the display name of a bot participant.
 static func name_of(index: int) -> String:
 	var name: String = NAMES[index % NAMES.size()]
 	if index >= NAMES.size():
@@ -216,7 +217,10 @@ func spawn_all(how_many: int) -> void:
 		bot.index = i
 		bot.skill = _random.randf_range(SKILL.x, SKILL.y)
 		bots.append(bot)
-		_spawn(bot, Game.Team.BLUE if i % 2 == 0 else Game.Team.RED)
+		var team := Game.Team.BLUE if i % 2 == 0 else Game.Team.RED
+		bot.score = ScoreboardUpdate.Row.new(Game.MAX_PLAYERS + i, name_of(i), team)
+		_spawn(bot, team)
+		_server.scoreboard.add(bot.score)
 
 
 func reset_for_round() -> void:

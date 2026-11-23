@@ -55,7 +55,18 @@ var jumps := 0
 ## reconnect_lines tell of a lost connection; empty while there is none.
 var reconnect_lines: PackedStringArray = []
 var match_state: MatchState
-var scoreboard_open := false
+var scoreboard_open := false:
+	set(value):
+		if value and not scoreboard_open:
+			_scoreboard_page = 0
+		scoreboard_open = value
+var _scoreboard_session := -1
+var _scoreboard_revision := -1
+var _scoreboard_complete := false
+var _scoreboard_local := -1
+var _scoreboard_page := 0
+var _scoreboard_teams: Array[Array] = [[], []]
+var _scoreboard_duplicates: Dictionary[String, int] = {}
 var replay_available := false
 var reinforcement := ""
 var map_scene: MapScene
@@ -87,7 +98,7 @@ func flag_label_exclusion() -> Rect2:
 
 func _draw() -> void:
 	_scale = clampf(size.y / 720.0, 0.75, 4.0)
-	if scoreboard_open and match_state != null and map_scene != null:
+	if scoreboard_open:
 		_draw_scoreboard()
 		return
 	if vehicle != null:
@@ -182,56 +193,128 @@ func _match_clock() -> String:
 	return "%d:%02d" % [match_state.seconds / 60, match_state.seconds % 60]
 
 
+func sync_scoreboard(session: ClientSession) -> void:
+	var id := session.get_instance_id()
+	if id == _scoreboard_session and session.scoreboard_revision == _scoreboard_revision:
+		return
+	_scoreboard_session = id
+	_scoreboard_revision = session.scoreboard_revision
+	_scoreboard_complete = session.scoreboard_complete
+	_scoreboard_local = session.welcome.player
+	for rows in _scoreboard_teams:
+		rows.clear()
+	_scoreboard_duplicates.clear()
+	if not _scoreboard_complete:
+		return
+	for row in session.scoreboard_rows.values():
+		_scoreboard_teams[row.team - Game.Team.BLUE].append(row)
+		if not row.is_bot():
+			var key := _scoreboard_name(row).to_lower()
+			_scoreboard_duplicates[key] = _scoreboard_duplicates.get(key, 0) + 1
+	for rows in _scoreboard_teams:
+		rows.sort_custom(_scoreboard_order)
+	_scoreboard_page = mini(_scoreboard_page, _scoreboard_pages() - 1)
+
+
+func turn_scoreboard_page(direction: int) -> void:
+	_scoreboard_page = clampi(_scoreboard_page + direction, 0, _scoreboard_pages() - 1)
+
+
+func _scoreboard_order(a: ScoreboardUpdate.Row, b: ScoreboardUpdate.Row) -> bool:
+	if (a.id == _scoreboard_local) != (b.id == _scoreboard_local):
+		return a.id == _scoreboard_local
+	if a.kills != b.kills:
+		return a.kills > b.kills
+	if a.deaths != b.deaths:
+		return a.deaths < b.deaths
+	return a.id < b.id
+
+
+func _scoreboard_rows_per_page() -> int:
+	var layout_scale := clampf(size.y / 720.0, 0.75, 4.0)
+	return clampi(floori((size.y / layout_scale - 168) / 21.0), 1, 24)
+
+
+func _scoreboard_pages() -> int:
+	var team_size := maxi(_scoreboard_teams[0].size(), _scoreboard_teams[1].size())
+	return maxi(1, ceili(float(team_size) / _scoreboard_rows_per_page()))
+
+
 func _draw_scoreboard() -> void:
 	draw_rect(Rect2(Vector2.ZERO, size), Color8(8, 13, 16, 105))
-	var width := minf(504, size.x / _scale - 32)
-	var height := 159 + 24 * map_scene.flags.size()
+	if not _scoreboard_complete:
+		_centered("Loading scoreboard…", size * 0.5, 24, WHITE, _DISPLAY)
+		return
+	var width := minf(804, size.x / _scale - 32)
+	var team_size := maxi(_scoreboard_teams[0].size(), _scoreboard_teams[1].size())
+	var page_size := _scoreboard_rows_per_page()
+	var height := 128 + 21 * mini(page_size, team_size)
 	var panel := (size - Vector2(width, height) * _scale) * 0.5
 	_draw_scoreboard_shade(panel.y, panel.y + height * _scale)
-	var left := panel.x
-	var right := panel.x + width * _scale
-	var center := size.x * 0.5
-	_text("Scoreboard", panel, 27, WHITE, _DISPLAY)
-	var clock := _match_clock()
-	_text(clock, Vector2(right - _measure(clock, 20, _DISPLAY), panel.y + 4 * _scale), 20, LIGHT_GRAY, _DISPLAY)
-	var blue := team_color(Game.Team.BLUE).lightened(0.48)
-	var red := team_color(Game.Team.RED).lightened(0.48)
-	var score_row := panel.y + 36 * _scale
-	_text("Blue", Vector2(left, score_row + 10 * _scale), 22, blue)
-	_centered(str(match_state.blue_score), Vector2(center - 44 * _scale, score_row), 37, blue, _DISPLAY)
-	_centered(str(match_state.red_score), Vector2(center + 44 * _scale, score_row), 37, red, _DISPLAY)
-	_text("Red", Vector2(right - _measure("Red", 22), score_row + 10 * _scale), 22, red)
-	_box(panel, 0, 82, width, 1, PANEL_EDGE)
-
-	var show_distance := has_soldier and not dead and match_state.result == MatchState.Result.ACTIVE
-	var head_y := panel.y + 92 * _scale
-	var distance_x := panel.x + width * _scale * 0.51
-	_text("Objective", Vector2(left, head_y), 15, LIGHT_GRAY)
-	if show_distance:
-		_centered("Distance", Vector2(distance_x, head_y), 15, LIGHT_GRAY)
-	_text("Control", Vector2(right - _measure("Control", 15), head_y), 15, LIGHT_GRAY)
-	for index in map_scene.flags.size():
-		var flag := match_state.flags[index]
-		var zone := map_scene.flags[index]
-		var y := panel.y + (113 + index * 24) * _scale
-		_text(zone.name, Vector2(left, y), 18, WHITE)
-		if show_distance:
-			var distance := roundi(Game.horizontal_length(zone.center - feet))
-			_centered("%d m" % distance, Vector2(distance_x, y), 17, LIGHT_GRAY)
-		var owner := "Neutral" if flag.owner == Game.Team.NONE else Game.team_name(flag.owner).capitalize()
-		var status := owner
-		var tint := team_color(flag.owner).lightened(0.45) if flag.owner != Game.Team.NONE else LIGHT_GRAY
-		if flag.contested:
-			status = "%s  ·  Contested" % owner
-			tint = GOLD
-		elif flag.challenger != Game.Team.NONE and flag.progress > 0:
-			status = "%s  ·  %s %d%%" % [owner, Game.team_name(flag.challenger).capitalize(), flag.progress]
-			tint = team_color(flag.challenger).lightened(0.45)
-		_text(status, Vector2(right - _measure(status, 17), y), 17, tint)
-	var footer_y := panel.y + (height - 23) * _scale
-	_text("Your kills  %d" % match_state.kills, Vector2(left, footer_y), 18, WHITE, _DISPLAY)
+	_text("Scoreboard", panel, 28, WHITE, _DISPLAY)
+	if match_state != null:
+		var clock := _match_clock()
+		_text(clock, panel + Vector2(width * _scale - _measure(clock, 20, _DISPLAY), 5 * _scale), 20, LIGHT_GRAY, _DISPLAY)
+	var team_width := (width - 32) / 2.0
+	var page := mini(_scoreboard_page, _scoreboard_pages() - 1)
+	_draw_scoreboard_team(panel, team_width, Game.Team.BLUE, page, page_size)
+	_draw_scoreboard_team(panel + Vector2((team_width + 32) * _scale, 0), team_width, Game.Team.RED, page, page_size)
+	var footer := panel + Vector2(0, height - 18) * _scale
+	if _scoreboard_pages() > 1:
+		_text("Wheel or Page Up / Down", footer, 15, LIGHT_GRAY)
+		_centered("%d / %d" % [page + 1, _scoreboard_pages()], Vector2(size.x * 0.5, footer.y), 16, WHITE, _DISPLAY)
 	var close_hint := "Release Tab"
-	_text(close_hint, Vector2(right - _measure(close_hint, 15), footer_y + 2 * _scale), 15, LIGHT_GRAY)
+	_text(close_hint, footer + Vector2(width * _scale - _measure(close_hint, 15), 0), 15, LIGHT_GRAY)
+
+
+func _draw_scoreboard_team(panel: Vector2, width: float, side: int, page: int, page_size: int) -> void:
+	var tint := team_color(side).lightened(0.48)
+	var right := panel.x + width * _scale
+	var kill_x := right - 68 * _scale
+	var death_x := right - 19 * _scale
+	var rows: Array = _scoreboard_teams[side - Game.Team.BLUE]
+	_text(Game.team_name(side).capitalize(), panel + Vector2(0, 39) * _scale, 24, tint, _DISPLAY)
+	if match_state != null:
+		var score := str(match_state.blue_score if side == Game.Team.BLUE else match_state.red_score)
+		_text(score, Vector2(right - _measure(score, 24, _DISPLAY), panel.y + 39 * _scale), 24, tint, _DISPLAY)
+	_box(panel, 0, 70, width, 1, tint)
+	var labels_y := panel.y + 76 * _scale
+	_text("Name", Vector2(panel.x, labels_y), 14, LIGHT_GRAY)
+	_centered("Kills", Vector2(kill_x, labels_y), 14, LIGHT_GRAY)
+	_centered("Deaths", Vector2(death_x, labels_y), 14, LIGHT_GRAY)
+	var tag_x := kill_x - 49 * _scale
+	var start := page * page_size
+	var end := mini(rows.size(), start + page_size)
+	for index in range(start, end):
+		var row: ScoreboardUpdate.Row = rows[index]
+		var y := panel.y + (98 + (index - start) * 21) * _scale
+		var own := row.id == _scoreboard_local
+		if own:
+			draw_rect(Rect2(panel.x - 4 * _scale, y - 2 * _scale, width * _scale + 4 * _scale, 20 * _scale),
+				Color(tint, 0.19))
+		var label := _scoreboard_display_name(row, tag_x - panel.x - 6 * _scale)
+		_text(label, Vector2(panel.x, y), 16, WHITE)
+		if own or row.is_bot():
+			_text("YOU" if own else "BOT", Vector2(tag_x, y + _scale), 12, tint if own else LIGHT_GRAY, _DISPLAY)
+		_centered(str(row.kills), Vector2(kill_x, y), 16, WHITE, _DISPLAY)
+		_centered(str(row.deaths), Vector2(death_x, y), 16, LIGHT_GRAY, _DISPLAY)
+
+
+func _scoreboard_name(row: ScoreboardUpdate.Row) -> String:
+	var label := row.name.strip_escapes().strip_edges()
+	return "Player" if label.is_empty() else label
+
+
+func _scoreboard_display_name(row: ScoreboardUpdate.Row, width: float) -> String:
+	var label := _scoreboard_name(row)
+	var suffix := ""
+	if not row.is_bot() and _scoreboard_duplicates.get(label.to_lower(), 0) > 1:
+		suffix = " · %02d" % (row.id + 1)
+	if _measure(label + suffix, 16) <= width:
+		return label + suffix
+	while label.length() > 1 and _measure(label + "…" + suffix, 16) > width:
+		label = label.left(-1)
+	return label + "…" + suffix
 
 
 ## Fade the score rows into the live scene above and below.

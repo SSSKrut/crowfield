@@ -668,6 +668,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if not _captured:
 		return
+	if Input.is_action_pressed("scoreboard") and _page_scoreboard(event):
+		get_viewport().set_input_as_handled()
+		return
 	if event is InputEventKey and event.pressed and not event.echo and event.keycode in [KEY_ENTER, KEY_KP_ENTER]:
 		if _can_replay():
 			_replay_round()
@@ -713,6 +716,16 @@ func _unhandled_input(event: InputEvent) -> void:
 		_reset()
 	elif event.is_action_pressed("debug_knock_down"):
 		soldier_views.knock_down(camera.global_position)
+
+
+func _page_scoreboard(event: InputEvent) -> bool:
+	if event.is_action_pressed("weapon_previous") or (event is InputEventKey and event.pressed and event.physical_keycode == KEY_PAGEUP):
+		hud.turn_scoreboard_page(-1)
+		return true
+	if event.is_action_pressed("weapon_next") or (event is InputEventKey and event.pressed and event.physical_keycode == KEY_PAGEDOWN):
+		hud.turn_scoreboard_page(1)
+		return true
+	return false
 
 
 ## _slot_pressed is the slot whose key, 1 to 7, the event pressed, or -1.
@@ -1616,7 +1629,10 @@ func _update_hud(feet: Vector3, own: Soldier) -> void:
 		lines.append(_capture_notice)
 	hud.lines = lines
 	hud.scoreboard_open = connected and _captured and _focused and _reconnect_since < 0 \
-		and session.match_state != null and Input.is_action_pressed("scoreboard")
+		and Input.is_action_pressed("scoreboard")
+	if hud.scoreboard_open:
+		session.request_scoreboard()
+		hud.sync_scoreboard(session)
 	_update_vehicle_hud(feet)
 	var arsenal := _arsenal()
 	hud.arsenal = arsenal

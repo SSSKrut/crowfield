@@ -150,7 +150,7 @@ func release(soldier: Soldier) -> void:
 ## blast does a blast's damage to the tanks it reaches: a direct hit by the
 ## projectile all of it, nearer ones a share. A team's own blasts spare its
 ## tanks without friendly fire.
-func blast(at: Vector3, tuning: WeaponTuning, kind: int, owner: int, team: int, name: String) -> void:
+func blast(at: Vector3, tuning: WeaponTuning, kind: int, owner: int, team: int, launcher: ScoreboardUpdate.Row) -> void:
 	if not Vehicle.DAMAGE.has(kind):
 		return
 	for vehicle in all:
@@ -161,11 +161,11 @@ func blast(at: Vector3, tuning: WeaponTuning, kind: int, owner: int, team: int, 
 			continue
 		var amount := Vehicle.damage_from(kind, tuning, 0.0 if distance <= DIRECT_HIT else distance)
 		if amount > 0:
-			damage(vehicle, amount, owner, team, kind, name)
+			damage(vehicle, amount, owner, team, kind, launcher)
 
 
 ## damage takes health from a tank; at none it burns, killing its driver.
-func damage(vehicle: Vehicle, amount: int, by: int, team: int, kind: int, name: String = "") -> void:
+func damage(vehicle: Vehicle, amount: int, by: int, team: int, kind: int, launcher: ScoreboardUpdate.Row = null) -> void:
 	vehicle.health = maxi(0, vehicle.health - amount)
 	if vehicle.health > 0:
 		return
@@ -176,7 +176,7 @@ func damage(vehicle: Vehicle, amount: int, by: int, team: int, kind: int, name: 
 	vehicle.driver = 0
 	if driver != null and driver.alive:
 		var taken := _server.damage(driver, Game.MAX_HEALTH)
-		_server.tell_hit(by, team, kind, Vector3.UP, driver, Hitboxes.Zone.NONE, taken[0], taken[1], name)
+		_server.tell_hit(by, team, kind, Vector3.UP, driver, Hitboxes.Zone.NONE, taken[0], taken[1], launcher)
 	var blast := Messages.Blast.new()
 	blast.tick = _server.tick
 	blast.kind = WeaponTuning.Kind.TANK_CANNON
@@ -202,10 +202,8 @@ func _run_over(vehicle: Vehicle) -> void:
 		if absf(local.x) > Vehicle.HULL_HALF.x + 0.4 or absf(local.z) > Vehicle.HULL_HALF.z + 0.4 or local.y < -0.5 or local.y > 2.6:
 			continue
 		var taken := _server.damage(victim, Game.MAX_HEALTH)
-		var driver := _server.soldiers.get_soldier(vehicle.driver)
 		_server.tell_hit(vehicle.driver, vehicle.team, WeaponTuning.Kind.TANK_CANNON,
-			Vector3(sin(vehicle.yaw), 0, -cos(vehicle.yaw)), victim, Hitboxes.Zone.NONE, taken[0], taken[1],
-			_server.name_of(driver) if driver != null else "")
+			Vector3(sin(vehicle.yaw), 0, -cos(vehicle.yaw)), victim, Hitboxes.Zone.NONE, taken[0], taken[1])
 
 
 ## _distance_to is how far a point is from a tank's hull or turret.

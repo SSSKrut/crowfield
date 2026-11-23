@@ -120,7 +120,7 @@ func _build(index: int) -> void:
 		if snapshot.match_state == null:
 			snapshot.match_state = MatchState.new()
 		snapshot.match_state.set_round(server.flag_match.state)
-		snapshot.match_state.kills = player.kills
+		snapshot.match_state.kills = player.score.kills
 	var packer := player.packer
 	var candidates := player.candidates
 	var next := 0
