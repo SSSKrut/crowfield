@@ -24,6 +24,13 @@ func _ready() -> void:
 	_started_usec = _next_usec
 
 
+## Keep paused wall time out of the tick schedule and statistics.
+func defer_clock(duration_usec: int) -> void:
+	_next_usec += duration_usec
+	_last_stats_usec += duration_usec
+	_started_usec += duration_usec
+
+
 func _process(_delta: float) -> void:
 	var now := Time.get_ticks_usec()
 	var ran := 0

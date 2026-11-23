@@ -203,11 +203,16 @@ func test_scoreboard_follows_tab_and_releases_at_the_menu_and_focus_loss() -> vo
 	check(not _client.hud.scoreboard_open, "releasing Tab closes the scoreboard")
 
 	_key(KEY_TAB, true)
+	await _tree.process_frame
+	await _tree.process_frame
+	check(_client.hud.scoreboard_open, "fixture opens the scoreboard before Escape")
 	_tap(KEY_ESCAPE)
 	await _tree.process_frame
 	await _tree.process_frame
-	check(_client.menu.visible and not _client.hud.scoreboard_open, "Escape opens the menu above regular play")
+	check(_tree.paused and _client.menu.visible and not _client.hud.visible
+		and not _client.hud.scoreboard_open, "Escape pauses solo play and clears the scoreboard")
 	_tap(KEY_ESCAPE)
+	check(not _tree.paused and _client.hud.visible, "Escape resumes play and restores the HUD")
 	_key(KEY_TAB, true, true)
 	await _tree.process_frame
 	await _tree.process_frame
@@ -228,26 +233,31 @@ func test_scoreboard_follows_tab_and_releases_at_the_menu_and_focus_loss() -> vo
 	check(not _client.hud.scoreboard_open, "Tab held through a focus change cannot reopen the scoreboard")
 
 
-func _start_client(frame_cap: int = 144, map: String = "prototype") -> bool:
+func _start_client(frame_cap: int = 144, map_name: String = "prototype", extra: PackedStringArray = []) -> bool:
 	_tree = Engine.get_main_loop() as SceneTree
 	await _tree.process_frame
+	_create_client(frame_cap, map_name, extra)
+	for frame in FRAME_LIMIT:
+		await _tree.process_frame
+		if _client.predictor.started and _client.predictor.soldier.grounded:
+			break
+	if not _client.predictor.started or not _client.predictor.soldier.grounded:
+		fail("client never reached a grounded soldier")
+		return false
+	return true
+
+
+func _create_client(frame_cap: int, map_name: String, extra: PackedStringArray) -> void:
 	var max_fps := Engine.max_fps
 	var mouse_mode := Input.mouse_mode
-	_client = ClientApp.create(["-map=" + map, "-volume=0", "-config-dir=", "-max-fps=%d" % frame_cap])
+	var flags := PackedStringArray(["-map=" + map_name, "-volume=0", "-config-dir=", "-max-fps=%d" % frame_cap])
+	_client = ClientApp.create(flags + extra)
 	_client.left.connect(fail)
 	cleanup(func() -> void:
 		_client.free()
 		Engine.max_fps = max_fps
 		Input.mouse_mode = mouse_mode)
 	_tree.root.add_child(_client)
-	for frame in FRAME_LIMIT:
-		await _tree.process_frame
-		if _client.predictor.started and _client.predictor.soldier.grounded:
-			break
-	if not _client.predictor.started or not _client.predictor.soldier.grounded:
-		fail("solo client never reached a grounded soldier")
-		return false
-	return true
 
 
 func _commands(from_tick: int, count: int) -> Array[InputCommand]:
@@ -327,15 +337,159 @@ func test_solo_release_and_fresh_press_reach_server_after_a_stall() -> void:
 		return
 	OS.delay_msec(420)
 	_key(KEY_W, false)
+	var paused_tick := server.tick
 	_tap(KEY_ESCAPE)
 	check(_client.menu.visible, "Escape in the recovered input batch must open the menu")
 	await _tree.process_frame
-	check_equal(player.last.forward_axis(), 0.0, "server repeated held W after release and opening the menu")
+	check_equal(server.tick, paused_tick, "server advanced the held movement during the pause")
 	_tap(KEY_ESCAPE)
+	var commands := await _commands(_client.session.tick, 1)
+	check(commands.size() == 1 and commands[0].forward_axis() == 0, "held W leaked into the first resumed command")
+	var next_tick := _client.session.tick
 	_key(KEY_W, true)
-	await _tree.process_frame
-	check_equal(player.last.forward_axis(), 1.0, "fresh W did not reach the server on the next frame")
+	commands = await _commands(next_tick, 1)
+	check(commands.size() == 1 and commands[0].forward_axis() == 1 and player.last.forward_axis() == 1,
+		"fresh W must reach the server on the next command")
 	_key(KEY_W, false)
 	for _frame in 24:
 		await _tree.process_frame
 	check_equal(_client.session.resyncs, 0, "ordinary solo stall took the command clock out of sync")
+
+
+func test_solo_menu_freezes_the_round_and_resumes_after_snapshot_timeout() -> void:
+	if not await _start_client(60, "valley", ["-bots=4", "-seed=5"]):
+		return
+	var server := _client._local.server
+	var first_seconds := server.flag_match.state.seconds
+	await _tree.create_timer(1.1).timeout
+	check(server.flag_match.state.seconds < first_seconds, "match clock must run before pause")
+	_tap(KEY_ESCAPE)
+	check(_tree.paused and _client.menu.visible, "Escape opens the solo pause")
+	check_equal(_client.menu.get_node("%Title").text, "Paused", "solo menu announces the pause")
+	check(_client.menu.get_node("%Resume").has_focus(), "resume receives keyboard focus")
+	var tick := server.tick
+	var command_tick := _client.session.tick
+	var seconds := server.flag_match.state.seconds
+	var camera := _client.camera.global_position
+	var soldiers := _positions(server)
+
+	_key(KEY_ESCAPE, true, true)
+	_key(KEY_ESCAPE, false)
+	check(_tree.paused, "an Escape repeat must keep the menu open")
+	_tree.root.focus_exited.emit()
+	_tap(KEY_ESCAPE)
+	check(_tree.paused, "an unfocused window must stay paused")
+	_tree.root.focus_entered.emit()
+	await _tree.create_timer(ClientSession.SERVER_TIMEOUT + 0.1).timeout
+	check_equal(server.tick, tick, "embedded server tick is frozen")
+	check_equal(_client.session.tick, command_tick, "command clock is frozen")
+	check_equal(server.flag_match.state.seconds, seconds, "round timer is frozen")
+	check_equal(_positions(server), soldiers, "AI and player positions are frozen")
+	check_equal(_client.camera.global_position, camera, "game camera is frozen")
+
+	_tap(KEY_ESCAPE)
+	check(not _tree.paused and not _client.menu.visible and _client._captured, "Escape returns to gameplay")
+	await _tree.process_frame
+	check(server.tick - tick <= 3, "paused time must not become catch-up ticks")
+	await _tree.create_timer(1.1).timeout
+	check(_client.session.is_alive(), "resuming must not time out the local session")
+	check(server.flag_match.state.seconds < seconds, "round clock resumes")
+	check(_positions(server) != soldiers, "AI resumes")
+
+
+func test_local_simulated_network_does_not_catch_up_on_resume() -> void:
+	if not await _start_client(60, "valley", ["-netsim=delay=30ms"]):
+		return
+	var server := _client._local.server
+	_tap(KEY_ESCAPE)
+	var paused_tick := server.tick
+	await _tree.create_timer(0.4).timeout
+	check_equal(server.tick, paused_tick, "loopback match with simulated latency pauses")
+	_tap(KEY_ESCAPE)
+	await _tree.process_frame
+	check(server.tick - paused_tick <= 3, "the local runner must discard paused time")
+	await _tree.create_timer(0.2).timeout
+	check(server.tick > paused_tick and _client.session.is_alive(), "the local runner resumes")
+
+
+func test_hosted_menu_keeps_the_round_running() -> void:
+	var port := _loopback_port()
+	if not check(port > 0, "test requires a loopback port"):
+		return
+	if not await _start_client(60, "valley", ["-bots=4", "-host=127.0.0.1:%d" % port]):
+		return
+	var server := _client._local.server
+	_tap(KEY_ESCAPE)
+	check(_client.menu.visible and not _tree.paused, "hosting keeps the shared match live")
+	check_equal(_client.menu.get_node("%Title").text, "Match menu", "online menu does not announce a pause")
+	var tick := server.tick
+	var commands := await _commands(_client.session.tick, 2)
+	check(server.tick > tick, "embedded multiplayer server runs behind the menu")
+	check(commands.size() == 2 and commands[0].forward_axis() == 0, "host still sends neutral commands")
+	_tap(KEY_ESCAPE)
+	check(not _client.menu.visible and not _tree.paused, "online Escape resumes controls")
+
+
+func test_remote_menu_keeps_receiving_snapshots() -> void:
+	var port := _loopback_port()
+	if not check(port > 0, "test requires a loopback port"):
+		return
+	var root := (Engine.get_main_loop() as SceneTree).root
+	var base := "user://pause-test-%d" % OS.get_process_id()
+	var dedicated := DedicatedServer.create([
+		"-listen=127.0.0.1:%d" % port, "-map=valley", "-bots=4", "-stats=0s",
+		"-cert=" + base + ".crt", "-key=" + base + ".key",
+	])
+	cleanup(func() -> void:
+		dedicated.free()
+		DirAccess.remove_absolute(base + ".crt")
+		DirAccess.remove_absolute(base + ".key"))
+	root.add_child(dedicated)
+	if not await _start_client(60, "valley", ["-connect=127.0.0.1:%d" % port]):
+		return
+	_tap(KEY_ESCAPE)
+	check(_client.menu.visible and not _tree.paused, "remote match doesn't pause")
+	var previous := _client.session.received
+	await _tree.create_timer(0.2).timeout
+	check(_client.session.received > previous, "remote snapshots continue behind menu")
+	_tap(KEY_ESCAPE)
+	check(not _client.menu.visible and _client._captured, "remote Escape resumes controls")
+
+
+func test_solo_menu_can_leave_while_starting() -> void:
+	_tree = Engine.get_main_loop() as SceneTree
+	await _tree.process_frame
+	_create_client(60, "valley", [])
+	check(_client.session == null, "fixture must open the menu before handshake")
+	_tap(KEY_ESCAPE)
+	check(_tree.paused and _client.menu.visible, "Escape remains available before connecting")
+	_client.left.disconnect(fail)
+	_client.menu.left.emit()
+	check(not _tree.paused, "leaving the match releases the owned pause")
+
+
+func test_solo_menu_releases_pause_on_replay() -> void:
+	if not await _start_client(60, "valley", ["-solo-replay"]):
+		return
+	_client.session.match_state.result = MatchState.Result.BLUE
+	_tap(KEY_ESCAPE)
+	check(_client.menu.get_node("%Replay").visible, "completed match exposes replay")
+	check(_client.menu.get_node("%Replay").has_focus(), "replay is available from keyboard")
+	_client.menu.get_node("%Replay").pressed.emit()
+	check(not _tree.paused, "replay releases the owned pause")
+
+
+static func _positions(server: Server) -> Dictionary:
+	var positions := {}
+	for soldier in server.soldiers.all():
+		positions[soldier.id] = soldier.position
+	return positions
+
+
+static func _loopback_port() -> int:
+	var socket := PacketPeerUDP.new()
+	if socket.bind(0, "127.0.0.1") != OK:
+		return 0
+	var port := socket.get_local_port()
+	socket.close()
+	return port

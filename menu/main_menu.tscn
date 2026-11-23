@@ -55,39 +55,23 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 
-[node name="Panel" type="PanelContainer" parent="Center"]
-custom_minimum_size = Vector2(418, 0)
+[node name="Panel" type="MarginContainer" parent="Center"]
+custom_minimum_size = Vector2(326, 0)
 layout_mode = 2
 
 [node name="Rows" type="VBoxContainer" parent="Center/Panel"]
 layout_mode = 2
-theme_override_constants/separation = 8
+theme_override_constants/separation = 7
 
 [node name="Title" type="Label" parent="Center/Panel/Rows"]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.95, 0.92, 0.82, 1)
 theme_override_fonts/font = ExtResource("4_display")
-theme_override_font_sizes/font_size = 84
+theme_override_font_sizes/font_size = 68
 text = "CROWFIELD"
 
-[node name="Mode" type="Label" parent="Center/Panel/Rows"]
-unique_name_in_owner = true
-layout_mode = 2
-theme_override_colors/font_color = Color(0.88, 0.74, 0.48, 1)
-theme_override_fonts/font = ExtResource("4_display")
-theme_override_font_sizes/font_size = 22
-text = "VALLEY  /  FLAG CONTROL"
-
-[node name="Subtitle" type="Label" parent="Center/Panel/Rows"]
-layout_mode = 2
-theme_override_colors/font_color = Color(0.72, 0.78, 0.77, 1)
-theme_override_font_sizes/font_size = 17
-unique_name_in_owner = true
-text = "Hold crossings to score and open forward reinforcements."
-autowrap_mode = 3
-
 [node name="Gap" type="Control" parent="Center/Panel/Rows"]
-custom_minimum_size = Vector2(0, 10)
+custom_minimum_size = Vector2(0, 4)
 layout_mode = 2
 
 [node name="Fields" type="GridContainer" parent="Center/Panel/Rows"]
@@ -96,17 +80,15 @@ theme_override_constants/h_separation = 14
 theme_override_constants/v_separation = 7
 columns = 2
 
-[node name="NameLabel" type="Label" parent="Center/Panel/Rows/Fields"]
+[node name="MapLabel" type="Label" parent="Center/Panel/Rows/Fields"]
 layout_mode = 2
-text = "Name"
+text = "Map"
 
-[node name="Name" type="LineEdit" parent="Center/Panel/Rows/Fields"]
+[node name="Map" type="OptionButton" parent="Center/Panel/Rows/Fields"]
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
-text = "Player"
-placeholder_text = "Player"
-max_length = 32
+tooltip_text = "The map of your own server. Joining a server, you play its map."
 
 [node name="BotsLabel" type="Label" parent="Center/Panel/Rows/Fields"]
 layout_mode = 2
@@ -120,31 +102,32 @@ tooltip_text = "Bots on your own server, in solo play and when you host: they lo
 max_value = 240.0
 value = 24.0
 
-[node name="MapLabel" type="Label" parent="Center/Panel/Rows/Fields"]
+[node name="NameLabel" type="Label" parent="Center/Panel/Rows/Fields"]
 layout_mode = 2
-text = "Map"
+text = "Name"
 
-[node name="Map" type="OptionButton" parent="Center/Panel/Rows/Fields"]
+[node name="Name" type="LineEdit" parent="Center/Panel/Rows/Fields"]
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
-tooltip_text = "The map of your own server. Joining a server, you play its map."
-
-[node name="SoloSeparator" type="HSeparator" parent="Center/Panel/Rows"]
-layout_mode = 2
+text = "Player"
+placeholder_text = "Player"
+max_length = 32
 
 [node name="Solo" type="Button" parent="Center/Panel/Rows"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 52)
+custom_minimum_size = Vector2(0, 42)
 layout_mode = 2
 theme_type_variation = &"PrimaryButton"
 theme_override_fonts/font = ExtResource("4_display")
-theme_override_font_sizes/font_size = 24
+theme_override_font_sizes/font_size = 23
 text = "Play solo"
+alignment = 0
 
 [node name="Multiplayer" type="Button" parent="Center/Panel/Rows"]
 layout_mode = 2
 text = "Multiplayer"
+alignment = 0
 
 [node name="Status" type="Label" parent="Center/Panel/Rows"]
 unique_name_in_owner = true
@@ -154,9 +137,6 @@ theme_override_colors/font_color = Color(1, 0.48, 0.42, 1)
 theme_override_font_sizes/font_size = 15
 autowrap_mode = 3
 
-[node name="QuitSeparator" type="HSeparator" parent="Center/Panel/Rows"]
-layout_mode = 2
-
 [node name="Footer" type="HBoxContainer" parent="Center/Panel/Rows"]
 layout_mode = 2
 theme_override_constants/separation = 8
@@ -165,17 +145,19 @@ theme_override_constants/separation = 8
 layout_mode = 2
 size_flags_horizontal = 3
 text = "Settings"
+flat = true
 
 [node name="CreditsButton" type="Button" parent="Center/Panel/Rows/Footer"]
 layout_mode = 2
 size_flags_horizontal = 3
 text = "Credits"
+flat = true
 
 [node name="Quit" type="Button" parent="Center/Panel/Rows/Footer"]
-custom_minimum_size = Vector2(0, 42)
 layout_mode = 2
 size_flags_horizontal = 3
 text = "Quit"
+flat = true
 
 [node name="NetworkDialog" type="AcceptDialog" parent="."]
 unique_name_in_owner = true
@@ -355,7 +337,6 @@ text = "[b]Gunshot Sounds[/b] — Vincent Sevedge (Tabasco), © 2009. Edited for
 [connection signal="text_submitted" from="NetworkDialog/Network/JoinRow/Address" to="." method="_on_address_submitted"]
 [connection signal="pressed" from="NetworkDialog/Network/JoinRow/Join" to="." method="_on_join_pressed"]
 [connection signal="pressed" from="Center/Panel/Rows/Footer/Quit" to="." method="_on_quit_pressed"]
-[connection signal="item_selected" from="Center/Panel/Rows/Fields/Map" to="." method="_on_map_selected"]
 [connection signal="pressed" from="Center/Panel/Rows/Multiplayer" to="." method="_on_multiplayer_pressed"]
 [connection signal="pressed" from="Center/Panel/Rows/Footer/CreditsButton" to="." method="_on_credits_pressed"]
 [connection signal="meta_clicked" from="Credits/CreditsText" to="." method="_on_credit_link_clicked"]

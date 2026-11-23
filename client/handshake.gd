@@ -43,6 +43,13 @@ func failed() -> bool:
 	return error != ""
 
 
+## Exclude time spent paused while opening the loopback match.
+func defer_timeout(seconds: float) -> void:
+	_started += seconds
+	if _sent >= 0:
+		_sent += seconds
+
+
 ## local_tick is the current tick of a server on this thread. It stays fixed
 ## while this call builds the map.
 func poll(local_tick: int = -1) -> void:

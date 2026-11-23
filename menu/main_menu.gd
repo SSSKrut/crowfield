@@ -33,9 +33,8 @@ func _ready() -> void:
 	_position_panel()
 	_port.value = ENetTransport.DEFAULT_PORT
 	for map_name in MapScene.MAPS:
-		_map.add_item(map_name.capitalize())
+		_map.add_item("Practice range" if map_name == "prototype" else map_name.capitalize())
 	_load()
-	_on_map_selected(_map.selected)
 	_show_status(message)
 	%Solo.grab_focus()
 
@@ -47,22 +46,6 @@ func _position_panel() -> void:
 	layout.pivot_offset = Vector2(size.x * layout.anchor_right, size.y) * 0.5
 	var factor := minf(size.x / 440.0, size.y / 550.0)
 	layout.scale = Vector2.ONE * clampf(factor, 0.25, 1.0)
-
-
-func _on_map_selected(index: int) -> void:
-	match MapScene.MAPS[index]:
-		"valley":
-			%Mode.text = "VALLEY  /  FLAG CONTROL"
-			%Subtitle.text = "Hold crossings to score and open forward reinforcements."
-			%Solo.text = "Play Valley solo"
-		"desert":
-			%Mode.text = "DESERT  /  FLAG CONTROL"
-			%Subtitle.text = "Hold the wells and the town square to score."
-			%Solo.text = "Play Desert solo"
-		_:
-			%Mode.text = "PRACTICE RANGE"
-			%Subtitle.text = "Practice movement and combat."
-			%Solo.text = "Play practice map solo"
 
 
 func _on_multiplayer_pressed() -> void:
