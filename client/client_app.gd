@@ -105,6 +105,7 @@ var _pitch := 0.0
 var _look := Vector2.ZERO
 var _mouse := Vector2.ZERO
 var _captured := false
+var _solo_menu_pause_usec := -1
 var _focused := true
 ## Latest non-repeat keyboard transition for each movement action.
 var _movement_key_events := {}
@@ -597,6 +598,7 @@ func _join(conn: Conn, token: PackedByteArray = PackedByteArray()) -> void:
 
 
 func _exit_tree() -> void:
+	_resume_solo_menu_pause()
 	if is_instance_valid(_graphics_viewport):
 		_graphics_viewport.size_changed.disconnect(_update_render_scale)
 		_graphics_viewport.msaa_3d = _previous_msaa
@@ -660,10 +662,9 @@ func _unhandled_input(event: InputEvent) -> void:
 	if _failed or not _focused:
 		return
 	if event.is_action_pressed("menu"):
-		if menu.visible:
-			_close_menu()
-		elif settings["frames"] == 0:
+		if not menu.visible and settings["frames"] == 0:
 			_open_menu()
+			get_viewport().set_input_as_handled()
 		return
 	if not _captured:
 		return
@@ -732,30 +733,57 @@ func _can_replay() -> bool:
 func _replay_round() -> void:
 	if _can_replay():
 		_failed = true
+		_resume_solo_menu_pause()
 		_update_native_input_scope()
 		replay_requested.emit()
 
 
-## _open_menu shows the game menu and frees the cursor; the soldier stands
-## still meanwhile.
+## Pause the solo scene tree so the simulation, physics and animation stop.
+## The menu continues handling input while the scene tree is paused.
 func _open_menu() -> void:
 	_captured = false
 	_reset_gameplay_input()
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	var solo: bool = settings["host"] == "" and settings["connect"] == ""
+	var now := Time.get_ticks_usec()
+	if solo and not get_tree().paused:
+		_solo_menu_pause_usec = now
+		get_tree().paused = true
 	menu.about = _about()
-	menu.open(_can_replay())
+	hud.scoreboard_open = false
+	hud.hide()
+	menu.open(_can_replay(), solo)
 	_update_native_input_scope()
-	_input_trace.event(Time.get_ticks_usec(), {"type": "menu", "open": true})
+	_input_trace.event(now, {"type": "menu", "open": true})
 
 
 func _close_menu() -> void:
-	menu.visible = false
+	if not _focused:
+		return
+	menu.hide()
+	hud.show()
+	_resume_solo_menu_pause()
 	_captured = true
 	_reset_gameplay_input()
-	if _focused:
-		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	_update_native_input_scope()
 	_input_trace.event(Time.get_ticks_usec(), {"type": "menu", "open": false})
+
+
+func _resume_solo_menu_pause() -> void:
+	if _solo_menu_pause_usec < 0:
+		return
+	var duration_usec := Time.get_ticks_usec() - _solo_menu_pause_usec
+	_solo_menu_pause_usec = -1
+	_frame_started_usec = -1
+	_last_frame_usec = 0
+	if _local != null:
+		_local.defer_clock(duration_usec)
+	if session != null:
+		session.defer_snapshot_timeout(duration_usec / 1000000.0)
+	if _handshake != null:
+		_handshake.defer_timeout(duration_usec / 1000000.0)
+	get_tree().paused = false
 
 
 func _set_window_focus(focused: bool) -> void:
@@ -782,7 +810,9 @@ func _about() -> String:
 		return "%s %s as %s." % [state, settings["connect"], settings["name"]]
 	var bots := " with %d bots" % settings["bots"] if settings["bots"] > 0 else ""
 	if settings["host"] == "":
-		return "Solo play on the %s%s." % [scene.name if scene != null else _map_name(), bots]
+		var map_name := scene.name if scene != null else _map_name()
+		var map_label := "Practice range" if map_name == "prototype" else map_name.capitalize()
+		return "%s · %d bots" % [map_label, settings["bots"]]
 	var port: int = ENetTransport.split_address(settings["host"])[1]
 	var addresses := PackedStringArray()
 	for interface in IP.get_local_interfaces():
@@ -1895,6 +1925,7 @@ func _finish() -> void:
 ## program ends with it when the game was started by flags.
 func _quit_with(message: String) -> void:
 	_failed = true
+	_resume_solo_menu_pause()
 	_update_native_input_scope()
 	left.emit(message)
 

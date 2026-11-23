@@ -132,6 +132,11 @@ func respawn() -> void:
 	conn.send_reliable(Conn.Channel.CONTROL, Protocol.encode(Messages.Respawn.new()))
 
 
+## A paused loopback session cannot receive snapshots until the game resumes.
+func defer_snapshot_timeout(seconds: float) -> void:
+	_heard += seconds
+
+
 ## poll applies what arrived since the last frame. It reports whether the
 ## player's own state changed, which calls for reconciliation.
 func poll() -> bool:
