@@ -13,7 +13,6 @@ const BLEND_TIME := 0.2
 var asset: CharacterAsset
 var skeleton: Skeleton3D
 var player: AnimationPlayer
-var body: MeshInstance3D
 var clip := CharacterAsset.Clip.IDLE
 var flinch: FlinchModifier
 var grounded_feet: GroundedFeet
@@ -42,7 +41,6 @@ func setup(character: CharacterAsset, model: Node3D) -> void:
 	add_child(_model)
 	skeleton = _model.find_child("Skeleton3D", true, false)
 	player = _model.find_child("AnimationPlayer", true, false)
-	body = skeleton.get_node("Body")
 	flinch = FlinchModifier.new()
 	flinch.setup(asset)
 	skeleton.add_child(flinch)
@@ -62,7 +60,6 @@ func _ready() -> void:
 	add_child(authored)
 	authored.setup()
 	authored.set_tint(_tint)
-	body.hide()
 	# The signal sees the final pose, including flinch, grounded feet and arms.
 	skeleton.skeleton_updated.connect(_retarget_body)
 

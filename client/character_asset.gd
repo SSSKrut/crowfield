@@ -1,7 +1,6 @@
 class_name CharacterAsset
 extends RefCounted
-## Shared infantry geometry and animation resources. Each soldier owns its pose,
-## and marks take their team's colour without adding a material or draw call.
+## Shared animation rig for infantry. CharacterView retargets its pose to the visible model.
 
 const CLIPS := [&"Idle", &"Walking", &"Running", &"CrouchIdle", &"CrouchWalking"]
 enum Clip { IDLE, WALKING, RUNNING, CROUCH_IDLE, CROUCH_WALKING }
@@ -10,31 +9,6 @@ const _STEP_LENGTH := [0.0, 0.98, 1.10, 0.0, 0.42]
 const _STANCE_PORTION := [0.0, 0.52, 0.40, 0.0, 0.60]
 const _CROUCH_HIP_SHIFT := 0.07
 const _CROUCH_ANKLE_DROP := 0.32
-
-const _SHADER := """
-shader_type spatial;
-uniform vec4 team_color : source_color = vec4(0.79, 0.58, 0.22, 1.0);
-
-// The garment's UVs are skinned with the mesh. Grain stays on the fabric
-// as the limbs bend, and fades away before it aliases at a distance.
-void fragment() {
-	float footprint = max(length(dFdx(UV)), length(dFdy(UV)));
-	float grain_mask = 1.0 - smoothstep(0.002, 0.014, footprint);
-	float fabric = 1.0 - smoothstep(0.35, 0.66, UV2.x);
-	vec2 thread = sin(UV * vec2(749.0, 771.0));
-	float weave = 1.0 + thread.x * thread.y * 0.11 * fabric * grain_mask;
-	float panels = sin(UV.x * 13.0 + sin(UV.y * 12.0)) * sin(UV.y * 17.0);
-	float wear = 1.0 + panels * mix(0.045, 0.085, fabric);
-	float mottling = sin(UV.x * 12.0 + sin(UV.y * 8.7))
-		+ sin(UV.y * 14.2 - cos(UV.x * 9.0))
-		+ 0.5 * sin(UV.x * 19.0 + UV.y * 19.0);
-	float uniform_area = 1.0 - step(0.16, UV2.x);
-	float pattern = 1.0 - 0.11 * smoothstep(0.35, 1.05, mottling) * uniform_area;
-	ALBEDO = mix(team_color.rgb * 0.9, COLOR.rgb * pattern, COLOR.a) * weave * wear;
-	ROUGHNESS = mix(0.92, 0.58, UV2.x);
-	METALLIC = smoothstep(0.52, 1.0, UV2.x) * 0.42;
-}
-"""
 
 var accent := Color(0.79, 0.58, 0.22)
 var bones := {}
@@ -71,19 +45,6 @@ func _build() -> void:
 		_bone(skeleton, "LowerArm." + side, "UpperArm." + side, elbow)
 		var palm := Vector3(-0.075, 1.215, 0.515) if side == "L" else Vector3(-0.085, 1.205, 0.26)
 		_bone(skeleton, "Palm1." + side, "LowerArm." + side, palm)
-
-	var body := MeshInstance3D.new()
-	body.name = "Body"
-	body.mesh = InfantryMesh.new().build(skeleton)
-	body.skin = skeleton.create_skin_from_rest_transforms()
-	var shader := Shader.new()
-	shader.code = _SHADER
-	var material := ShaderMaterial.new()
-	material.shader = shader
-	body.material_override = material
-	skeleton.add_child(body)
-	body.owner = root
-	body.skeleton = NodePath("..")
 
 	var player := AnimationPlayer.new()
 	player.name = "AnimationPlayer"

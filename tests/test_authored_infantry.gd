@@ -16,7 +16,7 @@ func test_authored_infantry_follows_the_live_weapon_and_team() -> void:
 	view.set_detail(false)
 	view.face(Vector3(5.0, 2.0, 10.0), 0.71)
 	var authored := view.authored
-	check(not view.body.visible, "the original skinned body is hidden on the live view")
+	check(not view.skeleton.has_node("Body"), "the animation driver has no legacy skinned body")
 	var helmet := authored.find_child("Object_109", true, false) as MeshInstance3D
 	var blue_helmet := helmet.material_override as ShaderMaterial
 	check_equal(blue_helmet.get_shader_parameter("team_color"), blue, "team before entering the tree")
