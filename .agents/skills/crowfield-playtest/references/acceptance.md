@@ -1,24 +1,23 @@
 # Comparative gameplay, visuals, and sound
 
-Use [acceptance issue #12](https://github.com/SSSKrut/crowfield/issues/12) for the decision and evidence. In uncoached solo play, check whether the player identifies a route within 10 seconds and reaches a useful fight within 30 seconds. Record first contact, capture, death, and replay. Separate missed input from stalls. Use the same seeds and starting conditions for before-and-after Crowfield runs.
+Use these comparisons during internal review of the affected scenario. For a broader infantry review, run a standalone Crowfield build on Valley with 24 bots and a recorded seed. Use the same seed, start, and settings for Crowfield before-and-after runs.
 
-Use the [participant guide and response sheet](participant-kit.md) to run the same procedure with each player.
+## Compare representative situations
 
-Run the overall solo infantry benchmark on a standalone Crowfield build. Record hands-on before-and-after evidence when available. Publish individual features after their applicable automated checks pass, then gather player feedback in normal play.
+1. Use stock **Ravenfield Point Match** on a stock map as the reference for the infantry round. Use stock **Arma Reforger Conflict** as the reference for how an infantry engagement near an objective communicates movement, cover, and combat feedback. Record the build, mode, map, and relevant differences such as map scale, bot count, and whether opponents are people or bots.
+2. Pick a comparable situation and keep the lead-in. For the infantry loop, cover deployment, first exchange, an objective push, death and return to the fight, and starting the next round. For a narrower feature, capture the affected sequence with enough context to understand it. Use uninterrupted gameplay with original audio when evaluating sound. Record display and audio settings and use similar listening levels.
+3. Use hands-on runs where available. Automate repeatable Crowfield scenarios and collect timings, video, and traces when useful. A stock reference recording can cover an unavailable game. Label the evidence and its limits, including missing scenarios, audio, or input observations. Report any unverified claim as pending evidence.
 
-1. Use Valley with 24 bots and a recorded seed. Compare it with an unmodded **Point Match** on a stock map in the current stable Ravenfield build. Choose a comparable infantry start and use the same players in both games. Alternate which game they play first, keep hardware and input settings comparable, and start each session without coaching. Use stock **Arma Reforger Conflict** as the reference for one infantry engagement near an objective. Record differences in map scale, player count, and whether the opponents are bots or people.
-2. Play a full round each in Crowfield and Ravenfield. Note route choice, first visible enemy, and first exchange. Follow one attack through contention, capture and defense or loss. Observe one death and return to a useful fight, then reach the result and start another match. In Arma, follow a comparable approach, exchange and objective push. Use an uninterrupted segment or play it hands-on and record which.
-3. In the paired hands-on rounds, compare input response through sprint, stop, jump, landing and aim. In all three games, assess what the player can see and hear during movement, aiming, shooting, taking damage and reloading. Note how bots or teammates help a push, what the player gains from control of a flag, and why they choose a particular route after respawning. Log time to the first exchange and time from death to the next useful exchange. Keep counts and qualitative observations tied to the actual scenario.
-4. Ask five to eight players who played both Crowfield and Ravenfield, individually, which game they would choose for one more round and why. Pass when a strict majority of all participants choose **Crowfield** and cite a gameplay reason, and there is no reproducible issue blocking deployment, combat, capture, respawn, match completion, or replay. Ties and missing assessments leave the benchmark pending. Arma provides a comparison for movement, feedback, and use of cover. Ravenfield sets the replay preference threshold.
-5. Attach the versions, mode, map, settings, run timings, anonymized votes and reasons, timestamped recordings or traces, and the pass or fail decision to the acceptance issue. Screenshots, edited highlights, scripted traces and automated tests can document specific findings. The paired human rounds and votes are required for a pass.
+## Quality rubric
 
-### Visual and sound quality
-
-Use the same participants and stock references. Compare first-person scenes during deployment, movement through cover, a firefight, and capture or respawn. Use comparable display conditions and the same audio output at similar listening levels. For recorded evidence, use uninterrupted gameplay with game audio and record the display and audio settings.
-
-| Area | What players compare |
+| Area | What to look for |
 | --- | --- |
-| Visual quality | Character and weapon models, environment materials and lighting, animation quality during movement and weapon handling, readability of team silhouettes and effects at combat distance, and how much of the fight the HUD covers. |
-| Sound quality | How convincing and distinct gunshots, impacts, footsteps, reloads and ambience sound. Whether direction and distance are apparent, and whether important sounds stay clear when several things happen at once. |
+| Gameplay | An uncoached player can identify a route in roughly 10 seconds and reach a useful fight in roughly 30 seconds. Compare input response during sprint, stop, jump, landing, and aim. Note how bots or teammates help a push, what taking an objective changes, and why a player picks a route after respawn. Record time to first exchange and time from death to the next useful fight. Check for blockers in deployment, combat, capture, respawn, match completion, and replay. Separate missed input from stalls. |
+| Visual quality | Compare character and weapon models, environment materials and lighting, movement and handling animations, readability of teams and effects at combat distance, and how much of the fight the HUD covers. |
+| Sound quality | Compare gunshots, impacts, footsteps, reloads, and ambience for distinctness, direction, distance, and clarity when several things happen at once. |
 
-Ask each player to rate Crowfield separately for visuals and sound as **below**, **on par with**, or **above** Ravenfield. Record one concrete example for each rating. Each category passes when a strict majority rates it **on par with** or **above** Ravenfield. Both categories must pass alongside the gameplay test. Compare with Arma Reforger for grounded animation, environmental detail, and spatial audio. Record the visual and sound votes and examples alongside the replay votes in the acceptance issue.
+Record concrete examples with timestamps or trace references in the related issue or PR. Include strengths, gaps, and actionable findings. Use applicable automated checks for feature delivery and collect qualitative player feedback during normal play.
+
+## Optional paired human study
+
+If a paired study would help and participants are available, give them the [participant kit](participant-kit.md) with the candidate build. Use the same people in Crowfield and Ravenfield, alternate game order, and start without coaching. Record anonymized choices for which game they would replay and the gameplay reasons. Record visual and sound ratings separately with concrete examples. Report sample size, conditions, and missing results.
