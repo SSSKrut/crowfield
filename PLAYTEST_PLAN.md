@@ -70,7 +70,7 @@ Ask each player to rate Crowfield separately for visuals and sound as **below**,
 
 ## Run the renderer comparison
 
-From Terminal on macOS, run the exported app at the same resolution and with both presets, one run at a time. The camera moves from the gate to the ford while the local server runs a seeded 24-bot round. Each run writes frame-time percentiles and the viewport configuration. The camera route measures renderer performance. Use a human round to evaluate input feel and player decisions.
+From Terminal on macOS, run the exported app at the same resolution and with both presets, one run at a time. The benchmark camera moves from the camp gate to the east entrance of the ford while the local server runs a seeded 24-bot round. The player stays at spawn. Each run writes frame-time percentiles, the viewport configuration and the route revision. Compare reports with the same route revision. Older Valley reports without a revision use the original route through the staging wall. Use a human round to evaluate input feel and player decisions.
 
 ```sh
 app="$HOME/Applications/Crowfield.app/Contents/MacOS/Crowfield"

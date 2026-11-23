@@ -33,6 +33,7 @@ const PERFORMANCE_MAX_PIXELS := 1600.0 * 900.0
 const PERFORMANCE_MAX_SCALE := 0.85
 const PERFORMANCE_SHADOW_DISTANCE := 45.0
 const BENCHMARK_MAX_SECONDS := 120.0
+const BENCHMARK_VALLEY_ROUTE_REVISION := 2
 const BENCHMARK_MAX_SAMPLES := 262144
 const GAME_MENU := preload("res://menu/game_menu.tscn")
 const PlaytestTrace := preload("res://client/playtest_trace.gd")
@@ -1638,12 +1639,17 @@ func _update_benchmark_camera() -> void:
 	var phase := clampf((elapsed - warmup) / settings["benchmark"], 0.0, 1.0)
 	if elapsed < warmup:
 		phase = elapsed / warmup
-	var from := Vector3(0, 0, 70)
-	var toward := Vector3(0, 0, 14)
-	var point := from.lerp(toward, smoothstep(0.18, 0.58, phase))
-	point.y = scene.terrain.height_at(point.x, point.z) + rules.movement.eye_height
+	var point := _benchmark_valley_position(scene, rules.movement.eye_height, phase)
 	var yaw := 0.52 * sin(phase * TAU * 1.25)
 	camera.look_at_from_position(point, point + Game.view_direction(yaw, -0.055), Vector3.UP)
+
+
+static func _benchmark_valley_position(map: MapScene, eye_height: float, phase: float) -> Vector3:
+	var z := lerpf(70.0, 14.0, smoothstep(0.18, 0.58, phase))
+	# Keep the camp gate and approach, then curve into the east ford lane
+	# after the sandbags and before the central staging wall at z=20.6.
+	var x := ValleyMap.FORD_PASSAGE_X * smoothstep(31.0, 23.0, z)
+	return Vector3(x, map.ground_at(x, z) + eye_height, z)
 
 
 ## Measure wall time from the first playable frame instead of using engine
@@ -1670,6 +1676,7 @@ func _measure_benchmark_frame() -> bool:
 		"bot_ai": settings["bot-ai"],
 		"overview": settings["overview"],
 		"route": settings["benchmark-route"],
+		"route_revision": BENCHMARK_VALLEY_ROUTE_REVISION if settings["benchmark-route"] == "valley" else 1,
 		"fov_degrees": settings["fov"],
 		"warmup_seconds": settings["benchmark-warmup"],
 		"requested_seconds": settings["benchmark"],
