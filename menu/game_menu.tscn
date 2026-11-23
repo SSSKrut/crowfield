@@ -92,7 +92,8 @@ theme_override_font_sizes/font_size = 15
 text = "WASD Move  ·  Shift Sprint
 Space Jump  ·  C Crouch
 Mouse Fire / aim  ·  R Reload
-1–7 Switch weapon"
+1–7 Switch weapon
+Tab Scoreboard"
 autowrap_mode = 3
 
 [node name="Leave" type="Button" parent="Center/Panel/Rows"]
