@@ -46,7 +46,7 @@ const NATIVE_INPUT_EXTENSION := "res://.godot/playtest-native/native-input.gdext
 const NATIVE_INPUT_PATH_ENV := "CROWFIELD_NATIVE_INPUT_PATH"
 const NATIVE_INPUT_GAMEPLAY_ENV := "CROWFIELD_NATIVE_INPUT_GAMEPLAY"
 const MOVE_ACTIONS := ["move_forward", "move_back", "move_left", "move_right"]
-const HELD_ACTIONS := MOVE_ACTIONS + ["jump", "crouch", "sprint", "fire", "aim"]
+const HELD_ACTIONS := MOVE_ACTIONS + ["jump", "crouch", "sprint", "fire", "aim", "scoreboard"]
 const TRACE_ACTIONS := HELD_ACTIONS + ["reload", "weapon_1", "weapon_2", "weapon_3", "weapon_4", "weapon_5", "weapon_6",
 	"weapon_7", "weapon_next", "weapon_previous"]
 const VIRTUAL_INTERFACES := ["lo", "docker", "br-", "veth", "virbr"]
@@ -1585,13 +1585,15 @@ func _update_hud(feet: Vector3, own: Soldier) -> void:
 	if _capture_notice != "" and Time.get_ticks_msec() < _capture_notice_until:
 		lines.append(_capture_notice)
 	hud.lines = lines
+	hud.scoreboard_open = connected and _captured and _focused and _reconnect_since < 0 \
+		and session.match_state != null and Input.is_action_pressed("scoreboard")
 	_update_vehicle_hud(feet)
 	var arsenal := _arsenal()
 	hud.arsenal = arsenal
 	hud.fov = camera.fov
 	hud.aim = view_model.aim if _first_person() else 0.0
 	if map_view != null:
-		map_view.set_flag_labels_visible(hud.aim < 0.25)
+		map_view.set_flag_labels_visible(hud.aim < 0.25 and not hud.scoreboard_open, camera, hud.flag_label_exclusion())
 	hud.scoped = arsenal != null and _first_person() and view_model.scoped(arsenal.weapon())
 	if arsenal != null and own != null:
 		hud.spread = arsenal.spread(rules.weapons, _buttons & InputCommand.AIM != 0,
