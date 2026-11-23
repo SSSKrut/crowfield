@@ -192,7 +192,7 @@ func test_crouch_changes_hitbox_height_and_rewound_stance_discretely() -> void:
 	check_equal(history.at(id, 20.5)[3], false, "standing until the crouch tick")
 	check_equal(history.at(id, 21.0)[3], true, "crouched at the recorded tick")
 	var stand_ray := Vector3(0, 1.64, 3)
-	var low_ray := Vector3(0, 0.80, 3)
+	var low_ray := Vector3(0, 1.09, 3)
 	check(not Hitboxes.ray(stand_ray, Vector3.FORWARD, 7, Vector3.ZERO, 0.0).is_empty(), "standing head is hittable")
 	check(Hitboxes.ray(stand_ray, Vector3.FORWARD, 7, Vector3.ZERO, 0.0, true).is_empty(), "crouching clears the standing head ray")
 	var hit := Hitboxes.ray(low_ray, Vector3.FORWARD, 7, Vector3.ZERO, 0.0, true)

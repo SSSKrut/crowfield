@@ -66,14 +66,16 @@ godot="$cache/$editor"
 mkdir -p "$stage/Credits/Barlow"
 cp -- assets/audio/LICENSE.md "$stage/Credits/Audio.md"
 cp -- assets/valley/LICENSE.md "$stage/Credits/Valley Textures.md"
+cp -- assets/infantry/LICENSE.md "$stage/Credits/Infantry.md"
 cp -- assets/sky/LICENSE.md "$stage/Credits/Skies.md"
 cp -- assets/desert/LICENSE.md "$stage/Credits/Desert.md"
 cp -- assets/vehicles/LICENSE.md "$stage/Credits/Vehicles.md"
 cp -- assets/type/SOURCE.md "$stage/Credits/Barlow/Source.md"
 cp -- assets/type/OFL.txt "$stage/Credits/Barlow/OFL.txt"
+install -m 755 tools/launch-macos-metal.command "$stage/Play Crowfield with Metal.command"
 (
     cd "$stage"
-    zip -qr Crowfield.zip Credits
+    zip -qr Crowfield.zip Credits "Play Crowfield with Metal.command"
 )
 
 unzip -tq "$stage/Crowfield.zip"

@@ -1,40 +1,14 @@
 class_name CharacterAsset
 extends RefCounted
-## Shared infantry geometry and animation resources. Each soldier owns its pose,
-## and marks take their team's colour without adding a material or draw call.
+## Shared animation rig for infantry. CharacterView retargets its pose to the visible model.
 
 const CLIPS := [&"Idle", &"Walking", &"Running", &"CrouchIdle", &"CrouchWalking"]
 enum Clip { IDLE, WALKING, RUNNING, CROUCH_IDLE, CROUCH_WALKING }
 const _PERIODS := [2.6, 0.46, 0.43, 2.0, 0.42]
 const _STEP_LENGTH := [0.0, 0.98, 1.10, 0.0, 0.42]
 const _STANCE_PORTION := [0.0, 0.52, 0.40, 0.0, 0.60]
-const _CROUCH_HIP_SHIFT := 0.26
-const _CROUCH_ANKLE_DROP := 0.163
-
-const _SHADER := """
-shader_type spatial;
-instance uniform vec4 team_color : source_color = vec4(0.79, 0.58, 0.22, 1.0);
-
-// The garment's UVs are skinned with the mesh. Grain stays on the fabric
-// as the limbs bend, and fades away before it aliases at a distance.
-void fragment() {
-	float footprint = max(length(dFdx(UV)), length(dFdy(UV)));
-	float grain_mask = 1.0 - smoothstep(0.002, 0.014, footprint);
-	float fabric = 1.0 - smoothstep(0.35, 0.66, UV2.x);
-	vec2 thread = sin(UV * vec2(749.0, 771.0));
-	float weave = 1.0 + thread.x * thread.y * 0.11 * fabric * grain_mask;
-	float panels = sin(UV.x * 13.0 + sin(UV.y * 12.0)) * sin(UV.y * 17.0);
-	float wear = 1.0 + panels * mix(0.045, 0.085, fabric);
-	float mottling = sin(UV.x * 12.0 + sin(UV.y * 8.7))
-		+ sin(UV.y * 14.2 - cos(UV.x * 9.0))
-		+ 0.5 * sin(UV.x * 19.0 + UV.y * 19.0);
-	float uniform_area = 1.0 - step(0.16, UV2.x);
-	float pattern = 1.0 - 0.11 * smoothstep(0.35, 1.05, mottling) * uniform_area;
-	ALBEDO = mix(team_color.rgb * 0.9, COLOR.rgb * pattern, COLOR.a) * weave * wear;
-	ROUGHNESS = mix(0.92, 0.58, UV2.x);
-	METALLIC = smoothstep(0.52, 1.0, UV2.x) * 0.42;
-}
-"""
+const _CROUCH_HIP_SHIFT := 0.07
+const _CROUCH_ANKLE_DROP := 0.32
 
 var accent := Color(0.79, 0.58, 0.22)
 var bones := {}
@@ -71,19 +45,6 @@ func _build() -> void:
 		_bone(skeleton, "LowerArm." + side, "UpperArm." + side, elbow)
 		var palm := Vector3(-0.075, 1.215, 0.515) if side == "L" else Vector3(-0.085, 1.205, 0.26)
 		_bone(skeleton, "Palm1." + side, "LowerArm." + side, palm)
-
-	var body := MeshInstance3D.new()
-	body.name = "Body"
-	body.mesh = InfantryMesh.new().build(skeleton)
-	body.skin = skeleton.create_skin_from_rest_transforms()
-	var shader := Shader.new()
-	shader.code = _SHADER
-	var material := ShaderMaterial.new()
-	material.shader = shader
-	body.material_override = material
-	skeleton.add_child(body)
-	body.owner = root
-	body.skeleton = NodePath("..")
 
 	var player := AnimationPlayer.new()
 	player.name = "AnimationPlayer"
@@ -178,23 +139,26 @@ func _ready_pose(poses: Dictionary, phase: float) -> void:
 		poses["Foot." + side] = Vector3(leg.z, 0, 0)
 
 
-## Fold the knees beneath a lowered pelvis and lean the upper body forward.
-## Both ankles retain their full leg lengths and use the grounded sole solve.
+## Keep weight between staggered boots, bending at the knees and hips
+## without folding the chest down onto the thighs.
 func _crouch_pose(poses: Dictionary, clip: int, cycle: float) -> void:
 	var moving := clip == Clip.CROUCH_WALKING
 	var sway := sin(TAU * cycle)
-	poses["Hips"] = Vector3(0, -0.04 * sway if moving else 0, 0)
-	poses["Abdomen"] = Vector3(0.90 + 0.01 * sway, 0, 0)
-	poses["Torso_2"] = Vector3(0.27, 0.04 * sway if moving else 0, 0)
-	poses["Head_2"] = Vector3(-1.10, 0, 0)
+	poses["Hips"] = Vector3(0.02, -0.04 * sway if moving else -0.08, 0)
+	poses["Abdomen"] = Vector3(0.40 + 0.012 * sway, 0, 0)
+	poses["Torso_2"] = Vector3(0.23, 0.04 * sway if moving else -0.08, -0.025)
+	poses["Head_2"] = Vector3(-0.62, 0.15, 0.02)
 	for side in ["L", "R"]:
-		var offset := 0.0 if side == "L" else 0.5
-		var phase := fposmod(cycle + offset, 1.0)
-		var leg := _stride(phase, clip) if moving else _leg_angles(_CROUCH_ANKLE_DROP, _CROUCH_HIP_SHIFT + lerpf(-0.038, 0.038, offset * 2), 0.0)
+		var leading: bool = side == "L"
+		var phase := fposmod(cycle + (0.0 if leading else 0.5), 1.0)
+		var reach := 0.36 if leading else -0.16
+		var drop := _CROUCH_ANKLE_DROP if leading else _CROUCH_ANKLE_DROP - 0.017
+		var roll := 0.0 if leading else 0.22
+		var leg := _stride(phase, clip) if moving else _leg_angles(drop, reach, roll)
 		poses["UpperLeg." + side] = Vector3(leg.x, 0, 0)
 		poses["LowerLeg." + side] = Vector3(leg.y, 0, 0)
 		poses["Foot." + side] = Vector3(leg.z, 0, 0)
-		poses["UpperArm." + side] = Vector3(-1.05, 0, 0)
+		poses["UpperArm." + side] = Vector3(-0.61, 0, 0)
 
 
 ## The stance foot moves back along a level path at constant speed; the

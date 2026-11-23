@@ -13,11 +13,12 @@ const BLEND_TIME := 0.2
 var asset: CharacterAsset
 var skeleton: Skeleton3D
 var player: AnimationPlayer
-var body: MeshInstance3D
 var clip := CharacterAsset.Clip.IDLE
 var flinch: FlinchModifier
 var grounded_feet: GroundedFeet
 var armed_pose: ArmedPose
+var authored: AuthoredSoldier
+var held_kind := WeaponTuning.Kind.NONE
 ## ragdoll is the ragdoll of the pool while the soldier falls; fallen tells
 ## it lies as a ragdoll or a frozen body.
 var ragdoll: Ragdoll
@@ -25,6 +26,7 @@ var fallen := false
 ## fallen_at is where the hips of a fallen soldier are.
 var fallen_at := Vector3.ZERO
 var _model: Node3D
+var _tint: Color
 var _shot_age := 1.0
 var _aim := 0.0
 var _sprint := 0.0
@@ -34,11 +36,11 @@ var _base_locals: Array[Transform3D] = []
 
 func setup(character: CharacterAsset, model: Node3D) -> void:
 	asset = character
+	_tint = asset.accent
 	_model = model
 	add_child(_model)
 	skeleton = _model.find_child("Skeleton3D", true, false)
 	player = _model.find_child("AnimationPlayer", true, false)
-	body = skeleton.get_node("Body")
 	flinch = FlinchModifier.new()
 	flinch.setup(asset)
 	skeleton.add_child(flinch)
@@ -53,9 +55,27 @@ func setup(character: CharacterAsset, model: Node3D) -> void:
 	player.play(CharacterAsset.CLIPS[clip])
 
 
+func _ready() -> void:
+	authored = AuthoredSoldier.new()
+	add_child(authored)
+	authored.setup()
+	authored.set_tint(_tint)
+	# The signal sees the final pose, including flinch, grounded feet and arms.
+	skeleton.skeleton_updated.connect(_retarget_body)
+
+
+func _retarget_body() -> void:
+	if is_visible_in_tree():
+		authored.retarget(self)
+
+
 ## set_tint paints the accent parts of the soldier.
 func set_tint(color: Color) -> void:
-	body.set_instance_shader_parameter("team_color", color)
+	if color == _tint:
+		return
+	_tint = color
+	if authored != null:
+		authored.set_tint(color)
 
 
 ## face places the soldier with its feet at position, looking along yaw: the
@@ -106,6 +126,7 @@ func fired() -> void:
 ## Both hands, the displayed weapon and muzzle effects share this transform.
 ## The shoulder carries the stock as the torso leans under the rifle.
 func carry(weapons: ViewModel, kind: int, pitch: float) -> Transform3D:
+	held_kind = kind
 	armed_pose.active = kind != WeaponTuning.Kind.NONE and not fallen
 	if not armed_pose.active:
 		return global_transform
@@ -193,6 +214,7 @@ func copy_pose(other: CharacterView) -> void:
 	for i in skeleton.get_bone_count():
 		skeleton.set_bone_pose(i, other.skeleton.get_bone_pose(i))
 	if other.armed_pose.active:
+		held_kind = other.held_kind
 		armed_pose.weapon = other.armed_pose.weapon
 		armed_pose.trigger = other.armed_pose.trigger
 		armed_pose.support = other.armed_pose.support

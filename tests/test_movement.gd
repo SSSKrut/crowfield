@@ -147,7 +147,7 @@ func test_climbs_the_stairs() -> void:
 func test_crouch_slows_sprint_and_cannot_jump_until_clear_to_stand() -> void:
 	var scene := MapScene.new()
 	scene.add_box(Vector3(10, 0.25, 10), Vector3(0, -0.25, 0))
-	scene.add_box(Vector3(1.5, 0.15, 0.65), Vector3(0, 1.20, -2.0))
+	scene.add_box(Vector3(1.5, 0.15, 0.65), Vector3(0, 1.45, -2.0))
 	var made := _soldier(_world(scene), Vector3(0, 0.05, 0))
 	var controller: CharacterController = made[0]
 	var soldier: Soldier = made[1]
@@ -167,7 +167,7 @@ func test_crouch_slows_sprint_and_cannot_jump_until_clear_to_stand() -> void:
 	check(not soldier.crouched and soldier.grounded and soldier.position.z < -3.2, "stand once clear")
 
 
-func test_valley_parapet_intercepts_crouched_eye_and_helmet_level() -> void:
+func test_valley_parapet_covers_lower_body_below_crouched_eyeline() -> void:
 	var map := MapScene.named("valley")
 	var state := PhysicsServer3D.space_get_direct_state(_world(map))
 	var x := -ValleyMap.BRIDGE_X
@@ -175,7 +175,7 @@ func test_valley_parapet_intercepts_crouched_eye_and_helmet_level() -> void:
 	var movement := MovementTuning.new()
 	var deck := ValleyMap.BRIDGE_DECK
 	var crouched_head: Vector3 = Hitboxes.CROUCH_B[0]
-	for height in [movement.view_height(true), crouched_head.y + Hitboxes.CROUCH_RADII[0], movement.view_height()]:
+	for height in [0.66, movement.view_height(true), crouched_head.y + Hitboxes.CROUCH_RADII[0], movement.view_height()]:
 		var eye := Vector3(x + 1.39, deck + height, z)
 		var ray := PhysicsRayQueryParameters3D.create(eye, eye + Vector3.RIGHT * 5.0, Game.LAYER_STATIC)
 		check_equal(not state.intersect_ray(ray).is_empty(), height < 0.90, "west bridge cover at local height %.3f" % height)
