@@ -189,7 +189,7 @@ func test_dev_capture_marker_tracks_play_menu_and_focus() -> void:
 
 
 func test_scoreboard_follows_tab_and_releases_at_the_menu_and_focus_loss() -> void:
-	if not await _start_client(60, "valley"):
+	if not await _start_client(60, "valley", ["-bots=48", "-bot-ai=false"]):
 		return
 	cleanup(func() -> void: _key(KEY_TAB, false))
 	_key(KEY_TAB, true)
@@ -197,6 +197,19 @@ func test_scoreboard_follows_tab_and_releases_at_the_menu_and_focus_loss() -> vo
 	await _tree.process_frame
 	check(_client.hud.scoreboard_open and _client.hud.match_state == _client.session.match_state,
 		"holding Tab opens the HUD with the live match state")
+	for frame in FRAME_LIMIT:
+		if _client.session.scoreboard_complete:
+			break
+		await _tree.process_frame
+	check_equal(_client.session.scoreboard_rows.size(), 49, "the roster arrives in an actual solo session")
+	var local_id := _client.session.welcome.player
+	check(_client.session.scoreboard_rows.has(local_id), "the local player is a roster participant")
+	var weapon := _client._weapon
+	_tap(KEY_PAGEDOWN)
+	check_equal(_client.hud._scoreboard_page, 1, "Page Down advances the held scoreboard")
+	_tap(KEY_PAGEUP)
+	check_equal(_client.hud._scoreboard_page, 0, "Page Up returns to page one")
+	check_equal(_client._weapon, weapon, "scoreboard navigation leaves weapon selection alone")
 	_key(KEY_TAB, false)
 	await _tree.process_frame
 	await _tree.process_frame

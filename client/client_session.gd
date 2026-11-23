@@ -47,6 +47,10 @@ var received := 0
 var server_tick := 0
 var player := PlayerState.new()
 var match_state: MatchState
+var scoreboard_rows: Dictionary[int, ScoreboardUpdate.Row] = {}
+var scoreboard_complete := false
+var scoreboard_revision := 0
+var _scoreboard_requested := false
 ## vehicles are the vehicles of the newest snapshot.
 var vehicles: Array[VehicleState] = []
 ## soldiers are the soldiers the client knows, by slot.
@@ -132,6 +136,21 @@ func respawn() -> void:
 	conn.send_reliable(Conn.Channel.CONTROL, Protocol.encode(Messages.Respawn.new()))
 
 
+func request_scoreboard() -> void:
+	if not _scoreboard_requested:
+		var message := Protocol.encode(Messages.ScoreboardRequest.new())
+		_scoreboard_requested = conn.send_reliable(Conn.Channel.CONTROL, message) == OK
+
+
+func _receive_scoreboard(update: ScoreboardUpdate) -> void:
+	for id in update.removed:
+		scoreboard_rows.erase(id)
+	for row in update.rows:
+		scoreboard_rows[row.id] = row
+	scoreboard_complete = scoreboard_complete or update.complete
+	scoreboard_revision += 1
+
+
 ## A paused loopback session cannot receive snapshots until the game resumes.
 func defer_snapshot_timeout(seconds: float) -> void:
 	_heard += seconds
@@ -150,10 +169,12 @@ func poll() -> bool:
 		if message[0] != Conn.Channel.EVENTS:
 			continue
 		var type := Protocol.peek_type(message[1])
-		if type not in [Protocol.Type.HIT_CONFIRM, Protocol.Type.DAMAGE, Protocol.Type.DEATH, Protocol.Type.LAUNCH, Protocol.Type.BLAST]:
+		if type not in [Protocol.Type.HIT_CONFIRM, Protocol.Type.DAMAGE, Protocol.Type.DEATH, Protocol.Type.LAUNCH, Protocol.Type.BLAST, Protocol.Type.SCOREBOARD_UPDATE]:
 			continue
 		var event: Variant = Protocol.decode(message[1])
-		if event is Object:
+		if event is ScoreboardUpdate:
+			_receive_scoreboard(event)
+		elif event is Object:
 			news.append(event)
 	while true:
 		var data := conn.receive_unreliable()

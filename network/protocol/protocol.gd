@@ -10,17 +10,18 @@ class_name Protocol
 ## A message implements type(), write(writer) -> error and read(reader); see
 ## Messages for the small ones.
 
-const VERSION := 15
+const VERSION := 16
 
 enum Type {
 	HELLO = 1, WELCOME, REJECT, READY, INPUT, SNAPSHOT, RESPAWN, HIT_CONFIRM, DAMAGE, DEATH,
-	CERTIFICATE_REQUEST, CERTIFICATE, LAUNCH, BLAST,
+	CERTIFICATE_REQUEST, CERTIFICATE, LAUNCH, BLAST, SCOREBOARD_REQUEST, SCOREBOARD_UPDATE,
 }
 const _TYPE_NAMES := {
 	Type.HELLO: "hello", Type.WELCOME: "welcome", Type.REJECT: "reject", Type.READY: "ready",
 	Type.INPUT: "input", Type.SNAPSHOT: "snapshot", Type.RESPAWN: "respawn", Type.HIT_CONFIRM: "hit confirm",
 	Type.DAMAGE: "damage", Type.DEATH: "death", Type.CERTIFICATE_REQUEST: "certificate request",
 	Type.CERTIFICATE: "certificate", Type.LAUNCH: "launch", Type.BLAST: "blast",
+	Type.SCOREBOARD_REQUEST: "scoreboard request", Type.SCOREBOARD_UPDATE: "scoreboard update",
 }
 
 const UNKNOWN_MESSAGE := "unknown message type"
@@ -86,6 +87,10 @@ static func create(type: int) -> Object:
 			return Messages.Launch.new()
 		Type.BLAST:
 			return Messages.Blast.new()
+		Type.SCOREBOARD_REQUEST:
+			return Messages.ScoreboardRequest.new()
+		Type.SCOREBOARD_UPDATE:
+			return ScoreboardUpdate.new()
 	return null
 
 

@@ -21,7 +21,10 @@ var soldier := 0
 var controller: CharacterController
 ## respawn_at is the tick when a dead soldier of the player comes back.
 var respawn_at := 0
-var kills := 0
+var score: ScoreboardUpdate.Row
+var scoreboard_subscribed := false
+var scoreboard_pending := PackedInt32Array()
+var scoreboard_cursor := -1
 
 var last_input := 0.0
 var last := InputCommand.new()
@@ -60,6 +63,7 @@ var _inputs: Array[InputCommand] = []
 func _init(number: int, player_name: String, slots: int) -> void:
 	id = number
 	name = player_name
+	score = ScoreboardUpdate.Row.new(id, name, team)
 	token = Crypto.new().generate_random_bytes(16)
 	views.resize(slots)
 	for i in slots:

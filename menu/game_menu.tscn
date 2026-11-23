@@ -108,7 +108,7 @@ text = "WASD Move  ·  Shift Sprint
 Space Jump  ·  C Crouch
 Mouse Fire / aim  ·  R Reload
 1–7 Switch weapon
-Tab Scoreboard"
+Tab Scoreboard  ·  Wheel / Page Up / Down"
 autowrap_mode = 3
 
 [node name="Leave" type="Button" parent="Center/Panel/Rows"]

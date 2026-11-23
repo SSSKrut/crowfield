@@ -361,3 +361,15 @@ class Blast:
 		projectile = r.read_bits(16)
 		kind = r.read_bits(Protocol.WEAPON_BITS)
 		position = Protocol.read_vector(r)
+
+
+## ScoreboardRequest starts this ready client's roster stream.
+class ScoreboardRequest:
+	func type() -> int:
+		return Protocol.Type.SCOREBOARD_REQUEST
+
+	func write(_w: BitWriter) -> String:
+		return ""
+
+	func read(_r: BitReader) -> void:
+		pass

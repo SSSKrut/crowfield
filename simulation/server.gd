@@ -45,6 +45,7 @@ var navigation: Navigation
 var bots: Bots
 var vehicles: ServerVehicles
 var flag_match: FlagMatch
+var scoreboard := ScoreboardPublisher.new()
 ## random places the soldiers of players in the zones of their teams.
 var random := RandomNumberGenerator.new()
 ## projectiles are the rockets and grenades in flight.
@@ -69,9 +70,9 @@ var _reinforcement_rays := REINFORCEMENT_RAY_BUDGET
 var _shots: Array[PendingShot] = []
 var _snapshots := SnapshotSender.new()
 var _next_projectile := 1
-## _launchers names the owner of each projectile, for the kill feed: a
-## soldier who dies before its grenade bursts is gone by then.
-var _launchers := {}
+## A projectile retains the shooter's participant row if its soldier is gone
+## by impact. A reused player slot has a different row.
+var _launchers: Dictionary[int, ScoreboardUpdate.Row] = {}
 
 
 ## create builds the world of the map of the settings and its navigation.
@@ -176,6 +177,7 @@ func step() -> void:
 	profile.lap(TickProfile.System.HISTORY)
 	if tick % snapshot_interval == 0:
 		_snapshots.send_all(self)
+	scoreboard.flush(players, tick)
 	for listener in _listeners:
 		listener.flush()
 	profile.lap(TickProfile.System.SNAPSHOTS)
@@ -424,7 +426,7 @@ func _read_session(session: Session, now: float) -> void:
 			return
 		var data: PackedByteArray = message[1]
 		var type := Protocol.peek_type(data)
-		if type not in [Protocol.Type.HELLO, Protocol.Type.READY, Protocol.Type.RESPAWN, Protocol.Type.CERTIFICATE_REQUEST]:
+		if type not in [Protocol.Type.HELLO, Protocol.Type.READY, Protocol.Type.RESPAWN, Protocol.Type.CERTIFICATE_REQUEST, Protocol.Type.SCOREBOARD_REQUEST]:
 			_drop(session, "bad message: unexpected %s message" % Protocol.type_name(type))
 			return
 		var decoded: Variant = Protocol.decode(data)
@@ -440,6 +442,8 @@ func _read_session(session: Session, now: float) -> void:
 				_respawn(session)
 			Protocol.Type.CERTIFICATE_REQUEST:
 				_certificate(session)
+			Protocol.Type.SCOREBOARD_REQUEST:
+				scoreboard.request(session.player)
 	if not sessions.has(session):
 		return
 	# Datagrams that do not decode are ignored: they are unreliable anyway.
@@ -529,7 +533,7 @@ func _returning(hello: Messages.Hello) -> ServerPlayer:
 			var player := ServerPlayer.new(reservation.id, reservation.name, soldiers.slots())
 			player.token = reservation.token
 			player.team = reservation.team
-			player.kills = reservation.kills
+			player.score = reservation.score
 			return player
 	return null
 
@@ -557,7 +561,10 @@ func _ready(session: Session) -> void:
 	if not _spawn(player):
 		print("player %d could not spawn" % player.id)
 		_drop(session, "could not spawn")
-	elif flag_match != null:
+		return
+	player.score.team = player.team
+	scoreboard.add(player.score)
+	if flag_match != null:
 		flag_match.started = true
 
 
@@ -609,6 +616,7 @@ func _leave(session: Session, reason: String, by_peer: bool) -> void:
 		player.controller.close()
 		player.controller = null
 	players[player.id] = null
+	scoreboard.remove(player.score)
 	var quit := by_peer and reason == Protocol.QUIT_REASON
 	if not quit:
 		# The connection was lost, not ended: the player may come back with
@@ -618,7 +626,7 @@ func _leave(session: Session, reason: String, by_peer: bool) -> void:
 		reservation.token = player.token
 		reservation.name = player.name
 		reservation.team = player.team
-		reservation.kills = player.kills
+		reservation.score = player.score
 		reservation.until = clock.call() + settings.reconnect_window
 		reservations.append(reservation)
 	print("player %d \"%s\" left: %s" % [player.id, player.name, reason])
@@ -672,6 +680,8 @@ func _reset_finished_round() -> void:
 	if not reservations.is_empty() or player_count() != 0:
 		return
 	flag_match = FlagMatch.new(scene.flags)
+	projectiles.clear()
+	_launchers.clear()
 	bots.reset_for_round()
 
 
@@ -785,9 +795,10 @@ func cast_ray(origin: Vector3, direction: Vector3, length: float, mask: int) -> 
 
 
 ## tell_hit sends the events of a hit by a weapon along a direction: the
-## shooter learns it hit, the victim where from, and everyone a death, for the
-## kill feed. name is the shooter's, when it may be gone by now.
-func tell_hit(by: int, team: int, weapon: int, direction: Vector3, victim: Soldier, zone: int, taken: int, killed: bool, name: String = "") -> void:
+## shooter learns it hit and the victim where from. The launcher's row can
+## identify an attacker whose soldier has since respawned.
+func tell_hit(by: int, team: int, weapon: int, direction: Vector3, victim: Soldier, zone: int, taken: int,
+		killed: bool, launcher: ScoreboardUpdate.Row = null) -> void:
 	var shooter := soldiers.get_soldier(by)
 	var shooter_player := player_of(shooter)
 	if shooter_player != null:
@@ -809,8 +820,10 @@ func tell_hit(by: int, team: int, weapon: int, direction: Vector3, victim: Soldi
 		_send_event(victim_player, hurt)
 	if not killed:
 		return
-	if shooter_player != null and team != victim.team:
-		shooter_player.kills = mini(shooter_player.kills + 1, MatchState.MAX_KILLS)
+	var credit := launcher if launcher != null else _score_of(shooter)
+	if credit != null and team != victim.team:
+		credit.kills = mini(credit.kills + 1, MatchState.MAX_KILLS)
+		scoreboard.mark(credit)
 	var death := Messages.Death.new()
 	death.tick = tick
 	death.victim = victim.id
@@ -818,7 +831,7 @@ func tell_hit(by: int, team: int, weapon: int, direction: Vector3, victim: Soldi
 	death.victim_team = victim.team
 	death.killer_team = team
 	death.victim_name = name_of(victim)
-	death.killer_name = name if name != "" and shooter == null else name_of(shooter)
+	death.killer_name = launcher.name if launcher != null else name_of(shooter)
 	death.weapon = weapon
 	death.zone = zone
 	send_to_all(death)
@@ -838,7 +851,7 @@ func _launch(soldier: Soldier, shot: Shot, tuning: WeaponTuning) -> void:
 	var projectile := Projectile.launch(_next_projectile, shot, soldier, tuning, tick)
 	_next_projectile = _next_projectile % 0xFFFF + 1
 	projectiles.append(projectile)
-	_launchers[projectile.id] = name_of(soldier)
+	_launchers[projectile.id] = _score_of(soldier)
 	var launch := Messages.Launch.new()
 	launch.tick = tick
 	launch.projectile = projectile.id
@@ -893,7 +906,7 @@ func _strike(projectile: Projectile, from: Vector3, to: Vector3) -> Vector3:
 ## the owner. Every player learns where it burst.
 func _blast(projectile: Projectile, tuning: WeaponTuning) -> void:
 	var at := projectile.position
-	var name: String = _launchers.get(projectile.id, "")
+	var launcher: ScoreboardUpdate.Row = _launchers.get(projectile.id)
 	_launchers.erase(projectile.id)
 	# A blast after the end of a round only shows, like the shots then.
 	var over := flag_match != null and flag_match.state.result != MatchState.Result.ACTIVE
@@ -917,9 +930,9 @@ func _blast(projectile: Projectile, tuning: WeaponTuning) -> void:
 		total_hits += 1
 		if victim.is_bot() and not taken[1]:
 			bots.hurt(victim.bot, projectile.owner)
-		tell_hit(projectile.owner, projectile.team, projectile.kind, direction, victim, Hitboxes.Zone.NONE, taken[0], taken[1], name)
+		tell_hit(projectile.owner, projectile.team, projectile.kind, direction, victim, Hitboxes.Zone.NONE, taken[0], taken[1], launcher)
 	if not over:
-		vehicles.blast(at, tuning, projectile.kind, projectile.owner, projectile.team, name)
+		vehicles.blast(at, tuning, projectile.kind, projectile.owner, projectile.team, launcher)
 	var blast := Messages.Blast.new()
 	blast.tick = tick
 	blast.projectile = projectile.id
@@ -959,7 +972,20 @@ func player_of(soldier: Soldier) -> ServerPlayer:
 	return null
 
 
-## name_of is how the kill feed calls a soldier.
+func _score_of(soldier: Soldier) -> ScoreboardUpdate.Row:
+	if soldier == null:
+		return null
+	var player := player_of(soldier)
+	if player != null:
+		return player.score
+	if soldier.controller == Game.Controller.BOT and soldier.bot >= 0 and soldier.bot < bots.count():
+		var bot := bots.bots[soldier.bot]
+		if bot.soldier == soldier.id:
+			return bot.score
+	return null
+
+
+## name_of returns the display name used by combat events.
 func name_of(soldier: Soldier) -> String:
 	if soldier == null:
 		return "?"
@@ -984,6 +1010,8 @@ func _send_event(player: ServerPlayer, message: Object) -> void:
 ## sees it die. A dead human loses its capsule and its commands are ignored.
 ## It returns [health taken, died].
 func damage(victim: Soldier, amount: int) -> Array:
+	if not victim.alive:
+		return [0, false]
 	if victim.health > amount:
 		victim.health -= amount
 		return [amount, false]
@@ -993,6 +1021,10 @@ func damage(victim: Soldier, amount: int) -> Array:
 	victim.velocity = Vector3.ZERO
 	vehicles.release(victim)
 	profile.kills += 1
+	var row := _score_of(victim)
+	if row != null:
+		row.deaths = mini(row.deaths + 1, MatchState.MAX_KILLS)
+		scoreboard.mark(row)
 	var back := tick + roundi(settings.respawn_delay * Game.TICK_RATE)
 	if victim.controller == Game.Controller.PLAYER:
 		var player: ServerPlayer = players[victim.player]
@@ -1044,7 +1076,7 @@ class Reservation:
 	var name := ""
 	var team := 0
 	var until := 0.0
-	var kills := 0
+	var score: ScoreboardUpdate.Row
 
 
 ## PendingShot is a shot fired this tick, resolved once every soldier has
