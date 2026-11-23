@@ -292,3 +292,78 @@ static func _step(round: FlagMatch, soldiers: SoldierSet, grid: SoldierGrid, tic
 	grid.rebuild(soldiers)
 	for tick in ticks:
 		round.step(soldiers, grid)
+
+
+func test_valley_front_keeps_defenders_and_sends_one_adjacent_reserve() -> void:
+	var settings := ServerSettings.new()
+	settings.map = "valley"
+	settings.bots = 24
+	settings.seed = 9
+	var server: Server = Server.create(settings, Rules.new())
+	cleanup(func() -> void: server.close())
+	var flags := server.flag_match.state.flags
+	flags[0].owner = Game.Team.BLUE
+	flags[1].contested = true
+	flags[2].owner = Game.Team.RED
+	server.bots._review_front()
+	var relief := [0, 0, 0]
+	for bot in server.bots.bots:
+		var soldier := server.soldiers.get_soldier(bot.soldier)
+		var home := server.bots._home_lane(bot, soldier.team)
+		if bot.lane != home:
+			relief[soldier.team] += 1
+			check_equal(bot.lane, 1, "the reserve supports the adjacent contested crossing")
+			check(bot.index / 2 / flags.size() >= 2, "initial squad members stay at their crossing")
+		var goal := server.bots._front_goal(bot, soldier.team, flags[bot.lane])
+		var objective := server.scene.flags[bot.lane]
+		check(objective.contains_flag_position(goal), "each squad position can capture or contest")
+		if flags[bot.lane].owner == soldier.team:
+			check(signf(goal.z - objective.center.z) == signf(server.scene.spawn_of(soldier.team).z),
+				"the defenders hold on their side of the crossing")
+	check_equal(relief, [0, 1, 1], "both teams commit one reserve and retain their other assignments")
+
+
+func test_valley_front_limits_forward_reinforcement_per_team_and_lane() -> void:
+	var settings := ServerSettings.new()
+	settings.map = "valley"
+	settings.bots = 8
+	settings.seed = 9
+	var server: Server = Server.create(settings, Rules.new())
+	cleanup(func() -> void: server.close())
+	server.flag_match.started = true
+	server.bots._opening_until = 0
+	var bot := server.bots.bots[0]
+	var soldier := server.soldiers.get_soldier(bot.soldier)
+	var ford := server.scene.flags[1]
+	soldier.position = ford.center
+	soldier.alive = false
+	server.flag_match.state.flags[1].owner = soldier.team
+	bot.lane = 0
+	check(not server.bots._bot_reinforcement(bot, soldier).is_finite(), "the bot cannot reinforce a different lane")
+	bot.lane = 1
+	check(server.bots._bot_reinforcement(bot, soldier).is_finite(), "a local casualty can return to a safe held lane")
+	check(not server.bots._bot_reinforcement(bot, soldier).is_finite(), "a second casualty returns home between deployments")
+	server.tick += Bots.REINFORCEMENT_INTERVAL
+	check(server.bots._bot_reinforcement(bot, soldier).is_finite(), "the forward lane becomes available again")
+
+
+func test_valley_front_point_soldier_keeps_advancing_until_close_contact() -> void:
+	var settings := ServerSettings.new()
+	settings.map = "valley"
+	settings.bots = 24
+	settings.seed = 9
+	var server: Server = Server.create(settings, Rules.new())
+	cleanup(func() -> void: server.close())
+	server.flag_match.started = true
+	server.bots._opening_until = 0
+	var lead := server.bots.bots[0]
+	var flank := server.bots.bots[6]
+	var point := server.soldiers.get_soldier(lead.soldier)
+	var cover := server.soldiers.get_soldier(flank.soldier)
+	check_equal(lead.lane, flank.lane, "the two jobs belong to one squad")
+	check_equal(server.bots._contact_range(lead, point, false), Bots.POINT_CONTACT_RANGE,
+		"the lead walks past long-range contact until they reach the objective")
+	check_equal(server.bots._contact_range(flank, cover, false), Bots.VIEW_RANGE, "the squad covers the approach")
+	check_equal(server.bots._contact_range(lead, point, true), Bots.VIEW_RANGE, "incoming fire interrupts the approach")
+	point.position = server.scene.flags[lead.lane].center
+	check_equal(server.bots._contact_range(lead, point, false), Bots.VIEW_RANGE, "reaching the objective restores full sight")

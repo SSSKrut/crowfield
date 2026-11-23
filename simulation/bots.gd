@@ -107,9 +107,15 @@ const PUSH_TICKS := 3
 ## Give the first advance a job before bots settle into opportunistic fights.
 const OPENING_TICKS := 20 * Game.TICK_RATE
 const OPENING_CONTACT_RANGE := 11.0
+## The lead soldier closes on a hostile or unclaimed crossing while the rest
+## of the squad can take longer shots from the approach.
+const POINT_CONTACT_RANGE := 16.0
 ## Casualties can reinforce their own crossing, but cannot jump from a
 ## distant fight into a held lane.
 const REINFORCEMENT_RANGE := 30.0
+## One adjacent relief assignment per side, held long enough to reach the next crossing.
+const RELIEF_TICKS := 15 * Game.TICK_RATE
+const REINFORCEMENT_INTERVAL := 3 * Game.TICK_RATE
 ## A bot that gets nowhere in STUCK_TICKS gives up its way.
 const STUCK_TICKS := 2 * Game.TICK_RATE
 ## OPEN_CELL is the size of the cells of the map of open ground.
@@ -154,6 +160,8 @@ class Bot:
 	var progress_at := 0
 	var progress_from := Vector3.ZERO
 	var respawn_at := 0
+	## Assigned Valley lane. Openings use the same home lane by slot on each side.
+	var lane := -1
 	## skill scales the aim errors of the bot: below one it aims better.
 	var skill := 1.0
 	## push keeps the bot clear of the others, as last found.
@@ -184,6 +192,8 @@ var _cells := 0
 var _eye := 1.55
 var _aim_settle := 0.0
 var _opening_until := -1
+var _next_relief_review := 0
+var _reinforcement_at: Dictionary[Vector2i, int] = {}
 
 
 func _init(server: Server) -> void:
@@ -215,12 +225,17 @@ func spawn_all(how_many: int) -> void:
 		var bot := Bot.new()
 		bot.index = i
 		bot.skill = _random.randf_range(SKILL.x, SKILL.y)
+		var team := Game.Team.BLUE if i % 2 == 0 else Game.Team.RED
+		if _ai and _scene.name == "valley" and _server.flag_match != null:
+			bot.lane = _home_lane(bot, team)
 		bots.append(bot)
-		_spawn(bot, Game.Team.BLUE if i % 2 == 0 else Game.Team.RED)
+		_spawn(bot, team)
 
 
 func reset_for_round() -> void:
 	_opening_until = -1
+	_next_relief_review = 0
+	_reinforcement_at.clear()
 	var count := bots.size()
 	for bot in bots:
 		_server.soldiers.remove(bot.soldier)
@@ -296,9 +311,21 @@ func respawn_dead() -> void:
 		if soldier.alive or _server.tick < bot.respawn_at:
 			continue
 		var team := soldier.team
-		var reinforcement := _server.reinforcement_point(team, soldier.position, REINFORCEMENT_RANGE)
+		var reinforcement := _bot_reinforcement(bot, soldier)
 		_server.soldiers.remove(bot.soldier)
 		_spawn(bot, team, reinforcement)
+
+
+func _bot_reinforcement(bot: Bot, soldier: Soldier) -> Vector3:
+	if not _front_active():
+		return _server.reinforcement_point(soldier.team, soldier.position, REINFORCEMENT_RANGE)
+	var key := Vector2i(soldier.team, bot.lane)
+	if _server.tick < _reinforcement_at.get(key, 0):
+		return Vector3.INF
+	var site := _server.reinforcement_point(soldier.team, soldier.position, REINFORCEMENT_RANGE, bot.lane)
+	if site.is_finite():
+		_reinforcement_at[key] = _server.tick + REINFORCEMENT_INTERVAL
+	return site
 
 
 ## hurt tells a bot it was hit by a shooter: it turns to look for it.
@@ -345,6 +372,9 @@ func update() -> void:
 	_paths = PATHS_PER_TICK
 	if _ai:
 		_gather_teams()
+	if _front_active() and not bots.is_empty() and _server.tick >= _next_relief_review:
+		_next_relief_review = _server.tick + RELIEF_TICKS
+		_review_front()
 	var soldiers := _server.soldiers
 	var tick := _server.tick
 	for bot in bots:
@@ -407,11 +437,7 @@ func _look(bot: Bot, soldier: Soldier) -> int:
 	var forward := Vector2(sin(soldier.yaw), -cos(soldier.yaw))
 	var alert := _server.tick - bot.hurt_at < ALERT_TICKS
 	var cos_view := cos(VIEW_ANGLE)
-	var view_range := VIEW_RANGE
-	if bot.state == State.ADVANCE and not alert and _opening_until > _server.tick:
-		var assigned := _opening_flag(bot, soldier.team)
-		if not assigned.contains_flag_position(soldier.position):
-			view_range = OPENING_CONTACT_RANGE
+	var view_range := _contact_range(bot, soldier, alert)
 	var near_ids: Array[int] = []
 	var near_distances: Array[float] = []
 	var from := soldier.position
@@ -443,6 +469,20 @@ func _look(bot: Bot, soldier: Soldier) -> int:
 		if _sees(soldier, enemy):
 			return id
 	return 0
+
+
+func _contact_range(bot: Bot, soldier: Soldier, alert: bool) -> float:
+	if bot.state != State.ADVANCE or alert:
+		return VIEW_RANGE
+	if _opening_until > _server.tick:
+		var assigned := _opening_flag(bot, soldier.team)
+		return VIEW_RANGE if assigned.contains_flag_position(soldier.position) else OPENING_CONTACT_RANGE
+	if _front_active() and bot.index / 2 < _scene.flags.size():
+		var flag := _server.flag_match.state.flags[bot.lane]
+		var assigned := _scene.flags[bot.lane]
+		if _lane_pressure(flag, soldier.team) > 0 and not assigned.contains_flag_position(soldier.position):
+			return POINT_CONTACT_RANGE
+	return VIEW_RANGE
 
 
 ## _sees tells whether a soldier's eye sees the body or the head of a soldier
@@ -838,6 +878,10 @@ func _walk(bot: Bot, soldier: Soldier) -> void:
 			if _opening_until > tick:
 				bot.goal = _flag_approach(_opening_flag(bot, soldier.team))
 				bot.sprint = true
+			elif _front_active():
+				var flag := _server.flag_match.state.flags[bot.lane]
+				bot.goal = _front_goal(bot, soldier.team, flag)
+				bot.sprint = flag.owner != soldier.team or flag.contested or flag.challenger != Game.Team.NONE
 			else:
 				bot.goal = _pick_goal(soldier)
 				bot.sprint = _random.randf() < 0.75
@@ -917,6 +961,11 @@ func _linger() -> int:
 
 ## _look_about turns a bot that waits now and then to another direction.
 func _look_about(bot: Bot, soldier: Soldier) -> void:
+	if _front_active() and bot.state == State.ADVANCE:
+		var heading := -signf(_scene.spawn_of(soldier.team).z)
+		var sweep := 0.6 * sin(float(_server.tick + bot.index * 11) * 0.028)
+		_turn(soldier, Game.yaw_of(Vector3(sweep, 0, heading)), 0.0)
+		return
 	if (_server.tick + bot.index * 7) % 90 == 0:
 		bot.aim_error = Vector2(_random.randf_range(-1.2, 1.2), 0)
 	var wanted := soldier.yaw + clampf(bot.aim_error.x, -TURN_SPEED / Game.TICK_RATE, TURN_SPEED / Game.TICK_RATE) * 0.25
@@ -947,11 +996,81 @@ func _flag_approach(zone: MapScene.Zone) -> Vector3:
 ## Each two-bot pair gets one lane. Rotate the lane order for Red as the
 ## map is rotated, so the near bridge is the same job for either team.
 func _opening_flag(bot: Bot, team: int) -> MapScene.Zone:
-	var flags := _scene.flags
-	var lane := (bot.index / 2 + 1) % flags.size()
-	if team == Game.Team.RED:
-		lane = flags.size() - 1 - lane
-	return flags[lane]
+	return _scene.flags[_home_lane(bot, team)]
+
+
+func _home_lane(bot: Bot, team: int) -> int:
+	var count := _scene.flags.size()
+	var lane := (bot.index / 2 + 1) % count
+	return lane if team == Game.Team.BLUE else count - 1 - lane
+
+
+func _front_active() -> bool:
+	var round := _server.flag_match
+	return _ai and _scene.name == "valley" and round != null \
+		and _opening_until >= 0 and _server.tick >= _opening_until \
+		and round.started and round.state.result == MatchState.Result.ACTIVE
+
+
+## Most of each squad stays assigned to its crossing. At each review, one
+## idle reserve per side can leave a secure owned crossing to help next door.
+func _review_front() -> void:
+	var round := _server.flag_match
+	var count := round.zones.size()
+	for team: int in [Game.Team.BLUE, Game.Team.RED]:
+		var choice: Bot
+		var destination := -1
+		var highest := 0
+		for bot in bots:
+			var soldier := _server.soldiers.get_soldier(bot.soldier)
+			if soldier.team != team:
+				continue
+			var home := _home_lane(bot, team)
+			if bot.index / 2 / count < 2 or not soldier.alive or bot.state != State.ADVANCE:
+				continue
+			if _lane_pressure(round.state.flags[home], team) != 0:
+				continue
+			for next in [home - 1, home + 1]:
+				if next < 0 or next >= count:
+					continue
+				var pressure := _lane_pressure(round.state.flags[next], team)
+				if pressure > highest:
+					choice = bot
+					destination = next
+					highest = pressure
+		for bot in bots:
+			var soldier := _server.soldiers.get_soldier(bot.soldier)
+			if soldier.team != team:
+				continue
+			var next := destination if bot == choice else _home_lane(bot, team)
+			if bot.lane == next:
+				continue
+			bot.lane = next
+			if bot.state == State.ADVANCE:
+				bot.path = PackedVector3Array()
+				bot.linger_until = 0
+
+
+static func _lane_pressure(flag: MatchState.Flag, team: int) -> int:
+	if flag.contested or (flag.challenger != Game.Team.NONE and flag.challenger != team):
+		return 3
+	if flag.owner != Game.Team.NONE and flag.owner != team:
+		return 2
+	return 0 if flag.owner == team else 1
+
+
+## Squads use several distinct points on a crossing. Hold on the friendly
+## half and push into the capture area when the objective changes hands.
+func _front_goal(bot: Bot, team: int, flag: MatchState.Flag) -> Vector3:
+	var zone := _scene.flags[bot.lane]
+	var rank := bot.index / 2 / _scene.flags.size()
+	var home_side := 1.0 if _scene.spawn_of(team).z > zone.center.z else -1.0
+	var width := zone.radius * (0.29 if bot.lane == 1 else 0.15)
+	var across := width * float(rank % 3 - 1)
+	var depth := zone.radius * (0.46 + 0.19 * float(rank % 2)) if flag.owner == team \
+		else zone.radius * (0.17 - 0.34 * float(rank % 2))
+	var aim := zone.center + Vector3(home_side * across, 0.5, home_side * depth)
+	return _server.navigation.closest(aim)
 
 
 func _flag_goal(team: int, round: FlagMatch) -> MapScene.Zone:
