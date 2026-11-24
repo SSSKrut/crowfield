@@ -8,12 +8,12 @@
 [ext_resource type="FontFile" path="res://assets/type/BarlowCondensed-Bold.ttf" id="4_display"]
 
 [sub_resource type="Gradient" id="Gradient_sky"]
-offsets = PackedFloat32Array(0, 0.44, 1)
-colors = PackedColorArray(0.03, 0.046, 0.052, 0.98, 0.04, 0.06, 0.068, 0.86, 0.05, 0.09, 0.1, 0.08)
+offsets = PackedFloat32Array(0, 0.24, 0.64, 1)
+colors = PackedColorArray(0.067, 0.078, 0.075, 0.96, 0.08, 0.095, 0.084, 0.79, 0.086, 0.106, 0.09, 0.19, 0.08, 0.106, 0.08, 0.01)
 
 [sub_resource type="GradientTexture2D" id="GradientTexture2D_sky"]
 gradient = SubResource("Gradient_sky")
-fill_to = Vector2(1, 0.12)
+fill_to = Vector2(1, 0)
 
 [node name="MainMenu" type="Control"]
 layout_mode = 3
@@ -46,150 +46,140 @@ mouse_filter = 2
 texture = SubResource("GradientTexture2D_sky")
 expand_mode = 1
 
-[node name="Center" type="CenterContainer" parent="."]
+[node name="Pages" type="VBoxContainer" parent="."]
 unique_name_in_owner = true
 layout_mode = 1
-anchors_preset = 15
-anchor_right = 1.0
+anchors_preset = 9
 anchor_bottom = 1.0
-grow_horizontal = 2
+offset_right = 462.0
 grow_vertical = 2
+alignment = 1
+mouse_filter = 2
 
-[node name="Home" type="MarginContainer" parent="Center"]
+[node name="Home" type="VBoxContainer" parent="Pages"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(342, 0)
-layout_mode = 2
-
-[node name="Rows" type="VBoxContainer" parent="Center/Home"]
-layout_mode = 2
-theme_override_constants/separation = 7
-
-[node name="Title" type="Label" parent="Center/Home/Rows"]
-layout_mode = 2
-theme_override_colors/font_color = Color(0.95, 0.92, 0.82, 1)
-theme_override_fonts/font = ExtResource("4_display")
-theme_override_font_sizes/font_size = 78
-text = "CROWFIELD"
-
-[node name="Gap" type="Control" parent="Center/Home/Rows"]
-custom_minimum_size = Vector2(0, 11)
-layout_mode = 2
-
-[node name="Solo" type="Button" parent="Center/Home/Rows"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 46)
-layout_mode = 2
-theme_type_variation = &"PrimaryButton"
-theme_override_fonts/font = ExtResource("4_display")
-theme_override_font_sizes/font_size = 32
-text = "Play solo"
-alignment = 0
-
-[node name="SoloSetup" type="HBoxContainer" parent="Center/Home/Rows"]
-layout_mode = 2
-theme_override_constants/separation = 7
-
-[node name="Summary" type="Label" parent="Center/Home/Rows/SoloSetup"]
-unique_name_in_owner = true
-layout_mode = 2
-size_flags_horizontal = 3
-theme_override_colors/font_color = Color(0.74, 0.77, 0.75, 1)
-theme_override_font_sizes/font_size = 17
-
-[node name="Setup" type="Button" parent="Center/Home/Rows/SoloSetup"]
-unique_name_in_owner = true
-layout_mode = 2
-theme_override_font_sizes/font_size = 17
-text = "Match setup"
-
-[node name="Multiplayer" type="Button" parent="Center/Home/Rows"]
-layout_mode = 2
-theme_override_fonts/font = ExtResource("4_display")
-theme_override_font_sizes/font_size = 26
-text = "Multiplayer"
-alignment = 0
-
-[node name="Status" type="Label" parent="Center/Home/Rows"]
-unique_name_in_owner = true
-visible = false
-layout_mode = 2
-theme_override_colors/font_color = Color(1, 0.48, 0.42, 1)
-theme_override_font_sizes/font_size = 15
-autowrap_mode = 3
-
-[node name="Footer" type="HBoxContainer" parent="Center/Home/Rows"]
 layout_mode = 2
 theme_override_constants/separation = 8
 
-[node name="SettingsButton" type="Button" parent="Center/Home/Rows/Footer"]
-layout_mode = 2
-size_flags_horizontal = 3
-text = "Settings"
-flat = true
-
-[node name="CreditsButton" type="Button" parent="Center/Home/Rows/Footer"]
-layout_mode = 2
-size_flags_horizontal = 3
-text = "Credits"
-flat = true
-
-[node name="Quit" type="Button" parent="Center/Home/Rows/Footer"]
-layout_mode = 2
-size_flags_horizontal = 3
-text = "Quit"
-flat = true
-
-[node name="SetupPage" type="VBoxContainer" parent="Center"]
+[node name="HomeTitle" type="Label" parent="Pages/Home"]
 unique_name_in_owner = true
-visible = false
-custom_minimum_size = Vector2(404, 0)
-layout_mode = 2
-theme_override_constants/separation = 9
-
-[node name="Title" type="Label" parent="Center/SetupPage"]
 layout_mode = 2
 theme_override_fonts/font = ExtResource("4_display")
-theme_override_font_sizes/font_size = 54
-text = "Match setup"
+theme_override_font_sizes/font_size = 76
+text = "CROWFIELD"
 
-[node name="MapLabel" type="Label" parent="Center/SetupPage"]
+[node name="Gap" type="Control" parent="Pages/Home"]
+custom_minimum_size = Vector2(0, 10)
+layout_mode = 2
+mouse_filter = 2
+
+[node name="Solo" type="Button" parent="Pages/Home"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 37)
+layout_mode = 2
+size_flags_horizontal = 0
+theme_type_variation = &"FrontAction"
+theme_override_font_sizes/font_size = 27
+text = "Singleplayer"
+alignment = 0
+
+[node name="Multiplayer" type="Button" parent="Pages/Home"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 37)
+layout_mode = 2
+size_flags_horizontal = 0
+theme_type_variation = &"FrontAction"
+theme_override_font_sizes/font_size = 27
+text = "Multiplayer"
+alignment = 0
+
+[node name="SettingsButton" type="Button" parent="Pages/Home"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 37)
+layout_mode = 2
+size_flags_horizontal = 0
+theme_type_variation = &"FrontAction"
+theme_override_font_sizes/font_size = 27
+text = "Settings"
+alignment = 0
+
+[node name="CreditsButton" type="Button" parent="Pages/Home"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 37)
+layout_mode = 2
+size_flags_horizontal = 0
+theme_type_variation = &"FrontAction"
+theme_override_font_sizes/font_size = 27
+text = "Credits"
+alignment = 0
+
+[node name="Quit" type="Button" parent="Pages/Home"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 37)
+layout_mode = 2
+size_flags_horizontal = 0
+theme_type_variation = &"FrontAction"
+theme_override_font_sizes/font_size = 27
+text = "Quit"
+alignment = 0
+
+[node name="Status" type="Label" parent="Pages/Home"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 0.62, 0.54, 1)
+theme_override_font_sizes/font_size = 17
+autowrap_mode = 3
+
+[node name="SetupPage" type="VBoxContainer" parent="Pages"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="SetupPageTitle" type="Label" parent="Pages/SetupPage"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_fonts/font = ExtResource("4_display")
+theme_override_font_sizes/font_size = 58
+text = "Singleplayer Setup"
+
+[node name="Gap" type="Control" parent="Pages/SetupPage"]
+custom_minimum_size = Vector2(0, 10)
+layout_mode = 2
+mouse_filter = 2
+
+[node name="Fields" type="GridContainer" parent="Pages/SetupPage"]
+layout_mode = 2
+theme_override_constants/h_separation = 21
+theme_override_constants/v_separation = 9
+columns = 2
+
+[node name="MapLabel" type="Label" parent="Pages/SetupPage/Fields"]
 layout_mode = 2
 text = "Map"
 
-[node name="MapChoices" type="HBoxContainer" parent="Center/SetupPage"]
-unique_name_in_owner = true
-layout_mode = 2
-theme_override_constants/separation = 6
-
-[node name="MapDetails" type="Label" parent="Center/SetupPage"]
-unique_name_in_owner = true
-layout_mode = 2
-theme_override_colors/font_color = Color(0.74, 0.77, 0.75, 1)
-theme_override_font_sizes/font_size = 16
-
-[node name="Fields" type="GridContainer" parent="Center/SetupPage"]
-layout_mode = 2
-theme_override_constants/h_separation = 14
-theme_override_constants/v_separation = 7
-columns = 2
-
-[node name="BotsLabel" type="Label" parent="Center/SetupPage/Fields"]
-layout_mode = 2
-text = "Bots"
-
-[node name="Bots" type="SpinBox" parent="Center/SetupPage/Fields"]
+[node name="Map" type="OptionButton" parent="Pages/SetupPage/Fields"]
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
-tooltip_text = "Half the bots join your team. This count also applies when you host."
+
+[node name="BotsLabel" type="Label" parent="Pages/SetupPage/Fields"]
+layout_mode = 2
+text = "Bots"
+
+[node name="Bots" type="SpinBox" parent="Pages/SetupPage/Fields"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
 max_value = 240.0
 value = 24.0
 
-[node name="NameLabel" type="Label" parent="Center/SetupPage/Fields"]
+[node name="NameLabel" type="Label" parent="Pages/SetupPage/Fields"]
 layout_mode = 2
 text = "Name"
 
-[node name="Name" type="LineEdit" parent="Center/SetupPage/Fields"]
+[node name="Name" type="LineEdit" parent="Pages/SetupPage/Fields"]
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
@@ -197,97 +187,178 @@ text = "Player"
 placeholder_text = "Player"
 max_length = 32
 
-[node name="SetupStatus" type="Label" parent="Center/SetupPage"]
+[node name="PortLabel" type="Label" parent="Pages/SetupPage/Fields"]
 unique_name_in_owner = true
 visible = false
 layout_mode = 2
-theme_override_colors/font_color = Color(1, 0.48, 0.42, 1)
-theme_override_font_sizes/font_size = 15
-autowrap_mode = 3
+text = "Port"
 
-[node name="Start" type="Button" parent="Center/SetupPage"]
+[node name="Port" type="SpinBox" parent="Pages/SetupPage/Fields"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 46)
-layout_mode = 2
-theme_type_variation = &"PrimaryButton"
-theme_override_fonts/font = ExtResource("4_display")
-theme_override_font_sizes/font_size = 29
-text = "Start match"
-alignment = 0
-
-[node name="Back" type="Button" parent="Center/SetupPage"]
-layout_mode = 2
-text = "Back"
-alignment = 0
-
-[node name="NetworkDialog" type="AcceptDialog" parent="."]
-unique_name_in_owner = true
-theme = ExtResource("2_theme")
-title = "Multiplayer"
-exclusive = true
 visible = false
-ok_button_text = "Close"
-
-[node name="Network" type="VBoxContainer" parent="NetworkDialog"]
-custom_minimum_size = Vector2(440, 175)
-theme_override_constants/separation = 8
-
-[node name="HostTitle" type="Label" parent="NetworkDialog/Network"]
 layout_mode = 2
-theme_override_colors/font_color = Color(0.69, 0.75, 0.75, 1)
-theme_override_font_sizes/font_size = 15
-text = "Host a match"
-
-[node name="HostRow" type="HBoxContainer" parent="NetworkDialog/Network"]
-layout_mode = 2
-theme_override_constants/separation = 10
-
-[node name="PortLabel" type="Label" parent="NetworkDialog/Network/HostRow"]
-layout_mode = 2
-text = "UDP port"
-
-[node name="Port" type="SpinBox" parent="NetworkDialog/Network/HostRow"]
-unique_name_in_owner = true
-layout_mode = 2
+size_flags_horizontal = 3
 min_value = 1.0
 max_value = 65535.0
 value = 7777.0
+tooltip_text = "UDP port"
 
-[node name="Host" type="Button" parent="NetworkDialog/Network/HostRow"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 42)
-layout_mode = 2
-size_flags_horizontal = 3
-text = "Host game"
-
-[node name="JoinTitle" type="Label" parent="NetworkDialog/Network"]
-layout_mode = 2
-theme_override_colors/font_color = Color(0.69, 0.75, 0.75, 1)
-theme_override_font_sizes/font_size = 15
-text = "Join a server"
-
-[node name="JoinRow" type="HBoxContainer" parent="NetworkDialog/Network"]
-layout_mode = 2
-theme_override_constants/separation = 10
-
-[node name="Address" type="LineEdit" parent="NetworkDialog/Network/JoinRow"]
-unique_name_in_owner = true
-layout_mode = 2
-size_flags_horizontal = 3
-placeholder_text = "192.168.1.20 or host:port"
-
-[node name="Join" type="Button" parent="NetworkDialog/Network/JoinRow"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(130, 42)
-layout_mode = 2
-text = "Join"
-
-[node name="NetworkStatus" type="Label" parent="NetworkDialog/Network"]
+[node name="SetupStatus" type="Label" parent="Pages/SetupPage"]
 unique_name_in_owner = true
 visible = false
 layout_mode = 2
-theme_override_colors/font_color = Color(1, 0.55, 0.45, 1)
+theme_override_colors/font_color = Color(1, 0.62, 0.54, 1)
+theme_override_font_sizes/font_size = 17
 autowrap_mode = 3
+
+[node name="Actions" type="HBoxContainer" parent="Pages/SetupPage"]
+layout_mode = 2
+theme_override_constants/separation = 30
+
+[node name="Start" type="Button" parent="Pages/SetupPage/Actions"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 37)
+layout_mode = 2
+size_flags_horizontal = 0
+theme_type_variation = &"FrontAction"
+theme_override_font_sizes/font_size = 21
+text = "Start Match"
+alignment = 0
+
+[node name="SetupBack" type="Button" parent="Pages/SetupPage/Actions"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 37)
+layout_mode = 2
+size_flags_horizontal = 0
+theme_type_variation = &"FrontAction"
+theme_override_font_sizes/font_size = 21
+text = "Back"
+alignment = 0
+
+[node name="MultiplayerPage" type="VBoxContainer" parent="Pages"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="MultiplayerPageTitle" type="Label" parent="Pages/MultiplayerPage"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_fonts/font = ExtResource("4_display")
+theme_override_font_sizes/font_size = 58
+text = "Multiplayer"
+
+[node name="Gap" type="Control" parent="Pages/MultiplayerPage"]
+custom_minimum_size = Vector2(0, 10)
+layout_mode = 2
+mouse_filter = 2
+
+[node name="Host" type="Button" parent="Pages/MultiplayerPage"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 37)
+layout_mode = 2
+size_flags_horizontal = 0
+theme_type_variation = &"FrontAction"
+theme_override_font_sizes/font_size = 27
+text = "Host Game"
+alignment = 0
+
+[node name="Join" type="Button" parent="Pages/MultiplayerPage"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 37)
+layout_mode = 2
+size_flags_horizontal = 0
+theme_type_variation = &"FrontAction"
+theme_override_font_sizes/font_size = 27
+text = "Join Game"
+alignment = 0
+
+[node name="MultiplayerBack" type="Button" parent="Pages/MultiplayerPage"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 37)
+layout_mode = 2
+size_flags_horizontal = 0
+theme_type_variation = &"FrontAction"
+theme_override_font_sizes/font_size = 21
+text = "Back"
+alignment = 0
+
+[node name="JoinPage" type="VBoxContainer" parent="Pages"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="JoinPageTitle" type="Label" parent="Pages/JoinPage"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_fonts/font = ExtResource("4_display")
+theme_override_font_sizes/font_size = 58
+text = "Join Game"
+
+[node name="Gap" type="Control" parent="Pages/JoinPage"]
+custom_minimum_size = Vector2(0, 10)
+layout_mode = 2
+mouse_filter = 2
+
+[node name="Fields" type="GridContainer" parent="Pages/JoinPage"]
+layout_mode = 2
+theme_override_constants/h_separation = 21
+theme_override_constants/v_separation = 9
+columns = 2
+
+[node name="AddressLabel" type="Label" parent="Pages/JoinPage/Fields"]
+layout_mode = 2
+text = "Server address"
+
+[node name="Address" type="LineEdit" parent="Pages/JoinPage/Fields"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+placeholder_text = "127.0.0.1:7777"
+
+[node name="JoinNameLabel" type="Label" parent="Pages/JoinPage/Fields"]
+layout_mode = 2
+text = "Name"
+
+[node name="JoinName" type="LineEdit" parent="Pages/JoinPage/Fields"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+placeholder_text = "Player"
+max_length = 32
+
+[node name="JoinStatus" type="Label" parent="Pages/JoinPage"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 0.62, 0.54, 1)
+theme_override_font_sizes/font_size = 17
+autowrap_mode = 3
+
+[node name="Actions" type="HBoxContainer" parent="Pages/JoinPage"]
+layout_mode = 2
+theme_override_constants/separation = 30
+
+[node name="JoinMatch" type="Button" parent="Pages/JoinPage/Actions"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 37)
+layout_mode = 2
+size_flags_horizontal = 0
+theme_type_variation = &"FrontAction"
+theme_override_font_sizes/font_size = 21
+text = "Join Game"
+alignment = 0
+
+[node name="JoinBack" type="Button" parent="Pages/JoinPage/Actions"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 37)
+layout_mode = 2
+size_flags_horizontal = 0
+theme_type_variation = &"FrontAction"
+theme_override_font_sizes/font_size = 21
+text = "Back"
+alignment = 0
 
 [node name="Settings" type="AcceptDialog" parent="."]
 unique_name_in_owner = true
@@ -394,19 +465,22 @@ text = "[b]Gunshot Sounds[/b] — Vincent Sevedge (Tabasco), © 2009. Edited for
 [b]Gun Reload Sound Effects[/b] — Brian MacIntosh (BMacZero). Edited for Crowfield.
 [url=https://opengameart.org/content/gun-reload-sound-effects]Source[/url] · [url=https://creativecommons.org/publicdomain/zero/1.0/]CC0 1.0[/url]"
 
-[connection signal="pressed" from="Center/Home/Rows/Solo" to="." method="_on_solo_pressed"]
-[connection signal="pressed" from="Center/Home/Rows/SoloSetup/Setup" to="." method="_on_setup_pressed"]
-[connection signal="value_changed" from="Center/SetupPage/Fields/Bots" to="." method="_update_match_summary"]
-[connection signal="pressed" from="Center/SetupPage/Start" to="." method="_on_solo_pressed"]
-[connection signal="pressed" from="Center/SetupPage/Back" to="." method="_on_setup_back_pressed"]
-[connection signal="pressed" from="NetworkDialog/Network/HostRow/Host" to="." method="_on_host_pressed"]
-[connection signal="text_submitted" from="NetworkDialog/Network/JoinRow/Address" to="." method="_on_address_submitted"]
-[connection signal="pressed" from="NetworkDialog/Network/JoinRow/Join" to="." method="_on_join_pressed"]
-[connection signal="pressed" from="Center/Home/Rows/Footer/Quit" to="." method="_on_quit_pressed"]
-[connection signal="pressed" from="Center/Home/Rows/Multiplayer" to="." method="_on_multiplayer_pressed"]
-[connection signal="pressed" from="Center/Home/Rows/Footer/CreditsButton" to="." method="_on_credits_pressed"]
+[connection signal="pressed" from="Pages/Home/Solo" to="." method="_on_solo_pressed"]
+[connection signal="pressed" from="Pages/Home/Multiplayer" to="." method="_on_multiplayer_pressed"]
+[connection signal="pressed" from="Pages/Home/SettingsButton" to="." method="_on_settings_pressed"]
+[connection signal="pressed" from="Pages/Home/CreditsButton" to="." method="_on_credits_pressed"]
+[connection signal="pressed" from="Pages/Home/Quit" to="." method="_on_quit_pressed"]
+[connection signal="pressed" from="Pages/SetupPage/Actions/Start" to="." method="_on_start_pressed"]
+[connection signal="pressed" from="Pages/SetupPage/Actions/SetupBack" to="." method="_go_back"]
+[connection signal="pressed" from="Pages/MultiplayerPage/Host" to="." method="_on_host_pressed"]
+[connection signal="pressed" from="Pages/MultiplayerPage/Join" to="." method="_on_join_pressed"]
+[connection signal="pressed" from="Pages/MultiplayerPage/MultiplayerBack" to="." method="_go_back"]
+[connection signal="text_submitted" from="Pages/JoinPage/Fields/Address" to="." method="_on_address_submitted"]
+[connection signal="pressed" from="Pages/JoinPage/Actions/JoinMatch" to="." method="_on_join_match_pressed"]
+[connection signal="pressed" from="Pages/JoinPage/Actions/JoinBack" to="." method="_go_back"]
 [connection signal="meta_clicked" from="Credits/CreditsText" to="." method="_on_credit_link_clicked"]
-[connection signal="pressed" from="Center/Home/Rows/Footer/SettingsButton" to="." method="_on_settings_pressed"]
+[connection signal="visibility_changed" from="Credits" to="." method="_on_credits_visibility_changed"]
+[connection signal="visibility_changed" from="Settings" to="." method="_on_settings_visibility_changed"]
 [connection signal="confirmed" from="Settings" to="." method="_on_settings_confirmed"]
 [connection signal="value_changed" from="Settings/Rows/Volume" to="." method="_display_settings"]
 [connection signal="value_changed" from="Settings/Rows/Sensitivity" to="." method="_display_settings"]

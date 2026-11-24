@@ -1,4 +1,4 @@
-[gd_resource type="Theme" load_steps=13 format=3]
+[gd_resource type="Theme" load_steps=16 format=3]
 
 [ext_resource type="FontFile" path="res://assets/type/Barlow-Medium.ttf" id="1_body"]
 
@@ -101,6 +101,20 @@ content_margin_top = 5.0
 content_margin_bottom = 5.0
 bg_color = Color(0.84, 0.69, 0.44, 0.23)
 
+[sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_front"]
+content_margin_right = 2.0
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_front_hover"]
+content_margin_right = 2.0
+border_width_bottom = 1
+border_color = Color(0.92, 0.92, 0.88, 1)
+bg_color = Color(0, 0, 0, 0)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_front_focus"]
+border_width_bottom = 2
+border_color = Color(0.92, 0.92, 0.88, 1)
+bg_color = Color(0, 0, 0, 0)
+
 [resource]
 default_font = ExtResource("1_body")
 default_font_size = 18
@@ -126,3 +140,8 @@ PrimaryButton/colors/font_hover_color = Color(0.96, 0.82, 0.57, 1)
 PrimaryButton/colors/font_pressed_color = Color(0.96, 0.82, 0.57, 1)
 PrimaryButton/colors/font_focus_color = Color(0.96, 0.82, 0.57, 1)
 PrimaryButton/styles/focus = SubResource("StyleBoxFlat_action_focus")
+FrontAction/base_type = &"Button"
+FrontAction/styles/normal = SubResource("StyleBoxEmpty_front")
+FrontAction/styles/hover = SubResource("StyleBoxFlat_front_hover")
+FrontAction/styles/pressed = SubResource("StyleBoxFlat_front_hover")
+FrontAction/styles/focus = SubResource("StyleBoxFlat_front_focus")
