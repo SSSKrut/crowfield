@@ -238,6 +238,8 @@ func _ready() -> void:
 	var error := flags.parse(get_meta("arguments"))
 	if error == "help":
 		print("usage: godot --path . -- [flags]\n" + flags.usage())
+		# The quit waits for the end of the frame; nothing was set up to process.
+		_failed = true
 		get_tree().quit()
 		return
 	if error != "":
