@@ -1,0 +1,154 @@
+name: Check
+
+# Checks every change to main, and every pull request into it: the assets
+# import cleanly, the automatic tests pass, and each mode starts and plays
+# headless without a script error. Godot reports a script error and carries
+# on, often to exit with 0, so the runs below fail on the report itself.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Every commit on main keeps its result; a pull request needs only its latest.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # The engine tools/build-macos.sh exports with.
+  GODOT_VERSION: 4.7.2
+  # What Godot prints for a script that fails to compile or to run.
+  SCRIPT_ERRORS: SCRIPT ERROR|Parse Error|Failed to load script
+
+jobs:
+  # The tests and the runs of each mode take most of the time, so they run
+  # side by side, each after its own install and import.
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [test, play]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Restore Godot
+        id: godot
+        uses: actions/cache@v6
+        with:
+          path: ~/godot
+          key: godot-${{ env.GODOT_VERSION }}-linux-x86_64
+
+      - name: Install Godot
+        if: steps.godot.outputs.cache-hit != 'true'
+        run: |
+          release="Godot_v${GODOT_VERSION}-stable_linux.x86_64"
+          base="https://github.com/godotengine/godot-builds/releases/download/${GODOT_VERSION}-stable"
+          mkdir -p ~/godot
+          cd ~/godot
+          curl --fail --silent --show-error --location --retry 3 \
+            --remote-name "$base/SHA512-SUMS.txt" --remote-name "$base/$release.zip"
+          awk -v asset="$release.zip" '$2 == asset' SHA512-SUMS.txt | sha512sum --check --strict
+          unzip -q "$release.zip"
+          mv "$release" godot
+          rm "$release.zip" SHA512-SUMS.txt
+
+      - name: Add Godot to the path
+        run: |
+          echo "$HOME/godot" >> "$GITHUB_PATH"
+          "$HOME/godot/godot" --headless --version
+
+      # Every run imports from scratch, as a fresh checkout does; a clean import
+      # prints nothing, so any error fails it.
+      - name: Import
+        run: |
+          godot --headless --path . --import 2>&1 | tee "$RUNNER_TEMP/import.log"
+          if grep -E "ERROR|$SCRIPT_ERRORS" "$RUNNER_TEMP/import.log"; then
+            echo "::error::The import reported errors."
+            exit 1
+          fi
+
+      # The runner fails a test on any script error it does not expect, and
+      # test_scripts compiles every script, even those nothing else loads.
+      - name: Test
+        if: matrix.part == 'test'
+        run: godot --headless --path . -- test
+
+      # The tests do not reach the command lines, the maps at full size, or a
+      # match over the network; these short runs do.
+      - name: Play each mode
+        if: matrix.part == 'play'
+        run: |
+          failed=0
+          # play runs Godot with the game's arguments, and fails the step at
+          # the end if it exits with an error or reports a script error.
+          play() {
+            local log="$RUNNER_TEMP/play.log" status=0
+            echo "::group::$*"
+            timeout 300 godot --headless --path . -- "$@" > "$log" 2>&1 || status=$?
+            cat "$log"
+            echo "::endgroup::"
+            check "$*" "$status" "$log"
+          }
+          check() {
+            if (( $2 != 0 )); then
+              echo "::error::'$1' exited with $2."
+              failed=1
+            elif grep -E -A6 "$SCRIPT_ERRORS" "$3"; then
+              echo "::error::'$1' reported a script error."
+              failed=1
+            fi
+          }
+
+          play client -help
+          play server -help
+          play loadtest -help
+          for map in valley desert; do
+            play client -map=$map -bots=24 -frames=600 -max-fps=60
+          done
+          play client -movement -frames=400 -max-fps=60
+          play client -shoot -frames=400 -max-fps=60
+          play client -demo -frames=400 -max-fps=60
+          play loadtest -map=valley -clients=4 -bots=24 -bot-ai -duration=15s -report=5s
+
+          # A client joins a dedicated server and plays a match on it. The
+          # server runs until the client is done, when SIGTERM ends it with
+          # 143; -duration only stops a server left behind.
+          echo "::group::server and client"
+          godot --headless --path . -- server -listen=127.0.0.1:7777 -map=desert -bots=8 -duration=150s \
+            -cert="$RUNNER_TEMP/server.crt" -key="$RUNNER_TEMP/server.key" > "$RUNNER_TEMP/server.log" 2>&1 &
+          server=$!
+          for _ in {1..120}; do
+            if grep -q '^server started' "$RUNNER_TEMP/server.log" || ! kill -0 "$server" 2>/dev/null; then
+              break
+            fi
+            sleep 0.5
+          done
+          status=0
+          timeout 120 godot --headless --path . -- client -connect=127.0.0.1:7777 -name=Check -frames=900 -max-fps=60 \
+            -config-dir="$RUNNER_TEMP/client" > "$RUNNER_TEMP/client.log" 2>&1 || status=$?
+          echo "--- client"
+          cat "$RUNNER_TEMP/client.log"
+          check "client -connect" "$status" "$RUNNER_TEMP/client.log"
+          if ! kill "$server" 2>/dev/null; then
+            echo "::error::The server stopped before the client was done."
+            failed=1
+          fi
+          status=0
+          wait "$server" || status=$?
+          if (( status == 143 )); then
+            status=0
+          fi
+          echo "--- server"
+          cat "$RUNNER_TEMP/server.log"
+          echo "::endgroup::"
+          check "server" "$status" "$RUNNER_TEMP/server.log"
+
+          exit $failed
