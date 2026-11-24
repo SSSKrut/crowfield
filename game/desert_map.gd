@@ -77,6 +77,18 @@ const MODELS := {
 		[Vector3(-3.38, 2.27, -0.8), Vector3(0.45, 2.1, 0.45)],
 		{ "from": Vector3(-3.85, 4.25, -1.35), "to": Vector3(2.8, 7.45, 1.3), "radius": 0.3 },
 		[Vector3(2.58, 7.57, 1.12), Vector3(0.65, 1.9, 0.35), -0.4]] },
+	# The camp of a base. The field tent is full of bunks and takes the whole
+	# of its bounds; the mast is an open frame with a core. A pallet and a
+	# jerry can are too low to stop anyone.
+	"field_tent": { "offset": Vector3(-25.49, 0.085, 0.41), "scale": 0.65, "boxes": [[Vector3(0, 1.4, 0), Vector3(2.6, 1.4, 2.86)]] },
+	"camp_tent": { "scale": 0.2, "boxes": [[Vector3(0, 0.8, 0), Vector3(0.8, 0.8, 1.25)]] },
+	"radio_tower": { "scale": 0.55, "boxes": [[Vector3(0.41, 9.4, -0.2), Vector3(1.0, 9.4, 1.1)]] },
+	"generator": { "offset": Vector3(-12.135, 0.12, -6.625), "scale": 0.8, "boxes": [[Vector3(0, 0.5, 0), Vector3(0.84, 0.5, 0.4)]] },
+	"crate": { "scale": 1.2, "boxes": [[Vector3(0, 0.49, 0), Vector3(0.49, 0.49, 0.49)]] },
+	"crate_slat": { "scale": 0.9, "boxes": [[Vector3(0, 0.59, 0), Vector3(0.62, 0.59, 0.59)]] },
+	"barrier": { "scale": 1.3, "boxes": [[Vector3(0.02, 0.41, 0), Vector3(1.23, 0.41, 0.43)]] },
+	"pallet": { "boxes": [] },
+	"jerry_can": { "scale": 0.19, "boxes": [] },
 	"rock_a": { "boxes": [[Vector3(-0.4, 0.8, 0.07), Vector3(1.1, 1.05, 1.0)]] },
 	"rock_b": { "boxes": [[Vector3(-0.54, 3.4, 0.12), Vector3(3.4, 3.6, 3.0)]] },
 	"rock_pillar": { "boxes": [[Vector3(-0.12, 3.2, -0.41), Vector3(2.1, 3.4, 2.05)]] },
@@ -265,7 +277,10 @@ func _barrels(origin: Vector3, turn: float, x: float, z: float, level: float, co
 
 ## _base is a camp behind sandbags facing north, with a gate in the middle:
 ## two containers for shelter, a water tower to find it by, drums, palms and
-## the team's tank.
+## the team's tank. Its west half is the command post: a bunk tent, and a
+## radio mast with its generator in the front corner. Its east half holds the
+## stores beside the container and two small tents along the wall. A concrete
+## barrier screens each side exit.
 func _base(origin: Vector3, turn: float) -> void:
 	const GATE_HALF_WIDTH := 4.5
 	var level := BASE_LEVEL
@@ -280,6 +295,20 @@ func _base(origin: Vector3, turn: float) -> void:
 	_barrels(origin, turn, 6.5, -10.5, level, 2)
 	_model("palm_a", origin, turn, -13, 12, level, 0.4)
 	_model("palm_b", origin, turn, 14, -7, level, 2.1)
+	# The bunk tent opens east, onto the yard.
+	_model("field_tent", origin, turn, -9.5, 11.5, level, PI / 2)
+	_model("radio_tower", origin, turn, -13.5, -10, level, 0.3)
+	_model("generator", origin, turn, -11.3, -6.6, level, 0.25)
+	_model("camp_tent", origin, turn, 14.3, 6, level)
+	_model("camp_tent", origin, turn, 14.3, -11, level, 0.08)
+	_model("crate", origin, turn, 7.6, 0.2, level, 0.1)
+	_model("crate", origin, turn, 7.7, 1.45, level, 0.42)
+	_model("crate_slat", origin, turn, 7.45, 3.2, level, -0.12)
+	_model("pallet", origin, turn, 6.1, 0.5, level, 0.2)
+	_model("jerry_can", origin, turn, 6.2, 2.3, level, 1.2)
+	_model("jerry_can", origin, turn, 5.9, 2.7, level, 0.5)
+	for side: float in [-1.0, 1.0]:
+		_model("barrier", origin, turn, side * 19, 0, level, PI / 2)
 	# The team's tank waits behind the gate, facing out.
 	var team := Game.Team.BLUE if turn == 0.0 else Game.Team.RED
 	_scene.vehicle_spawns.append(MapScene.VehicleSpawn.new(Vehicle.Kind.TANK, team, _local(origin, turn, 0, 6) + Vector3(0, level, 0), turn))

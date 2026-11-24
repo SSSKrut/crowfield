@@ -249,3 +249,34 @@ func test_snapshots_carry_vehicles() -> void:
 	check_near(back.gun, tank.gun, 0.001, "gun")
 	check_near(back.speed, tank.speed, 0.02, "speed")
 	check_equal([back.health, back.driver, back.reload, back.shots, back.team], [640, 0x1234, 90, 300 % 256, Game.Team.RED], "the rest")
+
+
+## The jeep, the truck, the helicopter and the boat wait for their drivers.
+## Each model is in metres, stands on the ground at its origin and has its
+## moving parts as nodes of their own (tools/build-vehicles.py).
+func test_vehicle_models_stand_on_the_ground_with_their_parts() -> void:
+	const WHEELS := ["Wheel_FL", "Wheel_FR", "Wheel_RL", "Wheel_RR"]
+	for model: Array in [["jeep", WHEELS, 4.1], ["truck", WHEELS, 5.32], ["helicopter", ["Rotor_Main"], 15.3], ["boat", ["Gun_Pivot", "Gun"], 7.14]]:
+		var scene := load("res://assets/vehicles/%s.glb" % model[0]) as PackedScene
+		if not check(scene != null, "no model of the %s" % model[0]):
+			continue
+		var node := scene.instantiate() as Node3D
+		var lowest := INF
+		for found in node.find_children("*", "MeshInstance3D", true, false):
+			var part := found as MeshInstance3D
+			var placed := part.transform
+			var parent := part.get_parent() as Node3D
+			while parent != node:
+				placed = parent.transform * placed
+				parent = parent.get_parent() as Node3D
+			var bounds := placed * part.mesh.get_aabb()
+			lowest = minf(lowest, bounds.position.y)
+			if part.name == "Body":
+				check_near(bounds.size.z, model[2], 0.05, "length of the %s" % model[0])
+				check_near(bounds.get_center().x, 0.0, 0.05, "the %s off its middle" % model[0])
+			if part.name.begins_with("Wheel"):
+				check_near(part.position.y, bounds.size.y / 2, 0.02, "axle height of %s of the %s" % [part.name, model[0]])
+		check_near(lowest, 0.0, 0.02, "the %s off the ground" % model[0])
+		for part_name: String in model[1]:
+			check(node.find_child(part_name, true, false) != null, "the %s has no %s" % [model[0], part_name])
+		node.free()

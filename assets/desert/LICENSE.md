@@ -1,6 +1,6 @@
 # Desert asset sources
 
-The desert map uses sourced models and textures only. Each model below was downloaded unmodified as glTF binary from its [Poly Pizza](https://poly.pizza) page on 22 November 2026. Crowfield does not change the files. Godot's importer writes the textures embedded in some models next to them (`*_Atlas.png`, `storage_tank_CHAHIN_SILO_TEXTURE.jpg`). These belong to the same assets and carry the same licenses. At runtime `DesertMap` scales and places each model and gives it invisible collision boxes, and `DesertScenery` recolours the houses (see "Changes").
+The desert map uses sourced models and textures only. Each model below was downloaded unmodified as glTF binary from its [Poly Pizza](https://poly.pizza) page on 22 November 2026, and the models of the base camps on 24 November 2026. Crowfield does not change the files. Godot's importer writes the textures embedded in some models next to them (`*_Atlas.png`, `storage_tank_CHAHIN_SILO_TEXTURE.jpg`). These belong to the same assets and carry the same licenses. At runtime `DesertMap` scales and places each model and gives it invisible collision boxes, and `DesertScenery` recolours the houses (see "Changes").
 
 ## Models under CC BY 3.0
 
@@ -10,6 +10,9 @@ These need attribution in every distributed build. The license is [Creative Comm
 | --- | --- | --- | --- |
 | `models/pumpjack.glb` | Oil pump | Poly by Google | https://poly.pizza/m/fZykGFywa5D |
 | `models/storage_tank.glb` | Silo | Poly by Google | https://poly.pizza/m/3MY8xY_m2Yz |
+| `models/radio_tower.glb` | Radio tower | Poly by Google | https://poly.pizza/m/eWEYV9ppUjv |
+| `models/field_tent.glb` | Military Tent | KolosStudios | https://poly.pizza/m/vQANVbSE0v |
+| `models/generator.glb` | Generator | KolosStudios | https://poly.pizza/m/K58RQ63qR5 |
 
 ## Models under CC0 1.0
 
@@ -33,6 +36,12 @@ These are released into the public domain under [CC0 1.0](https://creativecommon
 | `models/rock_a.glb` | Rock | Quaternius | https://poly.pizza/m/HtpdTh3Ld6 |
 | `models/rock_b.glb` | Rock Large | Quaternius | https://poly.pizza/m/li0YBlBEMz |
 | `models/rock_pillar.glb` | Rock Large | Quaternius | https://poly.pizza/m/d2VWOdthtR |
+| `models/camp_tent.glb` | Tent | Quaternius | https://poly.pizza/m/5Q7qIrfDxA |
+| `models/crate.glb` | Crate | Quaternius | https://poly.pizza/m/3VGWnZPXmG |
+| `models/crate_slat.glb` | Crate | Quaternius | https://poly.pizza/m/SfJtdV8GDr |
+| `models/pallet.glb` | Pallet | Quaternius | https://poly.pizza/m/MwOFAOgOhg |
+| `models/jerry_can.glb` | Gas Can | Quaternius | https://poly.pizza/m/eS1OXGo51c |
+| `models/barrier.glb` | Barrier Single | Quaternius | https://poly.pizza/m/wCUxgt2jSP |
 
 ## Generated models
 
@@ -53,6 +62,6 @@ The desert also reuses `assets/valley/rocky_terrain_02-diff.jpg` and `assets/val
 
 ## Changes
 
-- **Scale and placement.** All models are scaled to metres and placed by `game/desert_map.gd`. The pumpjack is scaled by 1.8 × 10⁻⁵ from its original units, and the Kenney houses by 7.
-- **Collision.** Every model gets invisible collision boxes in `DesertMap.MODELS`. The model files contain no collision.
+- **Scale and placement.** All models are scaled to metres and placed by `game/desert_map.gd`. The pumpjack is scaled by 1.8 × 10⁻⁵ from its original units, and the Kenney houses by 7. Of the camp, the field tent is scaled by 0.65, the radio tower by 0.55, the camp tent by 0.2 and the jerry can by 0.19.
+- **Collision.** Every model gets invisible collision boxes in `DesertMap.MODELS`, except the pallet and the jerry can, which stop nothing. The model files contain no collision.
 - **House colours.** The Kenney houses are recoloured at runtime from grey and pale blue to plaster tones. Their walls also get the Poly Haven plaster grain (`client/desert_scenery.gd`).
